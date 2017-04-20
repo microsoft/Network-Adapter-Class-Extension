@@ -1,6 +1,25 @@
 # Network Adapter Class Extension to WDF
-The Network Adapter Class Extension to WDF (NetAdapterCx) is a set of libraries that make
-it simple to write high-quality device drivers.
+The Network Adapter Class Extension to WDF (NetAdapterCx) brings together the productivity of WDF with the networking performance of NDIS, and makes it easy to write a driver for your NIC.
+
+* ## Lastest Release - Windows 10 Creator Update (version 1703)
+
+    **Source Code**: HEAD to *"master"* branch
+
+    **Documentation**: [Network Adapter WDF Class Extension (Cx)](https://aka.ms/netadapter/doc)
+
+    **Driver Samples**: HEAD to *"preview"* branch of [Microsoft/NetAdapter-Cx-Driver-Samples](https://github.com/Microsoft/NetAdapter-Cx-Driver-Samples "Driver Samples")
+
+
+
+* ## Lastest Preview Release - WIP/EEAP Build 16178
+
+    **Source Code**: HEAD to *"preview"* branch
+
+    **Documentation**: [Network Adapter WDF Class Extension (Cx) Preview](https://aka.ms/netadapter/previewdoc)
+
+    **Driver Samples**: HEAD to *"preview"* branch of [Microsoft/NetAdapter-Cx-Driver-Samples](https://github.com/Microsoft/NetAdapter-Cx-Driver-Samples "Driver Samples")
+
+---
 
 ## Goals for this project
 
