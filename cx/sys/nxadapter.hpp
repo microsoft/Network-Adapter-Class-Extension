@@ -30,8 +30,8 @@ Revision History:
 #include "NxXlat.hpp"
 #include "NxNblDatapath.hpp"
 
-using unique_net_packet_client = 
-    wil::unique_any<HNETPACKETCLIENT, decltype(&::NetPacketDeregisterClient), &::NetPacketDeregisterClient>;
+
+
 
 #define PTR_TO_TAG(val) ((PVOID)(ULONG_PTR)(val))
 
