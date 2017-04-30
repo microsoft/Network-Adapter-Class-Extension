@@ -1,5 +1,5 @@
 /*++
-Copyright (c) 2010  Microsoft Corporation
+Copyright (C) Microsoft Corporation. All rights reserved.
 
 Module Name:
 
