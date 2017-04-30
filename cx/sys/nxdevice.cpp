@@ -100,7 +100,7 @@ NxDevice::AdapterAdd(
 Routine Description:
     Invoked by adapter object to inform the device about adapter creation 
     in response to a client calling NetAdapterCreate from it's device add 
-    callback. In response NxDevice will report NdisWdfPnPAddDevice to NDIS.
+
 --*/
 {
     NTSTATUS status;
@@ -111,20 +111,20 @@ Routine Description:
     NT_ASSERT(device != NULL);
     driver = WdfDeviceGetDriver(device);
 
-    status = NdisWdfPnPAddDevice(WdfDriverWdmGetDriverObject(driver),
-                            WdfDeviceWdmGetPhysicalDevice(device),
-                            NdisAdapterHandle,
-                            MiniportAdapterContext);
-    if (!NT_SUCCESS(status)) {
-        //
-        // NOTE: In case of failure, WDF object cleanup for WDFDEVICE will post 
-        // the cleanup event to the device state machine. 
-        //
-        LogError(GetRecorderLog(), FLAG_DEVICE,
-            "NdisWdfPnpAddDevice failed %!STATUS!", status);
-        FuncExit(FLAG_DEVICE);
-        return status;
-    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     StateMachineEngine_EventAdd(&m_SmEngineContext, 
                             NxDevicePnPPwrEventAdapterAdded);

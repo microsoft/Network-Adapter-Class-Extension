@@ -264,12 +264,12 @@ Arguments:
     NDIS_HANDLE                             ndisMiniportDriverHandle;
     NDIS_MINIPORT_DRIVER_CHARACTERISTICS    ndisMPChars;
 
-    //
+
     // Register with Ndis.sys on behalf of the client. To to that : 
     // get the WDM driver object, registry path, and prepare the 
     // miniport driver chars structure, and then call 
-    // NdisWdfRegisterMiniportDriver
-    //
+
+
 
     driverObject = WdfDriverWdmGetDriverObject(GetFxObject());
     
@@ -323,16 +323,16 @@ Arguments:
     ndisMPChars.CancelDirectOidRequestHandler = NxAdapter::_EvtNdisCancelDirectOidRequest;
     #pragma prefast(pop)
 
-    LogVerbose(GetRecorderLog(), FLAG_DRIVER, "Calling NdisWdfRegisterMiniportDriver");
-    status = NdisWdfRegisterMiniportDriver(driverObject,
-                                           &registryPath,
-                                           NetAdapterCxDriverHandle,
-                                           (NDIS_HANDLE)this,
-                                           &ndisMPChars,
-                                           &ndisMiniportDriverHandle);
+
+
+
+
+
+
+
 
     if (!NT_SUCCESS(status)) {
-        LogError(GetRecorderLog(), FLAG_DRIVER, "NdisWdfRegisterMiniportDriver Failed %!STATUS!", status);
+
         FuncExit(FLAG_DRIVER);
         return status;
     }

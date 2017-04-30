@@ -150,20 +150,20 @@ Routine Description:
     chars.EvtCxAllocateMiniportBlock         = NxAdapter::_EvtNdisAllocateMiniportBlock;
     chars.EvtCxMiniportCompleteAdd           = NxAdapter::_EvtNdisMiniportCompleteAdd;
 
-    //
-    // Register with NDIS
-    //
-    LogInitMsg(TRACE_LEVEL_VERBOSE, "Calling NdisWdfRegisterCx");
-    status = NdisWdfRegisterCx(DriverObject,
-                               RegistryPath,
-                               (NDIS_WDF_CX_DRIVER_CONTEXT)driver,
-                               &chars,
-                               &netAdapterCxDriverHandleTmp);
 
-    if (!NT_SUCCESS(status)) {
-        LogInitMsg(TRACE_LEVEL_ERROR, "NdisWdfRegisterCx failed status %!STATUS!", status);
-        goto Exit;
-    }
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     //
     // Register this class extension with WDF
@@ -177,11 +177,11 @@ Routine Description:
         goto Exit;
     }
 
-    //
-    // Store the NDIS_WDF_CX_HANDLE returned by Ndis.sys in a global variable
-    // This handle is later passed to Ndis in calls such as
-    // NdisWdfRegisterMiniportDriver , NdisWdfDeregisterCx, etc.
-    //
+
+
+
+
+
     NetAdapterCxDriverHandle = netAdapterCxDriverHandleTmp;
 
 Exit:
@@ -233,14 +233,14 @@ Routine Description:
 {
     FuncEntry(FLAG_DRIVER);
 
-    if (NetAdapterCxDriverHandle) {
-        //
-        // Deregister with NDIS.
-        //
-        LogInitMsg(TRACE_LEVEL_VERBOSE, "Calling NdisWdfDeregisterCx");
-        NdisWdfDeregisterCx(NetAdapterCxDriverHandle);
-        NetAdapterCxDriverHandle = NULL;
-    }
+
+
+
+
+
+
+
+
 
     NT_ASSERT(ClientCount == 0);
     if (ClassLibraryDevice != NULL) {

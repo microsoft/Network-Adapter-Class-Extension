@@ -1156,7 +1156,7 @@ Routine Description:
     This callback runs at IRQL = PASSIVE_LEVEL.
  
     This callback is (must be) called on the same thread on which NetAdapterCx
-    called NdisWdfPnpAddDevice routine.
+
  
 Arguments:
  
@@ -1227,7 +1227,7 @@ Routine Description:
     This callback runs at IRQL = PASSIVE_LEVEL.
  
     This callback is (must be) called on the same thread on which NetAdapterCx
-    called NdisWdfPnpAddDevice routine.
+
  
 Arguments:
  
@@ -1692,7 +1692,7 @@ Routine Description:
 {
     FuncEntry(FLAG_ADAPTER);
 
-    LogVerbose(GetRecorderLog(), FLAG_ADAPTER, "Calling NdisWdfMiniportDataPathStart");
+
 
     FuncExit(FLAG_ADAPTER);
 
@@ -1708,7 +1708,7 @@ Routine Description:
 {
     FuncEntry(FLAG_ADAPTER);
 
-    LogVerbose(GetRecorderLog(), FLAG_ADAPTER, "Calling NdisWdfMiniportDataPathPause");
+
 
     FuncExit(FLAG_ADAPTER);
 
@@ -1947,7 +1947,7 @@ NxAdapter::_EvtStartDatapathWorkItem(
 {
     PNxAdapter nxAdapter = GetNxAdapterFromHandle((NETADAPTER)WdfWorkItemGetParentObject(WorkItem));
 
-    NdisWdfMiniportDataPathStart(nxAdapter->m_NdisAdapterHandle);
+
 
     // Now it is ok to receive a Halt, so let a possibly blocked suspend self managed IO go
     KeSetEvent(&nxAdapter->m_StartDatapathWorkItemDone, IO_NO_INCREMENT, FALSE);
@@ -1959,15 +1959,15 @@ NxAdapter::_StateEntryFn_RestartDatapathAfterStop(
     _In_ PNxAdapter This
     )
 {
-    This->m_PacketClient.reset(
-        NetPacketRegisterClient(
-            _EvtNetPacketClientGetExtensions,
-            _EvtNetPacketClientStart,
-            _EvtNetPacketClientPause,
-            nullptr,
-            This));
 
-    NT_FRE_ASSERT(This->m_PacketClient);
+
+
+
+
+
+
+
+
 
     // We need to start the datapath in a separate thread
     KeClearEvent(&This->m_StartDatapathWorkItemDone);
@@ -2235,16 +2235,16 @@ Routine Description:
     StateMachineEngine_EventAdd(&m_SmEngineContext,
                             NxAdapterEventInitializeSelfManagedIO);
 
-    m_PacketClient.reset(
-        NetPacketRegisterClient(
-            _EvtNetPacketClientGetExtensions,
-            _EvtNetPacketClientStart, 
-            _EvtNetPacketClientPause,
-            nullptr,
-            this));
-    NT_FRE_ASSERT(m_PacketClient);
 
-    NdisWdfMiniportDataPathStart(m_NdisAdapterHandle);
+
+
+
+
+
+
+
+
+
 }
 
 VOID
@@ -2277,7 +2277,7 @@ Routine Description:
 
     // During PnP rebalance, make sure we don't return from SuspendSelfManagedIo before
     // _EvtStartDatapathWorkItem has finished, this will prevent a halt becore we call
-    // NdisWdfMiniportDataPathStart
+
     
     KeWaitForSingleObject(&m_StartDatapathWorkItemDone,
                         Executive,
