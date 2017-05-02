@@ -12,7 +12,7 @@ The goal of NetAdpaterCx is to makes it easy to write a great driver for your NI
 
 ---
 
-## This repository
+## What's this code good for?
 
 This repository holds the source code to NetAdpaterCx.sys.  
 NetAdapterCx.sys ships with Windows, so you don't need to compile it yourself.
@@ -23,10 +23,48 @@ Sometimes, you just have to refer to the source code.
 We've published this code so you can be more productive while developing your own NIC driver.
 Our aim is to make the inner workings of NetAdapterCx as transparent as possible.
 
+## An overview of the code layout
+
+The code has several major pieces:
+
+    rtl\inc     Runtime library utility headers
+    cx\sys      The core NetAdapterCx.sys implementation
+    cx\xlat     The datapath
+
+### The runtime library
+
+NetAdapterCx.sys uses a few simple utility headers to wrap low-level kernel calls.
+For example, KSpinLock.h provides a convenient wrapper around the kernel's native spinlock.
+KRegKey.h provides convenient C++ wrappers to access the registry.
+
+nblutil.h is largely stand-alone; you may find it useful in your own network driver project.
+
+### The core NetAdapterCx.sys implementation
+
+This code implements all the public API surface of NetAdapterCx.
+There is a naming convention to the files, organized around the objects in the public API.
+For example, consider the NETCONFIGURATION object.  Then:
+* NxConfigurationApi.cpp holds entrypoints for each public API method exposed by the NETCONFIGURATIONOBJECT.  These entrypoints convert handles, validate parameters, and generally hold mechanical set-up work before jumping to the actual implementation.  Start here, if you need to know why NetAdapter fires a verifier bugcheck when you make an API call.
+* NxConfiguration.cpp holds the implementation a C++ class that encapsulates the actual logic.  Start here, if you need to know why an API call behaves the way it does.
+* NxConfiguration.hpp is the associated declaration of the C++ class.
+
+### The datapath
+
+The datapath is currently under heavy development, so its implementation is likely to change substantially in future releases.
+
+The core of the transmit path is in NxTxXlat.cpp, centered around the `NxTxXlat::TransmitThread` function.
+This function drives the transmit datapath.
+Each time NDIS gives NBLs to the network driver, the NBLs are queued for the TransmitThread.
+The TransmitThread converts the NBLs to NET_PACKETs and issues them to your NIC driver.
+
+The core of the receive path is in NxRxXlat.cpp, centered around the `NxRxXlat::ReceiveThread` function.
+This routine polls your NIC for new packets.
+When new packets are available, the ReceiveThread converts them to NBLs and indicates them to NDIS.
+
 ## Contributing to NetAdapterCx
 
-We welcome bug reports or feature suggestions.
-You can file theme here on our GitHub repository's issue tracker, or email us at NetAdapter@microsoft.com.
+We welcome bug reports and feature suggestions.
+You can file them here on our GitHub repository's issue tracker, or email us at NetAdapter@microsoft.com.
 
 NetAdapterCx.sys is under heavy development, so its implementation is changing quite a bit.
 Currently, we do that development internally at Microsoft, so you won't see the in-progress changes here on GitHub.
