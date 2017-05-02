@@ -3,30 +3,42 @@ The Network Adapter Class Extension to WDF (NetAdapterCx) brings together the pr
 
 * ## Lastest Release - Windows 10 Creators Update (version 1703)
 
-    **Source Code**: HEAD to *"master"* branch
+    **Source Code to NetAdpaterCx.sys**: Right here
 
-    **Documentation**: [Network Adapter WDF Class Extension (Cx)](https://aka.ms/netadapter/doc)
+    **API Documentation**: [Network Adapter WDF Class Extension (Cx)](https://aka.ms/netadapter/doc)
 
-    **Driver Samples**: HEAD to *"master"* branch of [Microsoft/NetAdapter-Cx-Driver-Samples](https://github.com/Microsoft/NetAdapter-Cx-Driver-Samples "Driver Samples")
+    **Driver Samples**: [Microsoft/NetAdapter-Cx-Driver-Samples](https://github.com/Microsoft/NetAdapter-Cx-Driver-Samples "Driver Samples")
 
 ---
 
 ## Goals for this project
 
-### Learning from the source
+This repository holds the source code to NetAdpaterCx.sys.  
+NetAdapterCx.sys ships with Windows, so you don't need to compile it yourself.
+However, you can use this reference source code to debug your own NIC driver, and to learn how NetAdapter works.
 
-Unsure about what a particular NetAdapterCx method is doing? Take a look at the
-source. Our aim is to make the inner workings of NetAdapterCx as transparent
-for developers as possible.
-
-*Note: As you experiment with NetAdapterCx, you may come across undocumented
- behavior or APIS. We strongly advise against taking dependencies on
- that behavior as it's subject to change in future releases.*
+While we're proud of our API documentation, we know that even the best docs can't always answer every question you might have.
+Sometimes, you just have to refer to the source code.
+We've published this code so you can be more productive while developing your own NIC driver.
+Our aim is to make the inner workings of NetAdapterCx as transparent as possible.
 
 ## Contributing to NetAdapterCx
-See
-[CONTRIBUTING.md](https://github.com/Microsoft/Windows-Driver-Frameworks/blob/master/CONTRIBUTING.md
-"Contributing") for policies on pull-requests to this repo.
+
+We welcome bug reports or feature suggestions.
+You can file theme here on our GitHub repository's issue tracker, or email us at NetAdapter@microsoft.com.
+
+NetAdapterCx.sys is under heavy development, so its implementation is changing quite a bit.
+Currently, we do that development internally at Microsoft, so you won't see the in-progress changes here on GitHub.
+The code here is a snapshot of the last shipping version of NetAdapterCx.
+That means we cannot take pull requests through GitHub.
+If you would like to collaborate with us on the code, please contact us first.
+
+This project has adopted the [Microsoft Open Source Code of
+Conduct](https://opensource.microsoft.com/codeofconduct/).
+For more information see the [Code of Conduct
+FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
+contact [opencode@microsoft.com](mailto:opencode@microsoft.com)
+with any additional questions or comments.
 
 ## Licensing
 NetAdapterCx is licensed under the MIT License.
