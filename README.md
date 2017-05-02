@@ -1,17 +1,18 @@
 # Network Adapter Class Extension to WDF
-The Network Adapter Class Extension to WDF (NetAdapterCx) brings together the productivity of WDF with the networking performance of NDIS, and makes it easy to write a driver for your NIC.
+The Network Adapter Class Extension to WDF (NetAdapterCx) brings together the productivity of WDF with the networking performance of NDIS.
+The goal of NetAdpaterCx is to makes it easy to write a great driver for your NIC.
 
-* ## Lastest Release - Windows 10 Creators Update (version 1703)
+## Lastest Release - Windows 10 Creators Update (version 1703)
 
-    **Source Code to NetAdpaterCx.sys**: Right here
+**Source Code to NetAdpaterCx.sys**: Right here
 
-    **API Documentation**: [Network Adapter WDF Class Extension (Cx)](https://aka.ms/netadapter/doc)
+**API Documentation**: [Network Adapter WDF Class Extension (Cx)](https://aka.ms/netadapter/doc)
 
-    **Driver Samples**: [Microsoft/NetAdapter-Cx-Driver-Samples](https://github.com/Microsoft/NetAdapter-Cx-Driver-Samples "Driver Samples")
+**Driver Samples**: [Microsoft/NetAdapter-Cx-Driver-Samples](https://github.com/Microsoft/NetAdapter-Cx-Driver-Samples "Driver Samples")
 
 ---
 
-## Goals for this project
+## This repository
 
 This repository holds the source code to NetAdpaterCx.sys.  
 NetAdapterCx.sys ships with Windows, so you don't need to compile it yourself.
@@ -41,7 +42,7 @@ contact [opencode@microsoft.com](mailto:opencode@microsoft.com)
 with any additional questions or comments.
 
 ## Licensing
-NetAdapterCx is licensed under the MIT License.
+The code hosted here is licensed under the MIT License.
 
 ## Related Repos
 Driver samples for NetAdapterCx now also live on GitHub at
