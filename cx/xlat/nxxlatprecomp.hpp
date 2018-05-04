@@ -1,10 +1,6 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-    Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxXlatPrecomp.hpp
 
 Abstract:
 
@@ -21,11 +17,11 @@ Abstract:
 #if _KERNEL_MODE
 #  include <Ntddk.h>
 #  include <wdm.h>
-#  define NDIS670 1
+#  define NDIS680 1
 #  include <ndis.h>
 #else
 #  include "umwdm.h"
-#  define UM_NDIS670 1
+#  define UM_NDIS680 1
 #  include <ntddndis.h>
 
 #  define NDIS_STATUS_SUCCESS                     ((NDIS_STATUS)STATUS_SUCCESS)
@@ -69,15 +65,19 @@ NdisMIndicateReceiveNetBufferLists(
 #include <nblutil.h>
 #include <netiodef.h>
 
-#define NET_ADAPTER_CX_1_0 1
-#include <NetPacket.h>
-#include <NetPacketPool.h>
+#define NET_ADAPTER_CX_1_2 1
 #include <NetRingBuffer.h>
+#include <NetPacket.h>
+#include <NetDatapathDescriptor.h>
+#include <NetPacketPool.h>
 
 #include <KNew.h>
 #include <KMacros.h>
 #include <KPtr.h>
 #include <KIntrusiveList.h>
+#include <KArray.h>
+
+#include <NetPacketExtensionPrivate.h>
 
 MAKE_INTRUSIVE_LIST_ENUMERABLE(MDL, Next);
 MAKE_INTRUSIVE_LIST_ENUMERABLE(NET_BUFFER, Next);

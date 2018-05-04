@@ -1,30 +1,15 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxUtlity.hpp
 
 Abstract:
 
-    This contains definitions of the utility functions. 
-
-
-
-
-
-Environment:
-
-    kernel mode only
-
-Revision History:
+    This contains definitions of the utility functions.
 
 --*/
 
 #pragma once
 
-#include <wil\wistd_type_traits.h>
 #include <wil\resource.h>
 
 _Must_inspect_result_
@@ -71,9 +56,6 @@ MakeNdisStatusIndication(_In_ NDIS_HANDLE sourceHandle, NDIS_STATUS statusCode, 
     return statusIndication;
 }
 
-template<typename TWdfHandle>
-using unique_wdf_object = wil::unique_any<TWdfHandle, decltype(&::WdfObjectDelete), &::WdfObjectDelete>;
-
 inline
 void
 _WdfObjectDereference(_In_ WDFOBJECT Object)
@@ -86,7 +68,3 @@ using unique_wdf_reference = wil::unique_any<TWdfHandle, decltype(&::_WdfObjectD
 
 template<typename TFxObject>
 using unique_fx_ptr = wistd::unique_ptr<TFxObject, CFxObjectDeleter>;
-
-// unique_wdf_object specializations
-using unique_wdf_memory = unique_wdf_object<WDFMEMORY>;
-using unique_wdf_common_buffer = unique_wdf_object<WDFCOMMONBUFFER>;

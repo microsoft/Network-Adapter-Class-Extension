@@ -1,4 +1,4 @@
-// Copyright (C) Microsoft Corporation. All rights reserved.
+
 #pragma once
 
 #include "umwdm.h"
@@ -31,21 +31,21 @@ PAGEDX void __cdecl operator delete[](void *p);
 void __cdecl operator delete(void *p);
 
 template <ULONG TAG, ULONG ARENA = PagedPool>
-struct PAGED KALLOCATION_TAG
+struct KRTL_CLASS KALLOCATION_TAG
 {
     static const ULONG AllocationTag = TAG;
     static const ULONG AllocationArena = ARENA;
 };
 
 template <ULONG TAG, ULONG ARENA = NonPagedPoolNx>
-struct KALLOCATION_TAG_NONPAGED
+struct KRTL_CLASS_DPC_ALLOC KALLOCATION_TAG_DPC_ALLOC
 {
     static const ULONG AllocationTag = TAG;
     static const ULONG AllocationArena = ARENA;
 };
 
 template <ULONG TAG, ULONG ARENA = PagedPool>
-struct PAGED KALLOCATOR : public KALLOCATION_TAG<TAG, ARENA>
+struct KRTL_CLASS KALLOCATOR : public KALLOCATION_TAG<TAG, ARENA>
 {
     // Scalar new & delete
 
@@ -115,20 +115,17 @@ struct PAGED KALLOCATOR : public KALLOCATION_TAG<TAG, ARENA>
 };
 
 template <ULONG TAG, ULONG ARENA = NonPagedPoolNx>
-struct KALLOCATOR_NONPAGED : public KALLOCATION_TAG_NONPAGED<TAG, ARENA>
+struct KRTL_CLASS_DPC_ALLOC KALLOCATOR_NONPAGED : public KALLOCATION_TAG_DPC_ALLOC<TAG, ARENA>
 {
     // Scalar new & delete
 
-    PAGED void *operator new(size_t cb, std::nothrow_t const &)
+    NONPAGED void *operator new(size_t cb, std::nothrow_t const &)
     {
-        PAGED_CODE();
         return ExAllocatePoolWithTag(static_cast<POOL_TYPE>(ARENA), cb, TAG);
     }
 
-    PAGED void operator delete(void *p)
+    NONPAGED void operator delete(void *p)
     {
-        PAGED_CODE();
-
         if (p != nullptr)
         {
             ExFreePoolWithTag(p, TAG);
@@ -137,10 +134,8 @@ struct KALLOCATOR_NONPAGED : public KALLOCATION_TAG_NONPAGED<TAG, ARENA>
 
     // Scalar new with bonus bytes
 
-    PAGED void *operator new(size_t cb, std::nothrow_t const &, size_t extraBytes)
+    NONPAGED void *operator new(size_t cb, std::nothrow_t const &, size_t extraBytes)
     {
-        PAGED_CODE();
-
         auto size = cb + extraBytes;
 
         // Overflow check
@@ -152,16 +147,13 @@ struct KALLOCATOR_NONPAGED : public KALLOCATION_TAG_NONPAGED<TAG, ARENA>
 
     // Array new & delete
 
-    PAGED void *operator new[](size_t cb, std::nothrow_t const &)
+    NONPAGED void *operator new[](size_t cb, std::nothrow_t const &)
     {
-        PAGED_CODE();
         return ExAllocatePoolWithTag(static_cast<POOL_TYPE>(ARENA), cb, TAG);
     }
 
-    PAGED void operator delete[](void *p)
+    NONPAGED void operator delete[](void *p)
     {
-        PAGED_CODE();
-
         if (p != nullptr)
         {
             ExFreePoolWithTag(p, TAG);
@@ -170,32 +162,30 @@ struct KALLOCATOR_NONPAGED : public KALLOCATION_TAG_NONPAGED<TAG, ARENA>
 
     // Placement new & delete
     
-    PAGED void *operator new(size_t n, void * p)
+    NONPAGED void *operator new(size_t n, void * p)
     {
-        PAGED_CODE();
         UNREFERENCED_PARAMETER((n));
         return p;
     }
     
-    PAGED void operator delete(void *p1, void *p2)
+    NONPAGED void operator delete(void *p1, void *p2)
     {
-        PAGED_CODE();
         UNREFERENCED_PARAMETER((p1, p2));
     }
 };
 
 template <ULONG TAG>
-struct __declspec(empty_bases) PAGED PAGED_OBJECT :
+struct KRTL_CLASS PAGED_OBJECT :
     public KALLOCATOR<TAG, PagedPool>, 
-    public _NDIS_DEBUG_BLOCK<TAG>
+    public NdisDebugBlock<TAG>
 {
 
 };
 
 template <ULONG TAG>
-struct __declspec(empty_bases) PAGED NONPAGED_OBJECT :
+struct KRTL_CLASS NONPAGED_OBJECT :
     public KALLOCATOR<TAG, NonPagedPoolNx>, 
-    public _NDIS_DEBUG_BLOCK<TAG>
+    public NdisDebugBlock<TAG>
 {
 
 };

@@ -1,33 +1,16 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxConfigurationApi.cpp
 
 Abstract:
 
     This module contains the "C" interface for the NxConfiguration object.
 
-
-
-
-
-Environment:
-
-    kernel mode only
-
-Revision History:
-
 --*/
 
 #include "Nx.hpp"
 
-// Tracing support
-extern "C" {
 #include "NxConfigurationApi.tmh"
-}
 
 //
 // extern the whole file
@@ -45,8 +28,8 @@ NETEXPORT(NetConfigurationClose)(
 Routine Description:
 
     This method is called by the clients to close the configuration it had
-    previously opened. 
- 
+    previously opened.
+
 Arguments:
 
     Configuration - Pointer to the Adapter Configuration opened
@@ -86,22 +69,22 @@ NETEXPORT(NetConfigurationOpenSubConfiguration)(
 Routine Description:
 
     This method is called by the clients to open a sub configuration of
-    a given configuration. 
- 
+    a given configuration.
+
 Arguments:
 
     Configuration - Pointer to the Adapter Configuration opened
         in a prior call to NdisCxAdapterOpenConfiguration or
         NetConfigurationOpenSubConfiguration
- 
+
     SubConfigurationName - Name of the Sub Configuration
- 
+
     SubConfigurationAttributes - Optional WDF_OBJECT_ATTRIBUTES for the
         sub config. The client can only specify attributes fields allowed by
         WdfObjectAllocateContext API.
- 
+
     SubConfiguration - Pointer to an address in which the handle of the
-        sub configuration is returned. 
+        sub configuration is returned.
 
 --*/
 {
@@ -145,7 +128,7 @@ Arguments:
 
         status = subNxConfiguration->AddAttributes(SubConfigurationAttributes);
 
-        if (!NT_SUCCESS(status)){            
+        if (!NT_SUCCESS(status)){
             subNxConfiguration->Close();
             FuncExit(FLAG_CONFIGURATION);
             return status;
@@ -155,7 +138,7 @@ Arguments:
     //
     // *** NOTE: NO FAILURE AFTER THIS. **
     // We dont want clients Cleanup/Destroy callbacks
-    // to be called unless this call succeeds. 
+    // to be called unless this call succeeds.
     //
     *SubConfiguration = subNxConfiguration->GetFxObject();
     FuncExit(FLAG_CONFIGURATION);
@@ -177,19 +160,19 @@ NETEXPORT(NetConfigurationQueryUlong)(
 Routine Description:
 
     This method is queries a Ulong value from the Adapter Configuration
- 
+
 Arguments:
 
     Configuration - Pointer to the Adapter Configuration opened
         in a prior call to NdisCxAdapterOpenConfiguration or
         NetConfigurationOpenSubConfiguration
- 
+
     Flags - A value defined in the NET_CONFIGURATION_ULONG_FLAGS enum
- 
+
     ValueName - Name of the Ulong to be querried.
- 
+
     Value - Address of the memory where the querried ULONG would be written
- 
+
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
@@ -206,7 +189,7 @@ Arguments:
     nxConfiguration = GetNxConfigurationFromHandle(Configuration);
 
     switch (Flags) {
-    case NET_CONFIGURATION_QUERY_ULONG_NO_FLAGS: 
+    case NET_CONFIGURATION_QUERY_ULONG_NO_FLAGS:
     case NET_CONFIGURATION_QUERY_ULONG_MAY_BE_STORED_AS_HEX_STRING:
         break;
     default:
@@ -218,7 +201,7 @@ Arguments:
     }
 
     status = nxConfiguration->QueryUlong(Flags, ValueName, Value);
-    
+
     FuncExit(FLAG_CONFIGURATION);
     return status;
 }
@@ -238,19 +221,19 @@ NETEXPORT(NetConfigurationQueryString)(
 Routine Description:
 
     This method is queries a String value from the Adapter Configuration
- 
+
 Arguments:
 
     Configuration - Pointer to the Adapter Configuration opened
         in a prior call to NdisCxAdapterOpenConfiguration or
         NetConfigurationOpenSubConfiguration
- 
+
     ValueName - Name of the String to be querried.
- 
+
     StringAttributes - optional WDF_OBJECT_ATTRIBUTES for the string
- 
-    WdfString - Output WDFSTRING object. 
- 
+
+    WdfString - Output WDFSTRING object.
+
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
@@ -265,7 +248,7 @@ Arguments:
     nxConfiguration = GetNxConfigurationFromHandle(Configuration);
 
     status = nxConfiguration->QueryString(ValueName, StringAttributes, WdfString);
-    
+
     FuncExit(FLAG_CONFIGURATION);
     return status;
 }
@@ -285,22 +268,22 @@ NETEXPORT(NetConfigurationQueryMultiString)(
 Routine Description:
 
     This method is queries a Multi String value from the Adapter Configuration
- 
+
 Arguments:
 
     Configuration - Pointer to the Adapter Configuration opened
         in a prior call to NdisCxAdapterOpenConfiguration or
         NetConfigurationOpenSubConfiguration
- 
+
     ValueName - Name of the String to be querried.
- 
+
     StringsAttributes - For each string in the multi-string, a WDFSTRING object
         is created and added to the input Collection. The StringsAttributes is
         used while allocating the string objects.
         These string objects are parented to the collection object unless
         the client explicitly specifies the Parent.
- 
-    Collection - Input collection to which the WDFSTRING objects are added. 
+
+    Collection - Input collection to which the WDFSTRING objects are added.
 
 --*/
 {
@@ -316,7 +299,7 @@ Arguments:
     nxConfiguration = GetNxConfigurationFromHandle(Configuration);
 
     status = nxConfiguration->QueryMultiString(ValueName, StringsAttributes, Collection);
-        
+
     FuncExit(FLAG_CONFIGURATION);
     return status;
 }
@@ -338,23 +321,23 @@ NETEXPORT(NetConfigurationQueryBinary)(
 Routine Description:
 
     This method is queries a binary data from the Adapter Configuration
- 
+
 Arguments:
 
     Configuration - Pointer to the Adapter Configuration opened
         in a prior call to NdisCxAdapterOpenConfiguration or
         NetConfigurationOpenSubConfiguration
- 
+
     ValueName - Name of the Data to be querried.
- 
+
     PoolType - PoolType as described by the documentation of WdfMemoryCreate
- 
+
     MemoryAttributes - optional WDF_OBJECT_ATTRIBUTES for the memory object
         that is allocated and returned as part of this function.
         The memory objects is parented to the Configuration object unless
         the client explicitly specifies the Parent.
- 
-    WdfMemory - Output WDFMEMORY object representing the Data read 
+
+    WdfMemory - Output WDFMEMORY object representing the Data read
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
@@ -368,11 +351,11 @@ Arguments:
 
     nxConfiguration = GetNxConfigurationFromHandle(Configuration);
 
-    status = nxConfiguration->QueryBinary(ValueName, 
-                                          PoolType, 
-                                          MemoryAttributes, 
+    status = nxConfiguration->QueryBinary(ValueName,
+                                          PoolType,
+                                          MemoryAttributes,
                                           WdfMemory);
-    
+
     FuncExit(FLAG_CONFIGURATION);
     return status;
 }
@@ -381,66 +364,46 @@ _Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
-NETEXPORT(NetConfigurationQueryNetworkAddress)(
-    _In_     PNET_DRIVER_GLOBALS                   Globals,
-    _In_     NETCONFIGURATION                      Configuration,
-    _In_     ULONG                                 BufferLength,
-    _Out_writes_bytes_to_(BufferLength,*ResultLength)
-             PVOID                                 NetworkAddressBuffer,
-    _Out_    PULONG                                ResultLength
+NETEXPORT(NetConfigurationQueryLinkLayerAddress)(
+    _In_  PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_  NETCONFIGURATION Configuration,
+    _Out_ PNET_ADAPTER_LINK_LAYER_ADDRESS LinkLayerAddress
     )
 /*++
 Routine Description:
 
-    This method is queries the network address (typically the mac) address
-    of the adapter
- 
+    This method queries from registry the link layer address of the adapter
+
 Arguments:
 
     Configuration - Pointer to the Adapter Configuration opened
-        in a prior call to NdisCxAdapterOpenConfiguration or
+        in a prior call to NetAdapterOpenConfiguration or
         NetConfigurationOpenSubConfiguration
- 
-    BufferLength - The size, in bytes, of the buffer that
-        is pointed to by NetworkAddressBuffer.
- 
-    NetworkAddressBuffer [out] - A caller-supplied pointer to a caller-allocated
-        buffer that receives the requested network address as a byte array.
-        The pointer can be NULL if the BufferLength parameter is zero.
- 
-    ResultLength [out] - A caller-supplied location that, on return,
-        contains the size, in bytes, of the information that the method stored
-        in PropertyBuffer. If the function's return value is
-        STATUS_BUFFER_TOO_SMALL, this location receives the required buffer size.
- 
-Returns : 
-    STATUS_BUFFER_TOO_SMALL - If the supplied buffer is too small to recieve
-        the information. 
- 
+
+    LinkLayerAddress [out] - A caller-supplied location that, on return,
+        contains the queried link layer address.
+
+Returns:
+
+    STATUS_BUFFER_OVERFLOW - Returned if the value stored in the registry
+    was larger than NDIS_MAX_PHYS_ADDRESS_LENGTH
+
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
 
     NTSTATUS status;
     PNxConfiguration  nxConfiguration;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyNotNull(pNxPrivateGlobals, ResultLength);
-
-    status = Verifier_VerifyQueryNetworkAddressParameters(pNxPrivateGlobals, BufferLength, NetworkAddressBuffer);;
-
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
+    Verifier_VerifyNotNull(pNxPrivateGlobals, LinkLayerAddress);
 
     nxConfiguration = GetNxConfigurationFromHandle(Configuration);
 
-    status = nxConfiguration->QueryNetworkAddress(BufferLength, 
-                                                  NetworkAddressBuffer,
-                                                  ResultLength);
-    
+    status = nxConfiguration->QueryLinkLayerAddress(LinkLayerAddress);
+
     FuncExit(FLAG_CONFIGURATION);
     return status;
 }
@@ -459,19 +422,19 @@ NETEXPORT(NetConfigurationAssignUlong)(
 Routine Description:
 
     This method is assigns a Ulong value to the Adapter Configuration
- 
+
 Arguments:
 
     Configuration - Pointer to the Adapter Configuration opened
         in a prior call to NdisCxAdapterOpenConfiguration or
         NetConfigurationOpenSubConfiguration
- 
+
     Flags - A value defined in the NET_CONFIGURATION_ULONG_FLAGS enum
- 
+
     ValueName - Name of the Ulong to be assigned.
- 
+
     Value - The value of the ULONG
- 
+
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
@@ -486,7 +449,7 @@ Arguments:
     nxConfiguration = GetNxConfigurationFromHandle(Configuration);
 
     status = nxConfiguration->AssignUlong(ValueName, Value);
-    
+
     FuncExit(FLAG_CONFIGURATION);
     return status;
 }
@@ -505,17 +468,17 @@ NETEXPORT(NetConfigurationAssignUnicodeString)(
 Routine Description:
 
     This method is assigns a string to the Adapter Configuration
- 
+
 Arguments:
 
     Configuration - Pointer to the Adapter Configuration opened
         in a prior call to NdisCxAdapterOpenConfiguration or
         NetConfigurationOpenSubConfiguration
- 
+
     ValueName - Name of the Unicode String to be assigned.
- 
+
     Value - The Unicode String to be assigned
- 
+
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
@@ -530,7 +493,7 @@ Arguments:
     nxConfiguration = GetNxConfigurationFromHandle(Configuration);
 
     status = nxConfiguration->AssignUnicodeString(ValueName, Value);
-    
+
     FuncExit(FLAG_CONFIGURATION);
     return status;
 }
@@ -551,17 +514,17 @@ NETEXPORT(NetConfigurationAssignBinary)(
 Routine Description:
 
     This method is assigns binary data to the Adapter Configuration
- 
+
 Arguments:
 
     Configuration - Pointer to the Adapter Configuration opened
         in a prior call to NdisCxAdapterOpenConfiguration or
         NetConfigurationOpenSubConfiguration
- 
+
     ValueName - Name of the Binary Data to be assigned.
- 
+
     Buffer - The buffer holding the binary data
- 
+
     BufferLength - The length of the buffer in bytes.
 --*/
 {
@@ -577,7 +540,7 @@ Arguments:
     nxConfiguration = GetNxConfigurationFromHandle(Configuration);
 
     status = nxConfiguration->AssignBinary(ValueName, Buffer, BufferLength);
-    
+
     FuncExit(FLAG_CONFIGURATION);
     return status;
 }
@@ -596,18 +559,18 @@ NETEXPORT(NetConfigurationAssignMultiString)(
 Routine Description:
 
     This method is assigns a Multi String to the Adapter Configuration
- 
+
 Arguments:
 
     Configuration - Pointer to the Adapter Configuration opened
         in a prior call to NdisCxAdapterOpenConfiguration or
         NetConfigurationOpenSubConfiguration
- 
+
     ValueName - Name of the Binary Data to be assigned.
- 
+
     StringsCollection - Collection of WDFSTRINGs that would form the
         multisz string
- 
+
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);

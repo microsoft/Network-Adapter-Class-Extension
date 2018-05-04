@@ -1,33 +1,16 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
- 
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxWake.cpp
 
 Abstract:
 
     This implements the NETPOWERSETTINGS object.
 
-
-
-
-
-Environment:
-
-    kernel mode only
-
-Revision History:
-
 --*/
 
 #include "Nx.hpp"
 
-// Tracing support
-extern "C" {
 #include "NxWake.tmh"
-}
 
 NxWake::NxWake(
     _In_ NETPOWERSETTINGS    NetPowerSettingsWdfHandle,
@@ -74,13 +57,13 @@ NxWake::~NxWake(
     FuncExit(FLAG_POWER);
 }
 
-VOID 
+VOID
 NxWake::_EvtCleanupCallbackWrapper(
     _In_ WDFOBJECT Object
 )
 /*++
 Routine Description:
-    Wraps the driver supplied callback so we can disable them until 
+    Wraps the driver supplied callback so we can disable them until
     adapter initialization is complete.
 
 Arguments:
@@ -171,7 +154,7 @@ Returns:
     }
 
     //
-    // Get the NxWake allocation, which is the ctx associated with the 
+    // Get the NxWake allocation, which is the ctx associated with the
     // WDF object.
     //
     netPowerSettingsWdfObjCtx = (PVOID) GetNxWakeFromHandle(netPowerSettingsWdfObj);
@@ -186,10 +169,10 @@ Returns:
 
     if (NetPowerSettingsObjectAttributes->Size != 0) {
         //
-        // NxWake is created as part of NxAdapter creation. In case something 
+        // NxWake is created as part of NxAdapter creation. In case something
         // fails after this returns, we dont want the driver's object cleanup
         // or destroy callbacks to be invoked. So we swap the callbacks with
-        // our wrapper and only enable these driver callbacks after adapter 
+        // our wrapper and only enable these driver callbacks after adapter
         // initialization has completed successfully
         //
         driversNetPowerObjAttributes = NetPowerSettingsObjectAttributes;
@@ -212,9 +195,9 @@ Returns:
         }
     }
 
-    // 
-    // The client's object attributes have been associated with the 
-    // wake object already. Dont introduce failures after this point. 
+    //
+    // The client's object attributes have been associated with the
+    // wake object already. Dont introduce failures after this point.
     //
     *NxWakeObj = pNxWake;
 
@@ -230,7 +213,7 @@ NxWake::ProcessOidProtocolOffload(
 /*++
 Routine Description:
     Processes addition and removal of protocol offloads. In case of addition
-    presents the offload to the driver for filtering it if it has registered a 
+    presents the offload to the driver for filtering it if it has registered a
     preview callback to process it.
 
 Arguments:
@@ -261,7 +244,7 @@ Returns:
         ndisProtocolOffload = (PNDIS_PM_PROTOCOL_OFFLOAD)SetInformation->InformationBuffer;
 
         //
-        // Allocate and make a copy before invoking the callback to avoid 
+        // Allocate and make a copy before invoking the callback to avoid
         // failure after driver accepts a pattern
         //
         nxPowerEntry = CreateProtocolOffloadEntry(ndisProtocolOffload,
@@ -280,8 +263,8 @@ Returns:
         //
         if (m_EvtPreviewProtocolOffload != NULL) {
             m_DriverCanAccessWakeSettings = TRUE;
-            status = m_EvtPreviewProtocolOffload(AdapterWdfHandle, 
-                                GetFxObject(), 
+            status = m_EvtPreviewProtocolOffload(AdapterWdfHandle,
+                                GetFxObject(),
                                 nxPowerEntry->NdisProtocolOffload.ProtocolOffloadType,
                                 &(nxPowerEntry->NdisProtocolOffload));
             m_DriverCanAccessWakeSettings = FALSE;
@@ -309,7 +292,7 @@ Returns:
             return NDIS_STATUS_INVALID_PARAMETER;
         }
 
-        nxPowerEntry = RemovePowerEntryByID(*((PULONG)SetInformation->InformationBuffer), 
+        nxPowerEntry = RemovePowerEntryByID(*((PULONG)SetInformation->InformationBuffer),
                                         NxPowerEntryTypeProtocolOffload);
         ASSERT(nxPowerEntry != NULL);
         if (nxPowerEntry) {
@@ -334,7 +317,7 @@ NxWake::CreateProtocolOffloadEntry(
     )
 /*++
 Routine Description:
-    Create a Nx power entry for protocol offload. Caller must free the 
+    Create a Nx power entry for protocol offload. Caller must free the
     allocated entry when appropriate.
 
 Arguments:
@@ -353,13 +336,13 @@ Returns:
     ndisProtocolOffloadSize = sizeof(NDIS_PM_PROTOCOL_OFFLOAD);
 
     if (InformationBufferLength < ndisProtocolOffloadSize) {
-        LogError(GetRecorderLog(), FLAG_POWER, 
+        LogError(GetRecorderLog(), FLAG_POWER,
             "Invalid InformationBufferLength %u for protocol offload entry", InformationBufferLength);
         return NULL;
     }
 
-   status = RtlULongAdd(sizeof(NX_NET_POWER_ENTRY), 
-                    ndisProtocolOffloadSize, 
+   status = RtlULongAdd(sizeof(NX_NET_POWER_ENTRY),
+                    ndisProtocolOffloadSize,
                     &totalAllocationSize);
     if (!NT_SUCCESS(status)) {
         LogError(GetRecorderLog(), FLAG_POWER,
@@ -378,8 +361,8 @@ Returns:
     RtlZeroMemory(pNxPowerEntry, totalAllocationSize);
     pNxPowerEntry->Size = totalAllocationSize;
 
-    RtlCopyMemory(&pNxPowerEntry->NdisProtocolOffload, 
-                NdisProtocolOffload, 
+    RtlCopyMemory(&pNxPowerEntry->NdisProtocolOffload,
+                NdisProtocolOffload,
                 ndisProtocolOffloadSize);
 
     return pNxPowerEntry;
@@ -392,7 +375,7 @@ NxWake::CreateWakePatternEntry(
 )
 /*++
 Routine Description:
-    Create a Nx power pattern entry after taking into account pattern size 
+    Create a Nx power pattern entry after taking into account pattern size
     requirements. Caller must free the allocated entry when appropriate.
 
 Arguments:
@@ -409,7 +392,7 @@ Returns:
     PNX_NET_POWER_ENTRY pNxWakeEntry;
 
     if (Pattern->WoLPacketType == NdisPMWoLPacketBitmapPattern) {
-        patternPayloadSize = 
+        patternPayloadSize =
             max(Pattern->WoLPattern.WoLBitMapPattern.MaskOffset + Pattern->WoLPattern.WoLBitMapPattern.MaskSize,
                 Pattern->WoLPattern.WoLBitMapPattern.PatternOffset + Pattern->WoLPattern.WoLBitMapPattern.PatternSize);
 
@@ -417,8 +400,8 @@ Returns:
         patternPayloadSize = patternPayloadSize - sizeof(NDIS_PM_WOL_PATTERN);
     }
 
-    status = RtlULongAdd(sizeof(NX_NET_POWER_ENTRY), 
-                    patternPayloadSize, 
+    status = RtlULongAdd(sizeof(NX_NET_POWER_ENTRY),
+                    patternPayloadSize,
                     &totalAllocationSize);
     if (!NT_SUCCESS(status)) {
         LogError(GetRecorderLog(), FLAG_POWER,
@@ -427,7 +410,7 @@ Returns:
     }
 
     if (InformationBufferLength < (patternPayloadSize + sizeof(NDIS_PM_WOL_PATTERN))) {
-        LogError(GetRecorderLog(), FLAG_POWER, 
+        LogError(GetRecorderLog(), FLAG_POWER,
             "Invalid InformationBufferLength %u for WoL entry", InformationBufferLength);
         return NULL;
     }
@@ -443,8 +426,8 @@ Returns:
     RtlZeroMemory(pNxWakeEntry, totalAllocationSize);
     pNxWakeEntry->Size = totalAllocationSize;
 
-    RtlCopyMemory(&pNxWakeEntry->NdisWoLPattern, 
-                Pattern, 
+    RtlCopyMemory(&pNxWakeEntry->NdisWoLPattern,
+                Pattern,
                 sizeof(NDIS_PM_WOL_PATTERN)+patternPayloadSize);
 
     return pNxWakeEntry;
@@ -487,7 +470,7 @@ Returns:
         ndisWolPattern = (PNDIS_PM_WOL_PATTERN)SetInformation->InformationBuffer;
 
         //
-        // Allocate and make a copy before invoking the callback to avoid 
+        // Allocate and make a copy before invoking the callback to avoid
         // failure after driver accepts a pattern
         //
         nxWakeEntry = CreateWakePatternEntry(ndisWolPattern,
@@ -506,8 +489,8 @@ Returns:
         //
         if (m_EvtPreviewWakePattern != NULL) {
             m_DriverCanAccessWakeSettings = TRUE;
-            status = m_EvtPreviewWakePattern(AdapterWdfHandle, 
-                                GetFxObject(), 
+            status = m_EvtPreviewWakePattern(AdapterWdfHandle,
+                                GetFxObject(),
                                 nxWakeEntry->NdisWoLPattern.WoLPacketType,
                                 &(nxWakeEntry->NdisWoLPattern));
             m_DriverCanAccessWakeSettings = FALSE;
@@ -647,12 +630,12 @@ Returns:
 
     ASSERT (m_DriverCanAccessWakeSettings == FALSE);
 
-    if (m_PMParameters.EnabledWoLPacketPatterns == 
+    if (m_PMParameters.EnabledWoLPacketPatterns ==
             PmParams->EnabledWoLPacketPatterns) {
         updateWakePatterns = FALSE;
     }
 
-    if (m_PMParameters.EnabledProtocolOffloads == 
+    if (m_PMParameters.EnabledProtocolOffloads ==
             PmParams->EnabledProtocolOffloads) {
         updateProtocolOffload = FALSE;
     }
@@ -688,11 +671,11 @@ NxWake::UpdateProtocolOffloadEntryEnabledField(
     )
 /*++
 Routine Description:
-    Updates the protocol offload entry's Enabled field based on the 
+    Updates the protocol offload entry's Enabled field based on the
     NDIS_PM_PARAMETERS.
 
 Arguments:
-    Entry  -The wake entry to be updated. 
+    Entry  -The wake entry to be updated.
 
 Returns:
     VOID
@@ -725,7 +708,7 @@ Routine Description:
     Updates the Wake entry's Enabled field based on the NDIS_PM_PARAMETERS.
 
 Arguments:
-    Entry  -The wake entry to be updated. 
+    Entry  -The wake entry to be updated.
 
 Returns:
     VOID
@@ -869,7 +852,7 @@ Routine Description:
     Gets the Count of Wake Patterns for a particular Wake pattern type
 
 Arguments:
-    WakePatternType - the Wake Pattern to be looked up 
+    WakePatternType - the Wake Pattern to be looked up
 
 Returns:
     Count of Patterns for the type specified
@@ -901,7 +884,7 @@ Routine Description:
     Gets the count of protocol offloads for a particular offload type
 
 Arguments:
-    WakePatternType - the Wake Pattern to be looked up 
+    WakePatternType - the Wake Pattern to be looked up
 
 Returns:
     Count of Patterns for the type specified

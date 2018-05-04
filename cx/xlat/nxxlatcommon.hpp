@@ -1,10 +1,6 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-    Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxXlatCommon.hpp
 
 Abstract:
 
@@ -15,24 +11,30 @@ Abstract:
 #pragma once
 
 #define NTSTRSAFE_NO_UNICODE_STRING_FUNCTIONS
-#include "nxtrace.hpp"
-#include "nxtracelogging.hpp"
+#include <NxTrace.hpp>
+#include <NxTraceLogging.hpp>
 
+#include "NetClientApi.h"
 #include "NxApp.hpp"
-
-#define THREAD_802_15_4_MSIEx_PACKET_EXTENSION_NAME L"NblMediaSpecificInformationEx"
-#define THREAD_802_15_4_STATUS_PACKET_EXTENSION_NAME L"Thread802_15_4_StatusExtension"
 
 #ifndef RTL_IS_POWER_OF_TWO
 #  define RTL_IS_POWER_OF_TWO(Value) \
     ((Value != 0) && !((Value) & ((Value) - 1)))
 #endif
 
-
 using unique_nbl = wistd::unique_ptr<NET_BUFFER_LIST, wil::function_deleter<decltype(&NdisFreeNetBufferList), NdisFreeNetBufferList>>;
 using unique_nbl_pool = wil::unique_any<NDIS_HANDLE, decltype(&::NdisFreeNetBufferListPool), &::NdisFreeNetBufferListPool>;
 
-using unique_packet_extension = wil::unique_any<HNETPACKETEXTENSION, decltype(&::NetPacketExtensionFree), &::NetPacketExtensionFree>;
+__inline
+UINT32
+NetRingBufferIncrementIndexByCount(
+    _In_ NET_RING_BUFFER CONST *RingBuffer,
+    _In_ UINT32 Index,
+    _In_ UINT32 Count
+)
+{
+    return (Index + Count) & RingBuffer->ElementIndexMask;
+}
 
 __inline
 NET_PACKET *
@@ -41,11 +43,35 @@ NetRingBufferGetPacketAtIndex(
     _In_ UINT32 Index
 )
 {
-    return (NET_PACKET*)NetRingBufferGetElementAtIndex(RingBuffer, Index);
+    return (NET_PACKET*) NetRingBufferGetElementAtIndex(RingBuffer, Index);
 }
 
-#define NET_PACKET_INTERNAL_802_15_4_INFO(netpacket, offset) \
-    (*(PVOID*)((PUCHAR)(netpacket) + (offset)))
+__inline
+SIZE_T
+NetPacketFragmentGetSize(
+    void
+)
+{
+    // In the future the size of a fragment might not be a simple sizeof(NET_PACKET_FRAGMENT), so create
+    // a function stub now to easily track the places where we need such information
+    return sizeof(NET_PACKET_FRAGMENT);
+}
 
-#define NET_PACKET_INTERNAL_802_15_4_STATUS(netpacket, offset) \
-    (*(NTSTATUS*)((PUCHAR)(netpacket) + (offset)))
+__inline
+void
+DetachFragmentsFromPacket(
+    _Inout_ NET_PACKET& Packet,
+    _In_ NET_DATAPATH_DESCRIPTOR const &Descriptor
+)
+{
+    auto fragmentRing = NET_DATAPATH_DESCRIPTOR_GET_FRAGMENT_RING_BUFFER(&Descriptor);
+    UINT32 fragmentCount = NetPacketGetFragmentCount(&Descriptor, &Packet);
+
+    NT_ASSERT(Packet.FragmentOffset == fragmentRing->BeginIndex);
+    NT_ASSERT(fragmentCount <= NetRingBufferGetNumberOfElementsInRange(fragmentRing, fragmentRing->BeginIndex, fragmentRing->EndIndex));
+
+    fragmentRing->BeginIndex = NetRingBufferIncrementIndexByCount(fragmentRing, fragmentRing->BeginIndex, fragmentCount);
+
+    Packet.FragmentValid = FALSE;
+    Packet.FragmentOffset = 0;
+}

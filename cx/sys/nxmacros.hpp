@@ -1,29 +1,16 @@
-/*++
-
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    Nxmacros.hpp
-
-
-
-
-
-    
-Environment:
-
-    kernel mode only
-
-Revision History:
-
---*/
+// Copyright (C) Microsoft Corporation. All rights reserved.
 
 #pragma once
 
-#define NETEXPORT(a) imp_ ## a
+#include "KWaitEvent.h"
+
 #define NETADAPTERCX_TAG 'xCdN'
 #define NETADAPTERCX_TAG_PTR ((PVOID)(PULONG_PTR) NDISCX_TAG)
+
+#ifndef RTL_IS_POWER_OF_TWO
+#  define RTL_IS_POWER_OF_TWO(Value) \
+    ((Value != 0) && !((Value) & ((Value) - 1)))
+#endif
 
 FORCEINLINE
 VOID
@@ -36,33 +23,33 @@ SetCompletionRoutineSmart(
     _In_     BOOLEAN                InvokeOnError,
     _In_     BOOLEAN                InvokeOnCancel
     )
-/*++ 
- 
-Routine Description: 
+/*++
+
+Routine Description:
     This routine first calls the IoSetCompletionRoutineEx to set the completion
     routine on the Irp, and if it fails then it calls the old
     IoSetCompletionRoutine.
- 
+
     Using IoSetCompletionRoutine can result in a rare issue where
     the driver might get unloaded prior to the IoSetCompletionRoutine returns.
- 
+
     Leveraging IoSetCompletionRoutineEx first and if it fails using
     IoSetCompletionRoutine shrinks the window in which that issue can happen
     to negligible. This is a common practice used across several other inbox
     drivers.
 --*/
 {
-    if (!NT_SUCCESS(IoSetCompletionRoutineEx(DeviceObject, 
-                                             Irp, 
-                                             CompletionRoutine, 
-                                             Context, 
-                                             InvokeOnSuccess, 
-                                             InvokeOnError, 
+    if (!NT_SUCCESS(IoSetCompletionRoutineEx(DeviceObject,
+                                             Irp,
+                                             CompletionRoutine,
+                                             Context,
+                                             InvokeOnSuccess,
+                                             InvokeOnError,
                                              InvokeOnCancel))) {
         IoSetCompletionRoutine(Irp,
                                CompletionRoutine,
-                               Context, 
-                               InvokeOnSuccess, 
+                               Context,
+                               InvokeOnSuccess,
                                InvokeOnError,
                                InvokeOnCancel);
     }
@@ -72,44 +59,44 @@ Routine Description:
 Macro Description:
     This method loops through each entry in a doubly linked list (LIST_ENTRY).
     It assumes that the doubly linked list has a dedicated list head
- 
-Arguments: 
+
+Arguments:
     Type - The type of each entry of the linked list.
- 
+
     Head - A Pointer to the list head
- 
+
     Field - The name of LIST_ENTRY filed in the stucture.
- 
+
     Current - A pointer to the current entry (to be used in the body of the
         FOR_ALL_IN_LIST
- 
-Usage: 
- 
+
+Usage:
+
     typedef struct _MYENTRY {
         ULONG Version;
         ULONG SubVersion;
         LIST_ENTRY Link;
         UCHAR Data;
     } MYENTRY, *PMYENTRY;
- 
+
     typedef struct _MYCONTEXT {
         ULONG Size;
         LIST_ENTRY MyEntryListHead;
         ...
     } *PMYCONTEXT;
- 
+
     PMYENTRY FindMyEntry(PMYCONTEXT Context,
                          UCHAR Data) {
         PMYENTRY entry;
- 
+
         FOR_ALL_IN_LIST(MYENTRY,
                         &Context->MyEntryListHead,
                         Link,
                         entry) {
             if (entry->Data == Data) { return entry }
     }
- 
-Remarks : 
+
+Remarks :
     While using the FOR_ALL_IN_LIST, you must not change the
     structure of the list. In case you want to remove the current element
     and continue interating the list, use FOR_ALL_IN_LIST_SAFE
@@ -127,39 +114,39 @@ Macro Description:
     This method loops through each entry in a doubly linked list (LIST_ENTRY).
     It assumes that the doubly linked list has a dedicated list head.
     In each iteration of the loop it is safe to remove the current element from
-    the list. 
- 
-Arguments: 
+    the list.
+
+Arguments:
     Type - The type of each entry of the linked list.
- 
+
     Head - A Pointer to the list head
- 
+
     Field - The name of LIST_ENTRY filed in the stucture.
- 
+
     Current - A pointer to the current entry (to be used in the body of the
         FOR_ALL_IN_LIST
- 
+
     Next - A pointer to the next entry in the list, that the user must not touch
- 
-Usage: 
- 
+
+Usage:
+
     typedef struct _MYENTRY {
         ULONG Version;
         ULONG SubVersion;
         LIST_ENTRY Link;
         UCHAR Data;
     } MYENTRY, *PMYENTRY;
- 
+
     typedef struct _MYCONTEXT {
         ULONG Size;
         LIST_ENTRY MyEntryListHead;
         ...
     } *PMYCONTEXT;
- 
+
     VOID DeleteEntries(PMYCONTEXT Context,
                            UCHAR Data) {
         PMYENTRY entry, nextEntry;
- 
+
         FOR_ALL_IN_LIST_SAFE(MYENTRY,
                             &Context->MyEntryListHead,
                             Link,
@@ -291,12 +278,12 @@ NxInterlockedIncrementGTZero(
 }
 
 class DispatchLock {
-private: 
+private:
     volatile LONG m_Count;
-    KEVENT        m_Event;
+    KWaitEvent    m_Event;
 
     //
-    // For performance reasons this lock may not enabled. 
+    // For performance reasons this lock may not enabled.
     // In that case the member of this Lock just fake success
     //
     BOOLEAN       m_Enabled;
@@ -309,7 +296,6 @@ public:
         m_Enabled(Enabled)
     {
         if (!Enabled) { return; }
-        KeInitializeEvent(&m_Event, NotificationEvent, TRUE);
     }
 
     VOID
@@ -319,10 +305,10 @@ public:
         if (!m_Enabled) { return; }
         NT_ASSERT(m_Count == 0);
         m_Count = 1;
-        KeClearEvent(&m_Event);
+        m_Event.Clear();
     }
 
-    BOOLEAN 
+    BOOLEAN
     Acquire(
         VOID
         ) {
@@ -336,7 +322,7 @@ public:
         ) {
         if (!m_Enabled) { return; }
         if (0 == InterlockedDecrement(&m_Count)) {
-            KeSetEvent(&m_Event, IO_NO_INCREMENT, FALSE);
+            m_Event.Set();
         }
     }
 
@@ -346,7 +332,7 @@ public:
         ){
         if (!m_Enabled) { return; }
         Release();
-        KeWaitForSingleObject(&m_Event, Executive, KernelMode, FALSE, NULL);
+        m_Event.Wait();
     }
 
 };
@@ -374,14 +360,14 @@ public:
         )
     {
         ULONG_PTR ptrVal = (ULONG_PTR)*Ptr;
-        ptrVal |= 0x1;        
+        ptrVal |= 0x1;
         *Ptr = (PVOID)(ptrVal);
     }
 
     static
     BOOLEAN
     _IsBit0Set(
-        PVOID Ptr
+        void const * Ptr
         )
     {
         ULONG_PTR ptrVal;

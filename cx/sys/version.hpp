@@ -1,17 +1,4 @@
-/*++
-
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    Version.hpp
-
-Abstract:
-
-    
-Revision History:
-
---*/
+// Copyright (C) Microsoft Corporation. All rights reserved.
 
 #pragma once
 
@@ -64,7 +51,7 @@ public:
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(CxDriverContext, GetCxDriverContextFromHandle);
 
 
-VOID 
+VOID
 FORCEINLINE
 NxDbgBreak(
     PNX_PRIVATE_GLOBALS PrivateGlobals

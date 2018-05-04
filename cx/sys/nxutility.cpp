@@ -1,33 +1,16 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxUtility.cpp
 
 Abstract:
 
     This module contains utility functions.
 
-
-
-
-
-Environment:
-
-    kernel mode only
-
-Revision History:
-
 --*/
 
 #include "Nx.hpp"
 
-// Tracing support
-extern "C" {
 #include "NxUtility.tmh"
-}
 
 _Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -43,15 +26,15 @@ NxWdfCollectionAddMultiSz(
 /*++
 Routine Description:
 
- 
+
 Arguments:
- 
-    Collection - Input collection to which the WDFSTRING objects are added. 
- 
+
+    Collection - Input collection to which the WDFSTRING objects are added.
+
 --*/
 {
     FuncEntry(FLAG_UTILITY);
-    
+
     NTSTATUS status;
     UNICODE_STRING str;
     PWCHAR pCur;
@@ -96,7 +79,7 @@ Arguments:
     if (StringsAttributes == WDF_NO_OBJECT_ATTRIBUTES) {
         WDF_OBJECT_ATTRIBUTES_INIT(&attribs);
         StringsAttributes = &attribs;
-    } 
+    }
 
     //
     // If the client didn't specify a parent object explicitly
@@ -115,7 +98,7 @@ Arguments:
         str.Length = (USHORT) (curCchLen * sizeof(WCHAR));
         str.MaximumLength = (USHORT) (curCchLen * sizeof(WCHAR));
 
-        LogVerbose(RecorderLog, FLAG_UTILITY, 
+        LogVerbose(RecorderLog, FLAG_UTILITY,
                    "Multi Sz includes string %wZ", &str);
 
         status = WdfStringCreate(&str, StringsAttributes, &wdfstring);
@@ -124,7 +107,7 @@ Arguments:
             LogError(RecorderLog, FLAG_UTILITY,
                      "The WdfStringCreate failed, %!STATUS!", status);
             goto Exit;
-        } 
+        }
 
         status = WdfCollectionAdd(Collection, wdfstring);
 
@@ -149,13 +132,13 @@ Arguments:
         //
         pCur += curCchLen + 1;
     }
-    
-Exit: 
-        
+
+Exit:
+
     if (!NT_SUCCESS(status)) {
-        
+
         //
-        // In the case of a failure, remove the entries that we added 
+        // In the case of a failure, remove the entries that we added
         // to the Collection
         //
         while (numberOfStringsAdded != 0) {
@@ -169,10 +152,10 @@ Exit:
             str = WdfCollectionGetLastItem(Collection);
             WdfCollectionRemove(Collection, str);
             WdfObjectDelete(str);
-            numberOfStringsAdded--;            
+            numberOfStringsAdded--;
         }
     }
-        
+
     FuncExit(FLAG_UTILITY);
     return status;
 }

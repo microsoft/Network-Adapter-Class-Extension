@@ -1,147 +1,261 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
+
 #pragma once
 
-#include "NxApp.hpp"
+#include <KPtr.h>
+#include <NetClientQueue.h>
+#include <NetPacketExtensionPrivate.h>
 
-#define NET_RING_BUFFER_FROM_NET_PACKET(_netpacket) (NET_RING_BUFFER *)((PUCHAR)(_netpacket) - (_netpacket)->Reserved2)
+struct NET_PACKET_EXTENSION_PRIVATE;
 
 #define QUEUE_CREATION_CONTEXT_SIGNATURE 0x7840dd95
+
 struct QUEUE_CREATION_CONTEXT
 {
-    ULONG Signature = QUEUE_CREATION_CONTEXT_SIGNATURE;
+    ULONG
+        Signature = QUEUE_CREATION_CONTEXT_SIGNATURE;
 
-    PKTHREAD CurrentThread = nullptr;
-    INxAppQueue *AppQueue = nullptr;
+    PKTHREAD
+        CurrentThread = nullptr;
 
-    NxAdapter *Adapter = nullptr;
+    NET_CLIENT_QUEUE_CONFIG const *
+        ClientQueueConfig = nullptr;
 
-    ULONG QueueId = 0;
+    NET_CLIENT_QUEUE_NOTIFY_DISPATCH const *
+        ClientDispatch = nullptr;
 
-    unique_wdf_object<WDFOBJECT> CreatedQueueObject;
+    NET_CLIENT_QUEUE_DISPATCH const **
+        AdapterDispatch = nullptr;
+
+    NxAdapter *
+        Adapter = nullptr;
+
+    Rtl::KArray<NET_PACKET_CONTEXT_ATTRIBUTES>
+        PacketContextAttributes;
+
+    Rtl::KArray<NET_PACKET_EXTENSION_PRIVATE>
+        NetAdapterAddedPacketExtensions;
+
+    Rtl::KArray<NET_PACKET_EXTENSION_PRIVATE>
+        NetClientAddedPacketExtensions;
+
+    struct QueueContext
+    {
+
+        ULONG
+            QueueId = 0;
+
+        void *
+            ClientQueue = nullptr;
+
+        wil::unique_wdf_object
+            CreatedQueueObject;
+
+    };
+
+    size_t
+        QueueContextIndex = 0;
+
+    Rtl::KArray<QueueContext>
+        QueueContexts;
 };
 
 class NxQueue
 {
 public:
 
+    enum class Type
+    {
+        Rx,
+        Tx,
+    };
+
     NxQueue(
-        _In_ NxAdapter *adapter,
-        _In_ INxAppQueue *app) :
-        Adapter(adapter),
-        m_appQueue(app)
-    {
-        NOTHING;
-    }
+        _In_ QUEUE_CREATION_CONTEXT const & InitContext,
+        _In_ ULONG QueueId,
+        _In_ NxQueue::Type QueueType
+        );
 
-    virtual ~NxQueue() = default;
+    virtual
+    ~NxQueue(
+        void
+        ) = default;
 
-    void Initialize(_In_ NET_TXQUEUE_CONFIG *config)
-    {
-        EvtAdvance = config->EvtTxQueueAdvance;
-        EvtCancel = config->EvtTxQueueCancel;
-        EvtArmNotification = config->EvtTxQueueSetNotificationEnabled;
-    }
+    NTSTATUS
+    Initialize(
+        _In_ QUEUE_CREATION_CONTEXT & InitContext
+        );
 
-    void Initialize(
-        _In_ NET_RXQUEUE_CONFIG *config)
-    {
-#pragma warning(push)
-#pragma warning(disable : 28024) // we're deliberately casting RXQUEUE functions to TXQUEUE functions
-        EvtAdvance = reinterpret_cast<PFN_TXQUEUE_ADVANCE>(config->EvtRxQueueAdvance);
-        EvtCancel = reinterpret_cast<PFN_TXQUEUE_CANCEL>(config->EvtRxQueueCancel);
-        EvtArmNotification = reinterpret_cast<PFN_TXQUEUE_SET_NOTIFICATION_ENABLED>(config->EvtRxQueueSetNotificationEnabled);
-#pragma warning(pop)
-    }
+    static
+    NTSTATUS
+    NetQueueInitAddPacketContextAttributes(
+        _Inout_ QUEUE_CREATION_CONTEXT *CreationContext,
+        _In_ PNET_PACKET_CONTEXT_ATTRIBUTES ContextAttributes
+        );
 
-    void NotifyMorePacketsAvailable()
-    {
-        m_appQueue->Notify();
-    }
+    static
+    NTSTATUS
+    NetQueueInitAddPacketExtension(
+        _Inout_ QUEUE_CREATION_CONTEXT *CreationContext,
+        _In_ const NET_PACKET_EXTENSION_PRIVATE* PacketExtension
+        );
 
-    PCNET_CONTEXT_TYPE_INFO m_clientContext = nullptr;
-    NXQUEUE_CREATION_RESULT m_info;
+    void
+    NotifyMorePacketsAvailable(
+        void
+        );
 
-    void Advance()
-    {
-        EvtAdvance((NETTXQUEUE)GetWdfObject());
-    }
+    Rtl::KArray<NET_PACKET_CONTEXT_TOKEN_INTERNAL, NonPagedPoolNx> m_clientContextInfo;
 
-    void Cancel()
-    {
-        EvtCancel((NETTXQUEUE)GetWdfObject());
-    }
+    size_t
+        m_privateExtensionOffset = 0;
 
-    NTSTATUS SetArmed(_In_ bool isArmed)
-    {
-        return EvtArmNotification((NETTXQUEUE)GetWdfObject(), isArmed);
-    }
+    size_t
+        m_privateExtensionSize = 0;
 
-    virtual wistd::unique_ptr<INxQueueAllocation> AllocatePacketBuffer(size_t size);
+    KPoolPtr<NET_RING_BUFFER>
+        m_packetRingBuffer;
 
-    ULONG GetAlignmentRequirement() const
-    {
-        return AlignmentRequirement;
-    }
+    KPoolPtr<NET_RING_BUFFER>
+        m_fragmentRingBuffer;
 
-    size_t GetAllocationSize() const
-    {
-        return AllocationSize;
-    }
+    void
+    Advance(
+        void
+        );
+
+    void
+    Cancel(
+        void
+        );
+
+    void
+    SetArmed(
+        _In_ bool isArmed
+        );
+
+    WDFOBJECT
+    GetWdfObject(
+        void
+        );
+
+    NET_DATAPATH_DESCRIPTOR*
+    GetPacketRingBufferSet(
+        void
+        );
+
+    size_t
+    GetPrivateExtensionOffset(
+        void
+        ) const;
+
+    Rtl::KArray<NET_PACKET_CONTEXT_TOKEN_INTERNAL, NonPagedPoolNx> &
+    GetClientContextInfo(
+        void
+        );
+
+    NET_PACKET_CONTEXT_TOKEN *
+    GetPacketContextTokenFromTypeInfo(
+        _In_ PCNET_CONTEXT_TYPE_INFO ContextTypeInfo
+        );
+
+    NxAdapter *
+    GetAdapter(
+        void
+        );
+
+    size_t
+    GetPacketExtensionOffset(
+        _In_ const NET_PACKET_EXTENSION_PRIVATE* ExtensionToQuery
+        );
+
+    ULONG const
+        m_queueId = ~0U;
+
+    NxQueue::Type const
+        m_queueType;
+
 protected:
 
-    virtual WDFOBJECT GetWdfObject() = 0;
-    ULONG AlignmentRequirement = MEMORY_ALLOCATION_ALIGNMENT - 1;
-    size_t AllocationSize = 0;
-    NxAdapter *Adapter = nullptr;
+    NxAdapter *
+        m_adapter = nullptr;
+
+    Rtl::KArray<NET_PACKET_EXTENSION_PRIVATE>
+        m_AddedPacketExtensions;
+
+    NTSTATUS
+    PrepareAndStorePacketExtensions(
+        _In_ QUEUE_CREATION_CONTEXT & InitContext
+        );
+
+    NTSTATUS
+    PrepareFragmentRingBuffer(
+        _In_ QUEUE_CREATION_CONTEXT & InitContext
+        );
+
 
 private:
+    NET_DATAPATH_DESCRIPTOR m_descriptor;
 
-    INxAppQueue *m_appQueue = nullptr;
+    PVOID
+        m_clientQueue = nullptr;
 
-    PFN_TXQUEUE_ADVANCE EvtAdvance = nullptr;
-    PFN_TXQUEUE_CANCEL EvtCancel = nullptr;
-    PFN_TXQUEUE_SET_NOTIFICATION_ENABLED EvtArmNotification = nullptr;
+    NET_CLIENT_QUEUE_NOTIFY_DISPATCH const *
+        m_clientDispatch = nullptr;
+
+protected:
+    PFN_TXQUEUE_ADVANCE
+        m_evtAdvance = nullptr;
+
+    PFN_TXQUEUE_CANCEL
+        m_evtCancel = nullptr;
+
+    PFN_TXQUEUE_SET_NOTIFICATION_ENABLED
+        m_evtArmNotification = nullptr;
+
+    NETTXQUEUE
+        m_queue = nullptr;
 };
 
 class NxTxQueue;
 
 FORCEINLINE
-NxTxQueue*
-GetTxQueueFromHandle(_In_ NETTXQUEUE TxQueue);
+NxTxQueue *
+GetTxQueueFromHandle(
+    _In_ NETTXQUEUE TxQueue
+    );
 
-class NxTxQueue : public NxQueue,
-                  public CFxObject<NETTXQUEUE, NxTxQueue, GetTxQueueFromHandle, true>
+class NxTxQueue :
+    public NxQueue,
+    public CFxObject<NETTXQUEUE, NxTxQueue, GetTxQueueFromHandle, true>
 {
 public:
 
     NxTxQueue(
-        _In_ WDFOBJECT txQueue,
-        _In_ NxAdapter *adapter,
-        _In_ INxAppQueue *app) : 
-        CFxObject((NETTXQUEUE)txQueue),
-        NxQueue(adapter, app)
-    {
-        NOTHING;
-    }
+        _In_ WDFOBJECT Object,
+        _In_ QUEUE_CREATION_CONTEXT const & InitContext,
+        _In_ ULONG QueueId,
+        _In_ NET_TXQUEUE_CONFIG const & QueueConfig
+        );
 
-    virtual ~NxTxQueue() = default;
+    virtual
+    ~NxTxQueue(
+        void
+        ) = default;
 
-    virtual WDFOBJECT GetWdfObject() { return GetFxObject(); }
-
-    static
     NTSTATUS
-    _Create(
-        _In_     QUEUE_CREATION_CONTEXT  *InitContext,
-        _In_opt_ PWDF_OBJECT_ATTRIBUTES   QueueAttributes,
-        _In_     PNET_TXQUEUE_CONFIG      Config
+    Initialize(
+        _In_ QUEUE_CREATION_CONTEXT & InitContext
         );
 };
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxTxQueue, _GetTxQueueFromHandle);
 
 FORCEINLINE
-NxTxQueue*
-GetTxQueueFromHandle(NETTXQUEUE TxQueue)
+NxTxQueue *
+GetTxQueueFromHandle(
+    NETTXQUEUE TxQueue
+    )
 {
     return _GetTxQueueFromHandle(TxQueue);
 }
@@ -149,96 +263,44 @@ GetTxQueueFromHandle(NETTXQUEUE TxQueue)
 class NxRxQueue;
 
 FORCEINLINE
-NxRxQueue*
-GetRxQueueFromHandle(_In_ NETRXQUEUE TxQueue);
+NxRxQueue *
+GetRxQueueFromHandle(
+    _In_ NETRXQUEUE RxQueue
+);
 
-class NxRxQueue : public NxQueue,
-                  public CFxObject<NETRXQUEUE, NxRxQueue, GetRxQueueFromHandle, true>
+class NxRxQueue :
+    public NxQueue,
+    public CFxObject<NETRXQUEUE, NxRxQueue, GetRxQueueFromHandle, true>
 {
-    unique_wdf_reference<WDFDMAENABLER> m_dmaEnabler;
+
 public:
 
     NxRxQueue(
-        _In_ WDFOBJECT rxQueue,
-        _In_ NxAdapter *adapter,
-        _In_ INxAppQueue *app) :
-        CFxObject((NETRXQUEUE)rxQueue),
-        NxQueue(adapter, app)
-    {
-        NOTHING;
-    }
-
-    virtual ~NxRxQueue() = default;
-
-    virtual WDFOBJECT GetWdfObject() { return GetFxObject(); }
-
-    static
-    NTSTATUS
-    _Create(
-        _In_     QUEUE_CREATION_CONTEXT  *InitContext,
-        _In_opt_ PWDF_OBJECT_ATTRIBUTES   QueueAttributes,
-        _In_     PNET_RXQUEUE_CONFIG      Config
+        _In_ WDFOBJECT Object,
+        _In_ QUEUE_CREATION_CONTEXT const & InitContext,
+        _In_ ULONG QueueId,
+        _In_ NET_RXQUEUE_CONFIG const & QueueConfig
         );
 
-    NTSTATUS ConfigureDmaAllocator(_In_ WDFDMAENABLER Enabler);
-    wistd::unique_ptr<INxQueueAllocation> AllocatePacketBuffer(size_t size) override;
+    virtual
+    ~NxRxQueue(
+        void
+        ) = default;
+
+    NTSTATUS
+    Initialize(
+        _In_ QUEUE_CREATION_CONTEXT & InitContext
+        );
 };
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxRxQueue, _GetRxQueueFromHandle);
 
 FORCEINLINE
-NxRxQueue*
-GetRxQueueFromHandle(NETRXQUEUE TxQueue)
+NxRxQueue *
+GetRxQueueFromHandle(
+    NETRXQUEUE RxQueue
+    )
 {
-    return _GetRxQueueFromHandle(TxQueue);
+    return _GetRxQueueFromHandle(RxQueue);
 }
 
-class NxAdapterQueue : public INxAdapterQueue
-{
-    unique_wdf_object<WDFOBJECT> m_queueObject;
-    NxQueue & m_queue;
-
-public:
-    NxAdapterQueue(
-        unique_wdf_object<WDFOBJECT>&& queueObject,
-        NxQueue & queue) :
-        m_queueObject(wistd::move(queueObject)),
-        m_queue(queue)
-    {
-
-    }
-    //
-    // INxAdapterQueue
-    //
-
-    void Advance() override
-    {
-        m_queue.Advance();
-    }
-
-    void Cancel() override
-    {
-        m_queue.Cancel();
-    }
-
-    NTSTATUS SetArmed(_In_ bool isArmed) override
-    {
-        return m_queue.SetArmed(isArmed);
-    }
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    INxQueueAllocation *AllocatePacketBuffer(size_t size) override
-    {
-        return m_queue.AllocatePacketBuffer(size).release();
-    }
-
-    ULONG GetAlignmentRequirement() override
-    {
-        return m_queue.GetAlignmentRequirement();
-    }
-
-    size_t GetAllocationSize() override
-    {
-        return m_queue.GetAllocationSize();
-    }
-};

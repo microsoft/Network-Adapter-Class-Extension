@@ -1,10 +1,6 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-    Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxTxXlat.hpp
 
 Abstract:
 
@@ -15,87 +11,93 @@ Abstract:
 
 #pragma once
 
+#include <NetClientAdapter.h>
+
 #include "NxExecutionContext.hpp"
 #include "NxSignal.hpp"
 #include "NxRingBuffer.hpp"
+#include "NxContextBuffer.hpp"
 #include "NxNblQueue.hpp"
 #include "NxNbl.hpp"
 
-class NxTxXlat : public INxAppQueue,
-                 public INxNblTx,
-                 public NxNonpagedAllocation<'xTxN'>
+class NxTxXlat :
+    public INxNblTx,
+    public NxNonpagedAllocation<'xTxN'>
 {
 public:
 
-    NxTxXlat(_In_ INxAdapter *adapter) :
-        m_nblDispatcher(adapter->GetNblDispatcher())
-    {
-        NOTHING;
-    }
+    NxTxXlat(
+        _In_ NET_CLIENT_DISPATCH const * Dispatch,
+        _In_ NET_CLIENT_ADAPTER Adapter,
+        _In_ NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
+        ) noexcept;
 
-    virtual ~NxTxXlat();
+    virtual
+    ~NxTxXlat(
+        void
+        );
 
-    NTSTATUS StartQueue(_In_ INxAdapter *adapter);
+    void
+    TransmitThread();
 
+    NTSTATUS
+    StartQueue(
+        void
+        );
 
-    //
-    // INxAppQueue
-    //
-
-    virtual NTSTATUS Initialize(
-        _In_ HNETPACKETCLIENT packetClient,
-        _In_ NXQUEUE_CREATION_PARAMETERS const *params,
-        _Out_ NXQUEUE_CREATION_RESULT *result);
-
-    virtual void Notify();
-
+    void
+    Notify(
+        void
+        );
 
     //
     // INxNblTx
     //
 
-    virtual void SendNetBufferLists(
-        _In_ NET_BUFFER_LIST *nblChain,
-        _In_ ULONG portNumber,
-        _In_ ULONG numberOfNbls,
-        _In_ ULONG sendFlags);
+    virtual
+    void
+    SendNetBufferLists(
+        _In_ NET_BUFFER_LIST * NblChain,
+        _In_ ULONG PortNumber,
+        _In_ ULONG NumberOfNbls,
+        _In_ ULONG SendFlags
+        );
 
 private:
 
-    struct PAGED PacketContext : public _NDIS_DEBUG_BLOCK<'CPTN'>
-    {
-        PNET_BUFFER_LIST NetBufferListToComplete = nullptr;
-    };
-
-    // Initialized in constructor
     NxExecutionContext m_executionContext;
+
+    NET_CLIENT_DISPATCH const * m_dispatch = nullptr;
+    NET_CLIENT_ADAPTER m_adapter = nullptr;
+    NET_CLIENT_ADAPTER_DISPATCH const * m_adapterDispatch = nullptr;
+    NET_CLIENT_ADAPTER_PROPERTIES m_adapterProperties = {};
+    NDIS_MEDIUM m_mediaType;
+    INxNblDispatcher *m_nblDispatcher = nullptr;
     NxInterlockedFlag m_queueNotification;
     NxNblQueue m_synchronizedNblQueue;
-    INxNblDispatcher *m_nblDispatcher = nullptr;
 
     // Initialized in StartQueue
-    wistd::unique_ptr<INxAdapterQueue> m_adapterQueue;
-    NDIS_MEDIUM m_mediaType;
+    NET_CLIENT_QUEUE m_queue = nullptr;
+    NET_CLIENT_QUEUE_DISPATCH const * m_queueDispatch = nullptr;
+    size_t m_checksumOffset = NET_PACKET_EXTENSION_INVALID_OFFSET;
+    size_t m_lsoOffset = NET_PACKET_EXTENSION_INVALID_OFFSET;
 
     // allocated in Init
+    NET_DATAPATH_DESCRIPTOR const * m_descriptor;
     NxRingBuffer m_ringBuffer;
-
-    ULONG m_thread802_15_4MSIExExtensionOffset = 0;
-    ULONG m_thread802_15_4StatusOffset = 0;
-
+    NxContextBuffer m_contextBuffer;
 
     //
     // Datapath variables
     // All below will change as TransmitThread runs
     //
-    PNET_BUFFER_LIST m_currentNbl = nullptr;
+    NET_BUFFER_LIST *m_currentNbl = nullptr;
+    NET_BUFFER *m_currentNetBuffer = nullptr;
 
     // These are used to determine when to arm notifications
     // and halt queue operation
-    bool m_netBufferQueueEmpty = false;
-    ULONG m_outstandingPackets = 0;
-    ULONG m_producedPackets = 0;
-    ULONG m_completedPackets = 0;
+    bool m_producedPackets = false;
+    bool m_completedPackets = false;
     
     struct ArmedNotifications
     {
@@ -112,41 +114,65 @@ private:
         };
     } m_lastArmedNotifications;
 
-    void ArmNetBufferListArrivalNotification();
+    void
+    ArmNetBufferListArrivalNotification();
 
-    void ArmAdapterTxNotification();
+    void
+    ArmAdapterTxNotification();
 
-    PacketContext & GetPacketContext(_In_ NET_PACKET &netPacket);
-
-    ArmedNotifications GetNotificationsToArm();
+    ArmedNotifications
+    GetNotificationsToArm();
 
     // The high level operations of the NBL Tx translation
-    void PollNetBufferLists();
-    void DrainCompletions();
-    void TranslateNbls();
-    void YieldToNetAdapter();
-    void WaitForMoreWork();
+    void
+    PollNetBufferLists();
+
+    void
+    DrainCompletions();
+
+    void
+    TranslateNbls();
+
+    void
+    YieldToNetAdapter();
+
+    void
+    WaitForMoreWork();
 
     // These operations are used exclusively while
     // winding down the Tx path
-    void DropQueuedNetBufferLists();
+    void
+    DropQueuedNetBufferLists();
+
+    void
+    AbortNbls(
+        _In_opt_ NET_BUFFER_LIST *nblChain);
 
     // drain queue
-    PNET_BUFFER_LIST DequeueNetBufferListQueue();
+    PNET_BUFFER_LIST
+    DequeueNetBufferListQueue();
 
-    void ArmNotifications(ArmedNotifications reasons);
+    void
+    ArmNotifications(
+        _In_ ArmedNotifications reasons
+        );
 
-    enum class TranslationResult
-    {
-        Success,
-        InsufficientFragments,
-    };
+    NTSTATUS
+    Initialize(
+        void
+        );
 
-    TranslationResult TranslateNetBufferToNetPacket(
-        _In_    NET_BUFFER      &netBuffer,
-        _Inout_ NET_PACKET      &netPacket);
+    NTSTATUS
+    PreparePacketExtensions(
+        _Inout_ Rtl::KArray<NET_CLIENT_PACKET_EXTENSION>& addedPacketExtensions
+        );
 
-    void ReinitializePacket(_In_ NET_PACKET & netPacket);
+    size_t
+    GetPacketExtensionOffsets(
+        PCWSTR ExtensionName,
+        ULONG ExtensionVersion
+        ) const;
 
-    void TransmitThread();
+    void
+    SetupTxThreadProperties();
 };

@@ -1,24 +1,10 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxConfiguration.hpp
 
 Abstract:
 
     This is the definition of the NxAdapter Configuration object.
-
-
-
-
-
-Environment:
-
-    kernel mode only
-
-Revision History:
 
 --*/
 
@@ -38,13 +24,13 @@ typedef class NxConfiguration *PNxConfiguration;
 class NxConfiguration : public CFxObject<NETCONFIGURATION,
                                    NxConfiguration,
                                    GetNxConfigurationFromHandle,
-                                   false> 
+                                   false>
 {
 
 private:
     PNxConfiguration             m_ParentNxConfiguration;
 
-public: 
+public:
 
     PNxAdapter                   m_NxAdapter;
 
@@ -60,6 +46,13 @@ private:
         _In_ PNxConfiguration         ParentNxConfiguration,
         _In_ PNxAdapter               NxAdapter
         );
+
+    PAGED
+    NTSTATUS
+    ReadConfiguration(
+        _Out_ PNDIS_CONFIGURATION_PARAMETER *ParameterValue,
+        _In_  PCUNICODE_STRING               Keyword,
+        _In_  NDIS_PARAMETER_TYPE            ParameterType);
 
 public:
 
@@ -151,11 +144,8 @@ public:
     _Must_inspect_result_
     _IRQL_requires_max_(PASSIVE_LEVEL)
     NTSTATUS
-    QueryNetworkAddress(
-        _In_     ULONG                                 BufferLength,
-        _Out_writes_bytes_to_(BufferLength,*ResultLength)
-                 PVOID                                 NetworkAddressBuffer,
-        _Out_    PULONG                                ResultLength
+    QueryLinkLayerAddress(
+        _Out_    NET_ADAPTER_LINK_LAYER_ADDRESS         *LinkLayerAddress
         );
 
     _Must_inspect_result_
@@ -206,7 +196,7 @@ Routine Description:
     This routine is just a wrapper around the _GetNxConfigurationFromHandle function.
     To be able to define a the NxConfiguration class above, we need a forward declaration of the
     accessor function. Since _GetNxConfigurationFromHandle is defined by Wdf, we dont want to
-    assume a prototype of that function for the foward declaration. 
+    assume a prototype of that function for the foward declaration.
 
 --*/
 

@@ -1,10 +1,6 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-    Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxTranslationApp.hpp
 
 Abstract:
 
@@ -19,19 +15,118 @@ Abstract:
 #include "NxTxXlat.hpp"
 #include "NxRxXlat.hpp"
 
-class NxTranslationApp : public INxApp
+struct ReceiveScaleMapping
 {
-    wistd::unique_ptr<NxTxXlat> m_txQueue;
-    wistd::unique_ptr<NxRxXlat> m_rxQueue;
 
-    PAGED NTSTATUS StartTx(_In_ INxAdapter * adapter);
-    PAGED NTSTATUS StartRx(_In_ INxAdapter * adapter);
+    PROCESSOR_NUMBER
+        Number;
+
+    Rtl::KArray<UINT16>
+        HashIndexes;
+
+    size_t
+        QueueIndex = ~0U;
+
+    ULONG
+        QueueId = ~0U;
+
+    bool
+        QueueCreated = false;
+
+};
+
+class NxTranslationApp :
+    public INxApp
+{
 
 public:
 
-    //
-    // INxApp
-    //
+    NxTranslationApp(
+        _In_ NET_CLIENT_DISPATCH const * Dispatch,
+        _In_ NET_CLIENT_ADAPTER Adapter,
+        _In_ NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
+        ) noexcept;
+
     _IRQL_requires_(PASSIVE_LEVEL)
-    NTSTATUS Start(_In_ INxAdapter * adapter) override;
+    NTSTATUS
+    CreateDatapath(
+        void
+        );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    DestroyDatapath(
+        void
+        );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    ReceiveScalingParametersSet(
+        _In_ NDIS_OID_REQUEST & Request
+        );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    ReceiveScalingIndirectionTableEntriesSet(
+        _In_ NDIS_OID_REQUEST & Request
+        );
+
+private:
+
+    PAGED
+    NTSTATUS
+    StartTx(
+        void
+        );
+
+    PAGED
+    NTSTATUS
+    StartRx(
+        void
+        );
+
+    bool
+    ReceiveScalingEvaluateDisable(
+        _In_ NDIS_RECEIVE_SCALE_PARAMETERS const & Parameters
+        );
+
+    NTSTATUS
+    ReceiveScalingEvaluateEnable(
+        _In_ NDIS_RECEIVE_SCALE_PARAMETERS const & Parameters
+        );
+
+    NTSTATUS
+    NxTranslationApp::ReceiveScalingEvaluateIndirectionEntries(
+        _In_ PROCESSOR_NUMBER const * ProcessorNumbers,
+        _In_ size_t Count
+        );
+
+    KSpinLock
+        m_translatorLock;
+
+    Rtl::KArray<ReceiveScaleMapping>
+        m_receiveScaleMappings;
+
+    wistd::unique_ptr<NxTxXlat>
+        m_txQueue;
+
+    Rtl::KArray<wistd::unique_ptr<NxRxXlat>>
+        m_rxQueues;
+
+    NET_CLIENT_DISPATCH const *
+        m_dispatch = nullptr;
+
+    NET_CLIENT_ADAPTER
+        m_adapter;
+
+    NET_CLIENT_ADAPTER_DISPATCH const *
+        m_adapterDispatch = nullptr;
+
+    INxNblDispatcher *
+        m_NblDispatcher = nullptr;
+
+    NxNblRx
+        m_rxBufferReturn;
+
 };
+

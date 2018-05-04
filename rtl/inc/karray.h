@@ -1,5 +1,5 @@
 /*++
-Copyright (C) Microsoft Corporation. All rights reserved.
+Copyright (c) Microsoft Corporation
 
 Module Name:
 
@@ -20,7 +20,7 @@ Notes:
     modified subset of the STL's std::vector.
 
     If you're not familiar with std::vector, you should go read up on it
-    first: http://msdn.microsoft.com/library/sxcsf7y7
+    first: https://docs.microsoft.com/en-us/cpp/standard-library/vector-class
 
 --*/
 
@@ -37,40 +37,63 @@ extern "C" VOID ndisInitGlobalTriageBlock();
 namespace Rtl
 {
 
-template<typename T>
-class PAGED KArray :
+template<typename T, POOL_TYPE PoolType = PagedPool>
+class KRTL_CLASS KArray :
     public PAGED_OBJECT<'rrAK'>
 {
 public:
 
+    static_assert(alignof(T) <= MEMORY_ALLOCATION_ALIGNMENT, "This container allocates items with a fixed alignment");
+
     // This iterator is not a full implementation of a STL-style iterator.
-    // This is the bare minimum to get C++'s syntax "for(x : y)" to work.
-    class iterator
+    // Mostly this is only here to get C++'s syntax "for(x : y)" to work.
+    class const_iterator
     {
+    friend class KArray;
+    protected:
+
+        PAGED const_iterator(KArray const *a, size_t i) : _a{ const_cast<KArray*>(a) }, _i{ i } { }
+
     public:
 
-        PAGED iterator(KArray<T> *a, ULONG i) : _a(a), _i(i)
-        { }
+        const_iterator() = delete;
+        PAGED const_iterator(const_iterator const &rhs) : _a { rhs._a }, _i{ rhs._i } { }
+        PAGED ~const_iterator() = default;
 
-        PAGED void operator++() { _i++; }
+        PAGED const_iterator &operator=(const_iterator const &rhs) { _a = rhs._a; _i = rhs._i; return *this; }
 
-        PAGED T &operator*() { return (*_a)[_i]; }
+        PAGED const_iterator &operator++() { _i++; return *this; }
+        PAGED const_iterator operator++(int) { auto result = *this; ++(*this); return result; }
 
-        PAGED bool operator==(iterator const &rhs) const { return rhs._i == _i; }
-        PAGED bool operator!=(iterator const &rhs) const { return !(rhs == *this); }
+        PAGED T const &operator*() const { return (*_a)[_i]; }
+        PAGED T const *operator->() const { return &(*_a)[_i]; }
 
-    private:
+        PAGED bool operator==(const_iterator const &rhs) const { return rhs._i == _i; }
+        PAGED bool operator!=(const_iterator const &rhs) const { return !(rhs == *this); }
 
-        KArray<T> *_a;
-        ULONG _i;
+    protected:
+
+        KArray *_a;
+        size_t _i;
     };
 
-    PAGED KArray(size_t sizeHint = 0) WI_NOEXCEPT :    
-        m_bufferSize(0),
-        m_numElements(0),
-        _p(nullptr)
+    class iterator : public const_iterator
     {
-        (void)grow(sizeHint);
+    friend class KArray;
+    protected:
+
+        PAGED iterator(KArray *a, size_t i) : const_iterator{ a, i } {}
+
+    public:
+
+        PAGED T &operator*() const { return (*_a)[_i]; }
+        PAGED T *operator->() const { return &(*_a)[_i]; }
+    };
+
+    PAGED KArray(size_t sizeHint = 0) WI_NOEXCEPT
+    {
+        if (sizeHint)
+            (void)grow(sizeHint);
     }
 
     PAGED ~KArray()
@@ -79,7 +102,7 @@ public:
     }
 
     PAGED KArray(
-        _In_ KArray<T> &&rhs) WI_NOEXCEPT :
+        _In_ KArray &&rhs) WI_NOEXCEPT :
             _p(rhs._p),
             m_numElements(rhs.m_numElements),
             m_bufferSize(rhs.m_bufferSize)
@@ -88,33 +111,37 @@ public:
         rhs.m_numElements = 0;
         rhs.m_bufferSize = 0;
     }
-            
+
+    KArray(KArray &) = delete;
+
+    KArray &operator=(KArray &) = delete;
+
     PAGED KArray &operator=(
-        _In_ KArray<T> &&rhs)
+        _In_ KArray &&rhs)
     {
         reset();
-        
+
         this->_p = rhs._p;
         this->m_numElements = rhs.m_numElements;
         this->m_bufferSize = rhs.m_bufferSize;
-        
+
         rhs._p = nullptr;
         rhs.m_numElements = 0;
         rhs.m_bufferSize = 0;
 
         return *this;
     }
-    
+
     PAGED size_t count() const
     {
         return m_numElements;
     }
-    
+
     PAGED bool reserve(size_t count)
     {
         if (m_bufferSize >= count)
             return true;
-        
+
         if (count >= (ULONG)(-1))
             return false;
 
@@ -122,7 +149,7 @@ public:
         if (!NT_SUCCESS(RtlSIZETMult(sizeof(T), count, reinterpret_cast<SIZE_T*>(&bytesNeeded))))
             return false;
 
-        T * p = (T*)ExAllocatePoolWithTag(PagedPool, bytesNeeded, 'rrAK');
+        T * p = (T*)ExAllocatePoolWithTag(PoolType, bytesNeeded, 'rrAK');
         if (!p)
             return false;
 
@@ -133,20 +160,20 @@ public:
         else
         {
             for (ULONG i = 0; i < m_numElements; i++)
-                new (&p[i]) T(wistd::move(_p[i]));
+                new (wistd::addressof(p[i])) T(wistd::move(_p[i]));
         }
 
         if (_p)
         {
             for (ULONG i = 0; i < m_numElements; i++)
                 _p[i].~T();
-            
+
             ExFreePoolWithTag(_p, 'rrAK');
         }
-        
+
         m_bufferSize = static_cast<ULONG>(count);
         _p = p;
-        
+
         return true;
     }
 
@@ -157,7 +184,7 @@ public:
 
         for (size_t i = m_numElements; i < count; i++)
         {
-            new(&_p[i]) T;
+            new(wistd::addressof(_p[i])) T;
         }
 
         for (size_t i = count; i < m_numElements; i++)
@@ -169,12 +196,17 @@ public:
         return true;
     }
 
+    PAGED void clear(void)
+    {
+        (void)resize(0);
+    }
+
     PAGED bool append(T const &t)
     {
         if (!grow(m_numElements+1))
             return false;
-        
-        new(&_p[m_numElements]) T(t);    
+
+        new(wistd::addressof(_p[m_numElements])) T(t);
         ++m_numElements;
         return true;
     }
@@ -183,8 +215,8 @@ public:
     {
         if (!grow(m_numElements+1))
             return false;
-        
-        new(&_p[m_numElements]) T(wistd::move(t));
+
+        new(wistd::addressof(_p[m_numElements])) T(wistd::move(t));
         ++m_numElements;
         return true;
     }
@@ -200,7 +232,7 @@ public:
         if (index < m_numElements)
             moveElements((ULONG)index, (ULONG)(index+1), (ULONG)(m_numElements - index));
 
-        new(&_p[index]) T(t);
+        new(wistd::addressof(_p[index])) T(t);
         ++m_numElements;
         return true;
     }
@@ -216,7 +248,7 @@ public:
         if (index < m_numElements)
             moveElements((ULONG)index, (ULONG)(index+1), (ULONG)(m_numElements - index));
 
-        new(&_p[index]) T(wistd::move(t));
+        new(wistd::addressof(_p[index])) T(wistd::move(t));
         ++m_numElements;
         return true;
     }
@@ -282,29 +314,47 @@ public:
     PAGED void eraseAt(size_t index)
     {
         if (index >= m_numElements)
-            RtlFailFast(0xBAD0FF);
+            RtlFailFast(FAST_FAIL_INVALID_ARG);
 
         _p[index].~T();
         moveElements((ULONG)(index+1), (ULONG)index, (ULONG)(m_numElements - index - 1));
         --m_numElements;
     }
 
-    PAGED T &operator[](size_t index) const
+    PAGED T &operator[](size_t index)
     {
         if (index >= m_numElements)
-            RtlFailFast(0xBAD0FF);
-        
+            RtlFailFast(FAST_FAIL_INVALID_ARG);
+
+        return _p[index];
+    }
+
+    PAGED T const &operator[](size_t index) const
+    {
+        if (index >= m_numElements)
+            RtlFailFast(FAST_FAIL_INVALID_ARG);
+
         return _p[index];
     }
 
     PAGED iterator begin()
     {
-        return iterator(this, 0);
+        return { this, 0 };
+    }
+
+    PAGED const_iterator begin() const
+    {
+        return { this, 0 };
     }
 
     PAGED iterator end()
     {
-        return iterator(this, m_numElements);    
+        return { this, m_numElements };
+    }
+
+    PAGED const_iterator end() const
+    {
+        return { this, m_numElements };
     }
 
 private:
@@ -317,7 +367,7 @@ private:
             {
                 _p[i-1].~T();
             }
-        
+
             ExFreePoolWithTag(_p, 'rrAK');
             _p = nullptr;
             m_numElements = 0;
@@ -344,13 +394,13 @@ private:
 
             for (i = to + number; i - 1 >= m_numElements; i--)
             {
-                new (&_p[i - 1]) T(wistd::move(_p[i - delta - 1]));
+                new (wistd::addressof(_p[i - 1])) T(wistd::move(_p[i - delta - 1]));
             }
 
             for (NOTHING; i > to; i--)
             {
                 _p[i - 1].~T();
-                new (&_p[i - 1]) T(wistd::move(_p[i - delta - 1]));
+                new (wistd::addressof(_p[i - 1])) T(wistd::move(_p[i - delta - 1]));
             }
 
             for (NOTHING; i > from; i--)
@@ -367,13 +417,13 @@ private:
 
             for (i = to; i < from; i++)
             {
-                new (&_p[i]) T(wistd::move(_p[i + delta]));
+                new (wistd::addressof(_p[i])) T(wistd::move(_p[i + delta]));
             }
 
             for (NOTHING; i < to + number; i++)
             {
                 _p[i].~T();
-                new (&_p[i]) T(wistd::move(_p[i + delta]));
+                new (wistd::addressof(_p[i])) T(wistd::move(_p[i + delta]));
             }
 
             for (NOTHING; i < from + number; i++)
@@ -383,21 +433,19 @@ private:
         }
     }
 
-    PAGED bool isBlittableType() const
+    static constexpr PAGED bool isBlittableType()
     {
-        // can also add is_integral to this, but we'd have to implement
-        // it ourselves.
-        return __is_pod(T) || __is_enum(T);
+        return __is_trivially_copyable(T);
     }
 
     PAGED bool grow(size_t count)
     {
         if (m_bufferSize >= count)
             return true;
-        
+
         if (count < 4)
             count = 4;
-        
+
         size_t exponentialGrowth = m_bufferSize + m_bufferSize / 2;
         if (count < exponentialGrowth)
             count = exponentialGrowth;
@@ -408,15 +456,9 @@ private:
     friend class ::ndisTriageClass;
     friend VOID ::ndisInitGlobalTriageBlock();
 
-    // Disabled
-
-    KArray(KArray<T> &);
-
-    KArray &operator=(KArray<T> &);
-
-    ULONG m_bufferSize;
-    ULONG m_numElements;
-    T *_p;
+    ULONG m_bufferSize = 0;
+    ULONG m_numElements = 0;
+    T *_p = nullptr;
 };
 
 }

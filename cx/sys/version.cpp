@@ -1,28 +1,21 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    Version.cpp
 
 Abstract:
 
     This module implements version specific library.
 
-Revision History:
-
 --*/
 
 //
-// This will let us include the auto-generated function table  
+// This will let us include the auto-generated function table
 //
 #define  NX_DYNAMICS_GENERATE_TABLE   1
 #include "nx.hpp"
+#include <NetClientDriverConfigurationImpl.hpp>
 
-extern "C" {
 #include "version.tmh"
-}
 
 TRACELOGGING_DEFINE_PROVIDER(
     g_hNetAdapterCxEtwProvider,
@@ -49,14 +42,14 @@ WDF_CLASS_LIBRARY_INFO WdfClassLibraryInfo =
 {
     sizeof(WDF_CLASS_LIBRARY_INFO), // Size
     {
-        1,  // Major
-        0,  // Minor
-        0,  // Buid
-    },                               // Version
-    NetAdapterCxInitialize,          // ClassLibraryInitialize
-    NetAdapterCxDeinitialize,        // ClassLibraryDeinitialize
-    NetAdapterCxBindClient,          // ClassLibraryBindClient
-    NetAdapterCxUnbindClient,        // ClassLibraryUnbindClient
+        NETADAPTER_CURRENT_MAJOR_VERSION,   // Major
+        NETADAPTER_CURRENT_MINOR_VERSION,   // Minor
+        0,                                  // Build
+    },                                      // Version
+    NetAdapterCxInitialize,                 // ClassLibraryInitialize
+    NetAdapterCxDeinitialize,               // ClassLibraryDeinitialize
+    NetAdapterCxBindClient,                 // ClassLibraryBindClient
+    NetAdapterCxUnbindClient,               // ClassLibraryUnbindClient
 };
 
 extern "C"
@@ -66,8 +59,8 @@ DriverEntry (
     __in PUNICODE_STRING  RegistryPath
     )
 /*++
-Routine Description: 
-    The standard DriverEntry routine for any driver.  
+Routine Description:
+    The standard DriverEntry routine for any driver.
 --*/
 {
     NTSTATUS                             status;
@@ -120,10 +113,10 @@ Routine Description:
 
     //
     // create a named control object.
-    // The name is passed to the WdfRegisterClassLibrary api. 
+    // The name is passed to the WdfRegisterClassLibrary api.
     // It is important to create a control object so that WDF can keep
-    // a handle open on it. This prevents someone running 'sc stop NetAdapterCx' 
-    // unloading the driver. 
+    // a handle open on it. This prevents someone running 'sc stop NetAdapterCx'
+    // unloading the driver.
     //
     status = CreateControlDevice(&name);
     if (!NT_SUCCESS(status)) {
@@ -133,9 +126,9 @@ Routine Description:
     deleteControlDeviceOnError = TRUE;
 
     //
-    // Initialize a NDIS CX CHARACTERISTIC structure and register 
-    // Cx callbacks with NDIS. NDIS.sys calls these callbacks at 
-    // the appropiate time. 
+    // Initialize a NDIS CX CHARACTERISTIC structure and register
+    // Cx callbacks with NDIS. NDIS.sys calls these callbacks at
+    // the appropiate time.
     //
     NDIS_WDF_CX_CHARACTERISTICS_INIT(&chars);
     chars.EvtCxGetDeviceObject               = NxAdapter::_EvtNdisGetDeviceObject;
@@ -149,21 +142,22 @@ Routine Description:
     chars.EvtCxUpdatePMParameters            = NxAdapter::_EvtNdisUpdatePMParameters;
     chars.EvtCxAllocateMiniportBlock         = NxAdapter::_EvtNdisAllocateMiniportBlock;
     chars.EvtCxMiniportCompleteAdd           = NxAdapter::_EvtNdisMiniportCompleteAdd;
+    chars.EvtCxDeviceStartComplete           = NxAdapter::_EvtNdisDeviceStartComplete;
 
+    //
+    // Register with NDIS
+    //
+    LogInitMsg(TRACE_LEVEL_VERBOSE, "Calling NdisWdfRegisterCx");
+    status = NdisWdfRegisterCx(DriverObject,
+                               RegistryPath,
+                               (NDIS_WDF_CX_DRIVER_CONTEXT)driver,
+                               &chars,
+                               &netAdapterCxDriverHandleTmp);
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+    if (!NT_SUCCESS(status)) {
+        LogInitMsg(TRACE_LEVEL_ERROR, "NdisWdfRegisterCx failed status %!STATUS!", status);
+        goto Exit;
+    }
 
     //
     // Register this class extension with WDF
@@ -177,15 +171,15 @@ Routine Description:
         goto Exit;
     }
 
-
-
-
-
-
+    //
+    // Store the NDIS_WDF_CX_HANDLE returned by Ndis.sys in a global variable
+    // This handle is later passed to Ndis in calls such as
+    // NdisWdfRegisterMiniportDriver , NdisWdfDeregisterCx, etc.
+    //
     NetAdapterCxDriverHandle = netAdapterCxDriverHandleTmp;
 
 Exit:
-        
+
      if (!NT_SUCCESS(status)) {
          if (deleteControlDeviceOnError) {
              DeleteControlDevice();
@@ -203,6 +197,10 @@ Exit:
 NTSTATUS
 CxDriverContext::Init()
 {
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        DriverConfigurationInitialize(),
+        "Failed to load driver configurations");
+
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         TranslationAppFactory.Initialize(),
         "Failed to initialize the translation app");
@@ -225,7 +223,7 @@ EvtDriverUnload(
     _In_ WDFDRIVER Driver
     )
 /*++
-Routine Description: 
+Routine Description:
     Driver Unload routine. Client register this routine with WDF at the time
     of WDFDRIVER object creation.
 
@@ -233,19 +231,19 @@ Routine Description:
 {
     FuncEntry(FLAG_DRIVER);
 
-
-
-
-
-
-
-
-
+    if (NetAdapterCxDriverHandle) {
+        //
+        // Deregister with NDIS.
+        //
+        LogInitMsg(TRACE_LEVEL_VERBOSE, "Calling NdisWdfDeregisterCx");
+        NdisWdfDeregisterCx(NetAdapterCxDriverHandle);
+        NetAdapterCxDriverHandle = NULL;
+    }
 
     NT_ASSERT(ClientCount == 0);
     if (ClassLibraryDevice != NULL) {
         //
-        // Delete the Control device object that was created in the 
+        // Delete the Control device object that was created in the
         // DriverEntry routine.
         //
         WdfObjectDelete(ClassLibraryDevice);
@@ -276,68 +274,107 @@ NetAdapterCxDeinitialize(
     FuncExit(FLAG_DRIVER);
 }
 
+constexpr
+ULONG64
+MAKEVER(
+    ULONG major,
+    ULONG minor
+    )
+{
+    return (static_cast<ULONG64>(major) << 16) | minor;
+}
+
 NTSTATUS
 NetAdapterCxBindClient(
     PWDF_CLASS_BIND_INFO   ClassInfo,
     PWDF_COMPONENT_GLOBALS ClientGlobals
     )
 /*++
-Routine Description: 
+Routine Description:
     This call is called by WDF to bind a NetAdapterCx client driver to the NetAdapterCx.
     This allows the client to be able to call NetAdapterCx provided methods seemlessly
     This call happens before the client's DriverEntry routine is called.
- 
-Arguments: 
- 
+
+Arguments:
+
     ClassInfo - A pointer to the WDF_CLASS_BIND_INFO structure that has
         version information, class name. This function fills all the controller
         extension function pointers in this structure.
-        
-    ClientGlobals - Unused 
+
+    ClientGlobals - Unused
 
 Return Value:
 
     NT_SUCCESS status if the operation succeeds.
 
- 
+
 --*/
 {
     FuncEntry(FLAG_DRIVER);
-    
+
     PNX_PRIVATE_GLOBALS      pGlobals;
 
     UNREFERENCED_PARAMETER(ClientGlobals);
-    
-    if (ClassInfo->FunctionTableCount != NetFunctionTableNumEntries) {
-        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                "\n\n************************* \n"
-                "* NetAdapterCx detected a function count mismatch. The driver \n"
-                "* using this extension will not load until it is re-compiled \n"
-                "* with the latest version of the extension's header and libs \n"
-                );
-        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                "* Actual function table count  : %d \n"
-                "* Expected function table count: %d \n"
-                "*************************** \n\n",
-                ClassInfo->FunctionTableCount,
-                NetFunctionTableNumEntries);
 
-        FuncExit(FLAG_DRIVER);
-        return STATUS_INVALID_PARAMETER;
+    switch (MAKEVER(ClassInfo->Version.Major, ClassInfo->Version.Minor))
+    {
+        case MAKEVER(1,0):
+        case MAKEVER(1,1):
+
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "\n\n"
+                "**********************************************************\n"
+                "* NetAdapterCx 1.%u (Preview) client detected.            \n"
+                "* Recompile your source code and target NetAdapterCx 1.%u.\n"
+                "**********************************************************\n"
+                "\n",
+                ClassInfo->Version.Minor,
+                NETADAPTER_CURRENT_MINOR_VERSION
+            );
+
+            __fallthrough;
+
+        default:
+
+            FuncExit(FLAG_DRIVER);
+            return STATUS_NOT_SUPPORTED;
+
+        case MAKEVER(NETADAPTER_CURRENT_MAJOR_VERSION, NETADAPTER_CURRENT_MINOR_VERSION):
+
+            // The current in-development version has a changing ABI.
+            // To detect common ABI mismatches, check if the function table looks correct.
+
+            if (ClassInfo->FunctionTableCount != NetFunctionTableNumEntries) {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                        "\n\n************************* \n"
+                        "* NetAdapterCx detected a function count mismatch. The driver \n"
+                        "* using this extension will not load until it is re-compiled \n"
+                        "* with the latest version of the extension's header and libs \n"
+                        );
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                        "* Actual function table count  : %u \n"
+                        "* Expected function table count: %u \n"
+                        "*************************** \n\n",
+                        ClassInfo->FunctionTableCount,
+                        NetFunctionTableNumEntries);
+
+                FuncExit(FLAG_DRIVER);
+                return STATUS_INVALID_PARAMETER;
+            }
     }
 
     //
-    // Setup the function table 
+    // Setup the function table
     //
     #pragma warning(suppress:22107) //The analysis code identify buffer size
-    RtlCopyMemory(ClassInfo->FunctionTable, 
-                  &NetVersion.Functions, 
+    RtlCopyMemory(ClassInfo->FunctionTable,
+                  &NetVersion.Functions,
                   ClassInfo->FunctionTableCount * sizeof(PVOID));
 
     //
     // Allocate driver globals
     //
-    pGlobals = (PNX_PRIVATE_GLOBALS) ExAllocatePoolWithTag(NonPagedPoolNx, 
+    pGlobals = (PNX_PRIVATE_GLOBALS) ExAllocatePoolWithTag(NonPagedPoolNx,
                                                            sizeof(NX_PRIVATE_GLOBALS),
                                                            NETADAPTERCX_TAG);
 
@@ -350,7 +387,7 @@ Return Value:
     RtlZeroMemory(pGlobals, sizeof(NX_PRIVATE_GLOBALS));
     pGlobals->Signature = NX_PRIVATE_GLOBALS_SIG;
 
-    // 
+    //
     // If driver verifier is enabled on the client, enable Cx runtime
     // verification checks automatically
     //
@@ -364,7 +401,7 @@ Return Value:
         //
         // If DV is enabled on client but not on Cx, break into the debugger
         // to warn the developer
-        // 
+        //
         DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
             "\n\n************************* \n"
             "* Driver verifier should be enabled on both client and Cx\n"
@@ -390,11 +427,11 @@ NetAdapterCxUnbindClient(
 Routine Description:
 
     A unbind call that is called by Wdf to unbind the client from NetAdapterCx.
-    
+
 Arguments:
 
     ClassInfo - A pointer to the WDF_CLASS_BIND_INFO structure
-        
+
     ClientGlobals - Unused parameter
 
 --*/
@@ -437,22 +474,22 @@ Routine Description:
     This routine creates a named control device object.
     It runs in a loop trying to create a \\Device\\NetAdapterCx01, \\Device\\NetAdapterCx02, ...
     until it is succesful.
- 
+
     Is stores the control device object in a global variable.
- 
+
 Arguments:
- 
+
     Name - output - returns the name of the control device object that was
         created.
- 
+
 --*/
 {
     FuncEntry(FLAG_DRIVER);
     NTSTATUS status = STATUS_SUCCESS;
-    
+
     PWDFDEVICE_INIT pInit;
     ULONG i;
-    
+
     pInit = WdfControlDeviceInitAllocate(WdfGetDriver(), &SDDL_DEVOBJ_KERNEL_ONLY);
     if (pInit == NULL) {
         LogInitMsg(TRACE_LEVEL_ERROR, "Failed to allocate ControlDeviceInit");
@@ -503,16 +540,16 @@ DeleteControlDevice(
 
 Routine Description:
 
-    This routine deletes the named control device object that was 
+    This routine deletes the named control device object that was
     created in a previous call to CreateControlDevice
- 
+
     NOTE: The control device object handle is stored in a global.
- 
+
 --*/
 {
     FuncEntry(FLAG_DRIVER);
     LogInitMsg(TRACE_LEVEL_VERBOSE, "ControlDevice Being Deleted WDF 0x%p, WDM 0x%p",
-               ClassLibraryDevice, WdfDeviceWdmGetDeviceObject(ClassLibraryDevice));   
+               ClassLibraryDevice, WdfDeviceWdmGetDeviceObject(ClassLibraryDevice));
     WdfObjectDelete(ClassLibraryDevice);
     ClassLibraryDevice = NULL;
     FuncExit(FLAG_DRIVER);

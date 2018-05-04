@@ -1,10 +1,6 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-    Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxExecutionContext.hpp
 
 Abstract:
 
@@ -51,14 +47,16 @@ inline void DereferenceObject(PVOID object)
     ObDereferenceObject(object);
 }
 
+using unique_zw_handle = wil::unique_any<HANDLE, decltype(&::ZwClose), &::ZwClose>;
 using unique_pkthread = wil::unique_any<PKTHREAD, decltype(&::DereferenceObject), &::DereferenceObject>;
+
 #endif
 
 #if _KERNEL_MODE
-using EC_START_ROUTINE = PKSTART_ROUTINE;
+using EC_START_ROUTINE = KSTART_ROUTINE;
 using EC_RETURN = VOID;
 #else
-using EC_START_ROUTINE = PTHREAD_START_ROUTINE;
+using EC_START_ROUTINE = wistd::remove_pointer<PTHREAD_START_ROUTINE>::type;
 using EC_RETURN = DWORD;
 #endif
 
@@ -68,15 +66,19 @@ class NxExecutionContext
 {
 public:
 
-    NTSTATUS Initialize(PVOID context, EC_START_ROUTINE callback);
+    NTSTATUS Initialize(PVOID context, EC_START_ROUTINE *callback);
 
     /// Called from outside the EC once the EC should start running from its 
     /// initial state.
     void Start();
 
     /// Called from outside the EC to signal the task to clean up.
-    /// Must be follwed with a call to WaitForStopComplete().
-    void Stop();
+    /// Must be followed with a call to CompleteStop().
+    void RequestStop();
+
+    /// Called from outside the EC to complete the stop operation by
+    /// waiting for the EC to exit and putting the EC into a stopped state.
+    void CompleteStop();
 
     /// Called from outside the EC to prod the EC into taking action.  If the
     /// EC is already executing, then this is a no-op.
@@ -93,6 +95,13 @@ public:
     /// Called only by code running in the EC.  Returns true if the code should
     /// clean up and exit the EC thread.
     bool IsStopRequested();
+
+    NTSTATUS SetGroupAffinity(GROUP_AFFINITY & GroupAffinity);
+
+    void SetDebugNameHint(
+        _In_ PCWSTR usage,
+        _In_ ULONG index,
+        _In_ NET_LUID networkInterface);
 
 private:
 
@@ -115,7 +124,9 @@ private:
 
     KAutoEvent m_signal;
 
+
 #if _KERNEL_MODE
+    unique_zw_handle m_threadHandle;
     unique_pkthread m_workerThreadObject;
 #else
     wil::unique_handle m_workerThreadObject;

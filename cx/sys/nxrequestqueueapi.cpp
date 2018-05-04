@@ -1,33 +1,16 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxRequestQueueApi.cpp
 
 Abstract:
 
     This module contains the "C" interface for the NxRequestQueue object.
 
-
-
-
-
-Environment:
-
-    kernel mode only
-
-Revision History:
-
 --*/
 
 #include "Nx.hpp"
 
-// Tracing support
-extern "C" {
 #include "NxRequestQueueApi.tmh"
-}
 
 //
 // extern the whole file
@@ -48,27 +31,27 @@ NETEXPORT(NetRequestQueueCreate)(
 Routine Description:
 
     This method is called by the clients create a NetRequestQueue
- 
+
     The client driver typically calls this from its EvtDriverDeviceAdd routine after
-    the client has successfully create a NETADAPTER object. 
- 
+    the client has successfully create a NETADAPTER object.
+
 Arguments:
- 
+
     Adapter : A handle to a NETADAPTER object that represents the network
         adapter
- 
+
     QueueAttributes : Pointer to the WDF_OBJECT_ATTRIBUTES structure. This is
         the attributes structure that a Wdf client can pass at the time of
         creating any wdf object.
- 
+
         The ParentObject of this structure should be NULL as NETREQUESTQUEUE object
         is parented to the the NETADAPTER passed in.
- 
+
     Configuration : A Pointer to a structure containing the configuration
         parameters. This contains client callbacks, queue type, custom etc
- 
+
     Queue : Output NETREQUESTQUEUE object
- 
+
 Return Value:
 
     STATUS_SUCCESS upon success.
@@ -105,10 +88,10 @@ Return Value:
     //
     // Create the NxRequestQueue
     //
-    status = NxRequestQueue::_Create(pNxPrivateGlobals, 
-                                 nxAdapter, 
-                                 QueueAttributes, 
-                                 Configuration, 
+    status = NxRequestQueue::_Create(pNxPrivateGlobals,
+                                 nxAdapter,
+                                 QueueAttributes,
+                                 Configuration,
                                  &nxRequestQueue);
 
     if (!NT_SUCCESS(status)) {
@@ -147,14 +130,14 @@ Routine Description:
 
     This method is called by the clients to retrieve the NETADAPTER
     object corresponding to NETREQUESTQUEUE
-    
-Arguments: 
- 
-    NetRequestQueue - The NETREQUESTQUEUE handler 
- 
-Returns: 
+
+Arguments:
+
+    NetRequestQueue - The NETREQUESTQUEUE handler
+
+Returns:
     A handle to the corresponding NETADAPTER
- 
+
 --*/
 {
     FuncEntry(FLAG_REQUEST_QUEUE);

@@ -1,20 +1,9 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-    Verifier.hpp
 
 Abstract:
     Contains definitions used by NetAdapterCx to detect and report violations
-
-
-
-
-Environment:
-    kernel mode only
-
-Revision History:
 
 --*/
 
@@ -140,7 +129,22 @@ typedef enum _FailureCode : ULONG_PTR
     FailureCode_InvalidNetAdapterConfig,
     FailureCode_QueueAlreadyCreated,
     FailureCode_ObjectAttributesContextSizeTooLarge,
+    FailureCode_NotPowerOfTwo,
     FailureCode_IllegalObjectAttributes,
+    FailureCode_InvalidPacketContextToken,
+    FailureCode_InvalidPacketContextSizeOverride,
+    FailureCode_InvalidNetPacketExtensionName,
+    FailureCode_InvalidNetPacketExtensionVersion,
+    FailureCode_InvalidNetPacketExtensionAlignment,
+    FailureCode_InvalidNetPacketExtensionExtensionSize,
+    FailureCode_NetPacketExtensionVersionedSizeMismatch,
+    FailureCode_InvalidAdapterTxCapabilities,
+    FailureCode_InvalidAdapterRxCapabilities,
+    FailureCode_InvalidReceiveScalingHashType,
+    FailureCode_InvalidReceiveScalingProtocolType,
+    FailureCode_InvalidReceiveScalingEncapsulationType,
+    FailureCode_IllegalAdapterDelete,
+    FailureCode_RemovingDeviceWithAdapters,
 } FailureCode;
 
 //
@@ -266,13 +270,19 @@ Verifier_VerifyTypeSize(
 VOID
 Verifier_VerifyNotNull(
     _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
-    _In_ PVOID Ptr
+    _In_ void const * const Ptr
     );
 
 NTSTATUS
 Verifier_VerifyQueueConfiguration(
     _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
     _In_ PNET_REQUEST_QUEUE_CONFIG QueueConfig
+    );
+
+VOID
+Verifier_VerifyReceiveScalingCapabilities(
+    _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
+    _In_ PCNET_ADAPTER_RECEIVE_SCALING_CAPABILITIES Capabilities
     );
 
 VOID
@@ -296,6 +306,12 @@ Verifier_VerifyCurrentLinkState(
     );
 
 VOID
+Verifier_VerifyLinkLayerAddress(
+    _In_ NX_PRIVATE_GLOBALS *PrivateGlobals,
+    _In_ NET_ADAPTER_LINK_LAYER_ADDRESS *LinkLayerAddress
+    );
+
+VOID
 Verifier_VerifyQueryAsUlongFlags(
     _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
     _In_ NET_CONFIGURATION_QUERY_ULONG_FLAGS Flags
@@ -309,10 +325,11 @@ Verifier_VerifyQueryNetworkAddressParameters(
     );
 
 VOID
-Verifier_VerifyNetPacketUniqueType(
+Verifier_VerifyNetPacketContextToken(
     _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
+    _In_ NET_DATAPATH_DESCRIPTOR const * Descriptor,
     _In_ NET_PACKET* NetPacket,
-    _In_ PCNET_CONTEXT_TYPE_INFO UniqueType
+    _In_ PNET_PACKET_CONTEXT_TOKEN Token
     );
 
 VOID
@@ -324,7 +341,7 @@ Verifier_VerifyMtuSize(
 VOID
 Verifier_VerifyQueueInitContext(
     _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
-    _In_ struct QUEUE_CREATION_CONTEXT *NetQueueInit
+    _In_ QUEUE_CREATION_CONTEXT *NetQueueInit
     );
 
 VOID
@@ -353,13 +370,50 @@ Verifier_VerifyObjectAttributesContextSize(
     );
 
 VOID
-Verifier_VerifyDatapathCapabilities(
-    _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
-    _In_ PNET_ADAPTER_DATAPATH_CAPABILITIES DataPathCapabilities
-    );
-
-VOID
 Verifier_VerifyNetAdapterConfig(
     _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
     _In_ PNET_ADAPTER_CONFIG AdapterConfig
+    );
+
+VOID
+Verifier_VerifyNetPacketContextAttributes(
+    _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
+    _In_ PNET_PACKET_CONTEXT_ATTRIBUTES PacketContextAttributes
+    );
+
+VOID
+Verifier_VerifyNetPacketExtension(
+    _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
+    _In_ PNET_PACKET_EXTENSION NetPacketExtension
+    );
+
+VOID
+Verifier_VerifyNetPacketExtensionQuery(
+    _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
+    _In_ PNET_PACKET_EXTENSION_QUERY NetPacketExtension
+    );
+
+VOID
+Verifier_VerifyNetAdapterTxCapabilities(
+    _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
+    _In_ const NET_ADAPTER_TX_CAPABILITIES *TxCapabilities
+    );
+
+VOID
+Verifier_VerifyNetAdapterRxCapabilities(
+    _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
+    _In_ const NET_ADAPTER_RX_CAPABILITIES *RxCapabilities
+    );
+
+VOID
+Verifier_VerifyAdapterCanBeDeleted(
+    _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
+    _In_ NxAdapter const *Adapter
+    );
+
+VOID
+Verifier_VerifyDeviceAdapterCollectionIsEmpty(
+    _In_ NX_PRIVATE_GLOBALS *PrivateGlobals,
+    _In_ NxDevice const *Device,
+    _In_ NxAdapterCollection const *AdapterCollection
     );

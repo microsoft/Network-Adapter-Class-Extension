@@ -1,24 +1,10 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxWake.hpp
 
 Abstract:
 
     NxWake and NxWake objects.
-
-
-
-
-
-Environment:
-
-    kernel mode only
-
-Revision History:
 
 --*/
 
@@ -44,7 +30,7 @@ typedef struct _NX_NET_POWER_ENTRY {
     };
     //
     // Dont add new members below the union
-    // 
+    //
 } NX_NET_POWER_ENTRY, *PNX_NET_POWER_ENTRY;
 
 PNxWake
@@ -54,7 +40,7 @@ GetNxWakeFromHandle(
     );
 
 typedef class NxWake *PNxWake;
-class NxWake : public CFxObject<NETPOWERSETTINGS, 
+class NxWake : public CFxObject<NETPOWERSETTINGS,
                                     NxWake,
                                     GetNxWakeFromHandle,
                                     false>
@@ -93,15 +79,15 @@ private:
     PFN_NET_ADAPTER_PREVIEW_PROTOCOL_OFFLOAD m_EvtPreviewProtocolOffload;
 
     //
-    // Driver supplied cleanup and destory callbacks. 
+    // Driver supplied cleanup and destory callbacks.
     //
     PFN_WDF_OBJECT_CONTEXT_CLEANUP m_EvtCleanupCallback;
     PFN_WDF_OBJECT_CONTEXT_DESTROY m_EvtDestroyCallback;
-    
+
     //
-    // Object cleanup/destory callbacks remain disabled until NxAdapter 
-    // initialization is completed to the point of no more failures. 
-    // That way driver doesnt have to deal with a callback on its 
+    // Object cleanup/destory callbacks remain disabled until NxAdapter
+    // initialization is completed to the point of no more failures.
+    // That way driver doesnt have to deal with a callback on its
     // NETPOWERSETTINGS if NetAdapterCreate itself failed.
     //
     BOOLEAN                        m_DriverObjectCallbacksEnabled;
@@ -182,7 +168,7 @@ public:
         _Out_  PNxWake*                 NxWakeObject
         );
 
-    PNX_NET_POWER_ENTRY 
+    PNX_NET_POWER_ENTRY
     CreateProtocolOffloadEntry(
         _In_ PNDIS_PM_PROTOCOL_OFFLOAD ProtocolOffload,
         _In_ UINT InformationBufferLength);
@@ -209,7 +195,7 @@ public:
         );
 
     RECORDER_LOG
-    GetRecorderLog() { 
+    GetRecorderLog() {
         return m_NxAdapter->GetRecorderLog();
     }
 
@@ -292,7 +278,7 @@ public:
         _In_ NDIS_PM_WOL_PACKET WakePatternType
     );
 
-    ULONG 
+    ULONG
     GetProtocolOffloadCountForType(
         _In_ NDIS_PM_PROTOCOL_OFFLOAD_TYPE OffloadType
     );
@@ -311,7 +297,7 @@ Routine Description:
     This routine is just a wrapper around the _GetNxRequestFromHandle function.
     To be able to define a the NxRequest class above, we need a forward declaration of the
     accessor function. Since _GetNxRequestFromHandle is defined by Wdf, we dont want to
-    assume a prototype of that function for the foward declaration. 
+    assume a prototype of that function for the foward declaration.
 
 --*/
 {

@@ -1,10 +1,6 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-    Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxRxXlat.hpp
 
 Abstract:
 
@@ -15,70 +11,99 @@ Abstract:
 
 #pragma once
 
+#include <NetClientAdapter.h>
+
 #include "NxExecutionContext.hpp"
 #include "NxSignal.hpp"
 #include "NxRingBuffer.hpp"
+#include "NxContextBuffer.hpp"
 #include "NxNbl.hpp"
-#include <KArray.h>
+#include "NxNblQueue.hpp"
 
-class NxRxXlat : public INxAppQueue,
-                 public INxNblRx,
-                 public NxNonpagedAllocation<'lXRN'>
+class NxNblRx :
+    public INxNblRx,
+    public NxNonpagedAllocation<'lXRN'>
 {
-public:
-
-    NxRxXlat(_In_ INxAdapter *adapter) :
-        m_nblDispatcher(adapter->GetNblDispatcher()),
-        m_adapterHandle(adapter->GetNdisAdapterHandle())
-    {
-        NOTHING;
-    }
-
-    virtual ~NxRxXlat();
-
-    NTSTATUS StartQueue(_In_ INxAdapter *adapter);
-
-    //
-    // INxAppQueue
-    //
-
-    virtual NTSTATUS Initialize(
-        _In_ HNETPACKETCLIENT packetClient,
-        _In_ NXQUEUE_CREATION_PARAMETERS const *params,
-        _Out_ NXQUEUE_CREATION_RESULT *result);
-
-    virtual void Notify();
-
-
     //
     // INxNblRx
     //
+    virtual
+    ULONG
+    ReturnNetBufferLists(
+        _In_ NET_BUFFER_LIST * NblChain,
+        _In_ ULONG ReceiveCompleteFlags
+    );
+};
 
-    virtual void ReturnNetBufferLists(
-        _In_ NET_BUFFER_LIST *nblChain,
-        _In_ ULONG numberOfNbls,
-        _In_ ULONG receiveCompleteFlags);
+class NxRxXlat :
+    public NxNonpagedAllocation<'lXRN'>
+{
+public:
+
+    NxRxXlat(
+        _In_ NET_CLIENT_DISPATCH const * Dispatch,
+        _In_ NET_CLIENT_ADAPTER Adapter,
+        _In_ NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
+        ) noexcept;
+
+    virtual
+    ~NxRxXlat(
+        void
+        );
+
+    // the EC thread function
+    void
+    ReceiveThread();
+
+    ULONG
+    GetQueueId(
+        void
+        ) const;
+
+    NET_CLIENT_QUEUE
+    GetQueue(
+        void
+        ) const;
+
+    NTSTATUS
+    SetGroupAffinity(
+        GROUP_AFFINITY & GroupAffinity
+        );
+
+    NTSTATUS
+    StartQueue(
+        void
+        );
+
+    void
+    Notify(
+        void
+        );
+
+    void
+    QueueReturnedNetBufferLists(
+        _In_ NBL_QUEUE* NblChain
+        );
 
 private:
 
-    struct PAGED PacketContext : public _NDIS_DEBUG_BLOCK<'CPRN'>
+    struct PAGED PacketContext
     {
-        unique_nbl AssociatedNetBufferList;
-        bool MemoryPreallocated = false;
-
-        // Must go at end
-        MDL Mdl;
-        PFN_NUMBER _PfnNumbers[ANYSIZE_ARRAY];
+        //
+        // this NBL's NET_BUFFER_MINIPORT_RESERVED(NET_BUFFER_LIST_FIRST_NB)[0]
+        // field is used for the following purpose:
+        //
+        // if Rx buffer allocation mode is none, it's storing the rx buffer 
+        // return context supplied by the NIC driver
+        //
+        // if Rx buffer allocation mode is automatic, it's storing the
+        // DMA logical address of the Rx buffer automatically chose by the
+        // OS
+        //
+        // if Rx buffer allocation mode is manual, it's not used
+        //
+        PNET_BUFFER_LIST NetBufferList;
     };
-
-    struct PAGED NblContext : public _NDIS_DEBUG_BLOCK<'LBNN'>
-    {
-        _Interlocked_ volatile LONG Returned = true;
-    };
-
-    static_assert(
-        sizeof(NblContext) <= RTL_FIELD_SIZE(NET_BUFFER_LIST, MiniportReserved),
-        "The NblContext must fit in the MiniportReserved section of the NBL.");
 
     struct ArmedNotifications
     {
@@ -97,53 +122,140 @@ private:
 
     NxExecutionContext m_executionContext;
 
-    INxNblDispatcher *m_nblDispatcher = nullptr;
-    NDIS_HANDLE m_adapterHandle = nullptr;
-    unique_nbl_pool m_netBufferListPool;
-
-    NxRingBuffer m_ringBuffer;
-    Rtl::KArray<wistd::unique_ptr<INxQueueAllocation>> m_allocations;
-
-    wistd::unique_ptr<INxAdapterQueue> m_adapterQueue;
+    NET_CLIENT_DISPATCH const * m_dispatch = nullptr;
+    NET_CLIENT_ADAPTER m_adapter = nullptr;
+    NET_CLIENT_ADAPTER_DISPATCH const * m_adapterDispatch = nullptr;
+    NET_CLIENT_ADAPTER_PROPERTIES m_adapterProperties = {};
+    NET_CLIENT_BUFFER_POOL m_bufferPool = nullptr;
+    NET_CLIENT_BUFFER_POOL_DISPATCH const * m_bufferPoolDispatch = nullptr;
 
     NDIS_MEDIUM m_mediaType;
+    INxNblDispatcher *m_nblDispatcher = nullptr;
+
+    unique_nbl_pool m_netBufferListPool;
+    size_t m_NumOfNblsInUse = 0;
+    Rtl::KArray<PNET_BUFFER_LIST, NonPagedPoolNx> m_NblLookupTable;
+    KPoolPtrNP<MDL> m_MdlPool;
+
+    NET_CLIENT_MEMORY_MANAGEMENT_MODE m_rxBufferAllocationMode = NET_CLIENT_MEMORY_MANAGEMENT_MODE_DRIVER;
+    size_t m_rxDataBufferSize = 0;
+    UINT32 m_rxNumDataBuffers = 0;
+    UINT32 m_rxNumNbls = 0;
+    UINT32 m_rxNumPackets = 0;
+    UINT32 m_rxNumFragments = 0;
+    size_t m_backfillSize = 0;
+
+    NBL_QUEUE m_discardedNbl;
+    NxNblQueue m_returnedNblQueue;
+
+    NET_CLIENT_QUEUE m_queue = nullptr;
+    NET_CLIENT_QUEUE_DISPATCH const * m_queueDispatch = nullptr;
+    size_t m_checksumOffset = NET_PACKET_EXTENSION_INVALID_OFFSET;
+
+    NET_DATAPATH_DESCRIPTOR const * m_descriptor;
+    NxRingBuffer m_ringBuffer;
+    NxContextBuffer m_contextBuffer;
 
     // changes as translation routine runs
     ULONG m_outstandingPackets = 0;
     ULONG m_postedPackets = 0;
     ULONG m_returnedPackets = 0;
 
-    ULONG m_thread802_15_4MSIExExtensionOffset = 0;
-    ULONG m_thread802_15_4StatusOffset = 0;
-
     // notification signals
     NxInterlockedFlag m_returnedNblNotification;
 
-    ArmedNotifications GetNotificationsToArm();
-    void ArmNotifications(ArmedNotifications notifications);
+    ArmedNotifications
+    GetNotificationsToArm();
 
-    void ArmNetBufferListReturnedNotification();
-    void ArmAdapterRxNotification();
+    void
+    ArmNotifications(
+        _In_ ArmedNotifications notifications
+        );
 
+    void
+    ArmNetBufferListReturnedNotification();
+
+    void
+    ArmAdapterRxNotification();
+
+    bool m_memoryPreallocated = false;
     bool m_stopRequested = false;
 
-    PacketContext & GetPacketContext(_In_ NET_PACKET &netPacket);
-    static NblContext & GetNblContext(_In_ NET_BUFFER_LIST & nbl);
+    NTSTATUS
+    AttachEmptyDataBufferToNetPacket(
+        _Inout_ PNET_PACKET Packet,
+        _Out_ PNET_BUFFER_LIST* Nbl);
 
-    unique_nbl AllocateOneNbl();
+    bool
+    TransferDataBufferFromNetPacketToNbl(
+        _In_ PNET_PACKET Packet,
+        _In_ PNET_BUFFER_LIST Nbl);
 
-    void ReinitializePacket(_In_ NET_PACKET & netPacket);
+    bool
+    ReInitializeMdlForDataBuffer(
+        _In_ PNET_BUFFER nb,
+        _In_ NET_PACKET_FRAGMENT const* fragment,
+        _In_ PMDL fragmentMdl,
+        _In_ bool isFirstFragment);
 
-    void PrepareBuffersForNetAdapter();
-    void YieldToNetAdapter();
-    void IndicateNblsToNdis();
-    void WaitForMoreWork();
+    PNET_BUFFER_LIST
+    DrawNblFromPool();
 
-    void ReceiveThread();
+    void
+    ReturnNblToPool(_In_ PNET_BUFFER_LIST);
+    
+    PNET_BUFFER_LIST
+    FreeReceivedDataBuffer(_In_ PNET_BUFFER_LIST nbl);
 
-    NTSTATUS AllocateNetBufferLists();
-    NTSTATUS PreallocateRxBuffers();
-    NTSTATUS InitializeRingBuffer();
+    void
+    ReinitializePacketExtensions(
+        _In_ NET_PACKET* netPacket
+        );
 
-    unique_nbl_pool CreateNblPool();
+    void
+    ReinitializePacket(
+        _In_ NET_PACKET* netPacket
+        );
+
+    // functions called within the EC thread
+    void
+    EcReturnBuffers();
+
+    void
+    EcPrepareBuffersForNetAdapter();
+
+    void
+    EcYieldToNetAdapter();
+
+    void
+    EcIndicateNblsToNdis();
+
+    void
+    EcWaitForMoreWork();
+
+    NTSTATUS
+    Initialize(
+        void
+        );
+
+    NTSTATUS
+    CreateVariousPools();
+
+    NTSTATUS
+    PreparePacketExtensions(
+        _Inout_ Rtl::KArray<NET_CLIENT_PACKET_EXTENSION>& addedPacketExtensions
+        );
+
+    size_t
+    GetPacketExtensionOffsets(
+        PCWSTR ExtensionName,
+        ULONG ExtensionVersion
+        ) const;
+
+    bool
+    IsPacketChecksumEnabled() const;
+
+    void
+    SetupRxThreadProperties();
 };
+

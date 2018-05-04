@@ -1,33 +1,16 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxObjectApi.cpp
 
 Abstract:
 
     This module contains the "C" interface for a general Nx object.
 
-
-
-
-
-Environment:
-
-    kernel mode only
-
-Revision History:
-
 --*/
 
 #include "Nx.hpp"
 
-// Tracing support
-extern "C" {
 #include "NxObjectApi.tmh"
-}
 
 //
 // extern the whole file
@@ -43,25 +26,25 @@ NETEXPORT(NetObjectMarkCancelableEx)(
     _In_      PFN_NET_OBJECT_CANCEL  EvtCancel
     )
 /*++
-Routine Description: 
- 
+Routine Description:
+
     This routine sets a cancel routine on a cancelable WDFOBJECT.
- 
+
     Following are the WDFOBJECTs that support this API:
         NETREQUEST
         NETPACKET *PENDING*
- 
+
 Arguments:
- 
+
     NetObject - A handle to a cancelable WDFOBJECT.
- 
+
     EvtCancel - A pointer to a cancel routine that is run if the object is
         canceled.
- 
-Return: 
+
+Return:
     STATUS_SUCCESS - If the cancel routine has been set successfully.
     STATUS_CANCELED - The the object has already been canceled. In that case
-        the cancel routine will not be called. 
+        the cancel routine will not be called.
 --*/
 {
     NTSTATUS status;
@@ -75,7 +58,7 @@ Return:
     Verifier_VerifyNotNull(pNxPrivateGlobals, EvtCancel);
     //
     // First check if this is an NETOBJECT for which we support cancellation.
-    // Currently supported objects are: 
+    // Currently supported objects are:
     //     NETREQUEST
     //
     Verifier_VerifyObjectSupportsCancellation(pNxPrivateGlobals, NetObject);
@@ -99,19 +82,19 @@ NETEXPORT(NetObjectUnmarkCancelable)(
 Routine Description:
     This routine clears the cancel routine that was previously set on a
     cancelable WDFOBJECT using the NetObjectMarkCancelableEx API
- 
+
 Arguments:
- 
+
     NetObject - A handle to a cancelable WDFOBJECT.
- 
-Returns: 
- 
+
+Returns:
+
     STATUS_CANCELED - If the Object has already been canceled. In that case a
         previously set completion routine would be run or is runnning or has
         already run.
- 
+
     STATUS_SUCCESS - The Object is no longer marked cancelable
- 
+
 --*/
 {
     NTSTATUS status;
@@ -125,7 +108,7 @@ Returns:
 
     //
     // First check if this is an NETOBJECT for which we support cancellation.
-    // Currently supported objects are: 
+    // Currently supported objects are:
     //     NETREQUEST
     //
     Verifier_VerifyObjectSupportsCancellation(pNxPrivateGlobals, NetObject);

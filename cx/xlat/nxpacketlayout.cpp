@@ -1,248 +1,394 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
+
 #include "NxXlatPrecomp.hpp"
 #include "NxXlatCommon.hpp"
-#include "NxPacketLayout.tmh"
 #include "NxPacketLayout.hpp"
-#include "NxHeaderParser.hpp"
-#include "KPacket.h"
+#include "NxPacketLayout.tmh"
 
-NET_PACKET_LAYER4_TYPE
-NxGetLayer4Type(KIPProtocolNumber number)
+#define IP_VERSION_4 4
+#define IP_VERSION_6 6
+
+_Success_(return)
+bool
+NxGetPacketEtherType(
+    _In_ NET_DATAPATH_DESCRIPTOR const *descriptor,
+    _In_ NET_PACKET const *packet,
+    _Out_ USHORT *ethertype)
 {
-    switch (number)
+    auto fragment = NET_PACKET_GET_FRAGMENT(packet, descriptor, 0);
+    auto buffer = (UCHAR const*)fragment->VirtualAddress + fragment->Offset;
+    auto bytesRemaining = (ULONG)fragment->ValidLength;
+
+    if (bytesRemaining < sizeof(ETHERNET_HEADER))
+        return false;
+
+    auto ethernet = (ETHERNET_HEADER UNALIGNED const*)buffer;
+    *ethertype = RtlUshortByteSwap(ethernet->Type);
+
+    if (*ethertype >= ETHERNET_TYPE_MINIMUM)
     {
-    case KIPProtocolNumber::TCP:
+        return true;
+    }
+    else if (bytesRemaining >= sizeof(SNAP_HEADER))
+    {
+        auto snap = (SNAP_HEADER UNALIGNED const *)(ethernet + 1);
+        if (snap->Control == SNAP_CONTROL &&
+            snap->Dsap == SNAP_DSAP &&
+            snap->Ssap == SNAP_SSAP &&
+            snap->Oui[0] == SNAP_OUI &&
+            snap->Oui[1] == SNAP_OUI &&
+            snap->Oui[2] == SNAP_OUI)
+        {
+            *ethertype = RtlUshortByteSwap(snap->Type);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static
+void
+ParseEthernetHeader(
+    _Inout_ UCHAR const *&buffer,
+    _Inout_ ULONG &bytesRemaining,
+    _Out_ NET_PACKET_LAYOUT &layout)
+{
+    if (bytesRemaining < sizeof(ETHERNET_HEADER))
+        return;
+
+    auto ethernet = (ETHERNET_HEADER UNALIGNED const*)buffer;
+    auto ethertype = RtlUshortByteSwap(ethernet->Type);
+
+    if (ethertype >= ETHERNET_TYPE_MINIMUM)
+    {
+        layout.Layer2Type = NET_PACKET_LAYER2_TYPE_ETHERNET;
+        layout.Layer2HeaderLength = sizeof(ETHERNET_HEADER);
+        buffer += sizeof(ETHERNET_HEADER);
+        bytesRemaining -= sizeof(ETHERNET_HEADER);
+    }
+    else if (bytesRemaining >= sizeof(ETHERNET_HEADER) + sizeof(SNAP_HEADER))
+    {
+        auto snap = (SNAP_HEADER UNALIGNED const *)(ethernet + 1);
+        if (snap->Control == SNAP_CONTROL &&
+            snap->Dsap == SNAP_DSAP &&
+            snap->Ssap == SNAP_SSAP &&
+            snap->Oui[0] == SNAP_OUI &&
+            snap->Oui[1] == SNAP_OUI &&
+            snap->Oui[2] == SNAP_OUI)
+        {
+            layout.Layer2Type = NET_PACKET_LAYER2_TYPE_ETHERNET;
+            layout.Layer2HeaderLength = sizeof(ETHERNET_HEADER) + sizeof(SNAP_HEADER);
+            buffer += sizeof(ETHERNET_HEADER) + sizeof(SNAP_HEADER);
+            bytesRemaining -= sizeof(ETHERNET_HEADER) + sizeof(SNAP_HEADER);
+
+            ethertype = RtlUshortByteSwap(snap->Type);
+        }
+        else
+        {
+            layout.Layer2Type = NET_PACKET_LAYER2_TYPE_UNSPECIFIED;
+            return;
+        }
+    }
+    else
+    {
+        layout.Layer2Type = NET_PACKET_LAYER2_TYPE_UNSPECIFIED;
+        return;
+    }
+
+    switch (ethertype)
+    {
+    case ETHERNET_TYPE_IPV4:
+        layout.Layer3Type = NET_PACKET_LAYER3_TYPE_IPV4_UNSPECIFIED_OPTIONS;
+        break;
+    case ETHERNET_TYPE_IPV6:
+        layout.Layer3Type = NET_PACKET_LAYER3_TYPE_IPV6_UNSPECIFIED_EXTENSIONS;
+        break;
+    }
+}
+
+static
+void
+ParseRawIPHeader(
+    _Inout_ UCHAR const *&buffer,
+    _Inout_ ULONG &bytesRemaining,
+    _Out_ NET_PACKET_LAYOUT &layout)
+{
+    if (bytesRemaining < 1)
+        return;
+
+    layout.Layer2Type = NET_PACKET_LAYER2_TYPE_NULL;
+    layout.Layer2HeaderLength = 0;
+
+    switch (buffer[0] >> 4)
+    {
+    case IP_VERSION_4:
+        layout.Layer3Type = NET_PACKET_LAYER3_TYPE_IPV4_UNSPECIFIED_OPTIONS;
+        break;
+    case IP_VERSION_6:
+        layout.Layer3Type = NET_PACKET_LAYER3_TYPE_IPV6_UNSPECIFIED_EXTENSIONS;
+        break;
+    }
+}
+
+static
+NET_PACKET_LAYER4_TYPE
+GetLayer4Type(
+    _In_ ULONG protocolId)
+{
+    switch (protocolId)
+    {
+    case IPPROTO_TCP:
         return NET_PACKET_LAYER4_TYPE_TCP;
-    case KIPProtocolNumber::UDP:
+    case IPPROTO_UDP:
         return NET_PACKET_LAYER4_TYPE_UDP;
     default:
         return NET_PACKET_LAYER4_TYPE_UNSPECIFIED;
     }
 }
 
-NxLayer2Layout
-NxGetEthernetLayout(NxPacketHeaderParser & parser)
+static
+void
+ParseIPv4Header(
+    _Inout_ UCHAR const *&buffer,
+    _Inout_ ULONG &bytesRemaining,
+    _Out_ NET_PACKET_LAYOUT &layout)
 {
-    auto const ethernetSnapHeader = parser.TryTakeHeader<KEthernetSnapHeader>();
-    UINT16 headerSize = 0;
-
-    KEthernetHeader UNALIGNED *ethernetHeader = nullptr;
-    if (ethernetSnapHeader)
+    if (bytesRemaining < sizeof(IPV4_HEADER))
     {
-        if (ethernetSnapHeader->is_WellFormed())
-        {
-            ethernetHeader = ethernetSnapHeader;
-            headerSize = sizeof(KEthernetSnapHeader);
-        }
-        else
-        {
-            // return the unqualifying snap header
-            parser.Retreat(sizeof(KEthernetSnapHeader));
-        }
+        layout.Layer3Type = NET_PACKET_LAYER3_TYPE_UNSPECIFIED;
+        return;
     }
 
-    if (!ethernetHeader)
+    auto ip = (IPV4_HEADER UNALIGNED const*)buffer;
+    auto length = Ip4HeaderLengthInBytes(ip);
+    if (bytesRemaining < length || length > MAX_IPV4_HLEN)
     {
-        ethernetHeader = parser.TryTakeHeader<KEthernetHeader>();
-        headerSize = sizeof(KEthernetHeader);
+        layout.Layer3Type = NET_PACKET_LAYER3_TYPE_UNSPECIFIED;
+        return;
     }
 
-    if (!ethernetHeader)
-    {
-        return{};
-    }
-
-    NET_PACKET_LAYER3_TYPE layer3Type = NET_PACKET_LAYER3_TYPE_UNSPECIFIED;
-    switch (ethernetHeader->TypeLength.get())
-    {
-    case ETHERNET_TYPE_IPV4:
-        layer3Type = NET_PACKET_LAYER3_TYPE_IPV4_UNSPECIFIED_OPTIONS;
-        break;
-    case ETHERNET_TYPE_IPV6:
-        layer3Type = NET_PACKET_LAYER3_TYPE_IPV6_UNSPECIFIED_EXTENSIONS;
-        break;
-    }
-
-    return{ NET_PACKET_LAYER2_TYPE_ETHERNET, headerSize, layer3Type };
+    layout.Layer3Type = (length == sizeof(IPV4_HEADER))
+        ? NET_PACKET_LAYER3_TYPE_IPV4_NO_OPTIONS
+        : NET_PACKET_LAYER3_TYPE_IPV4_WITH_OPTIONS;
+    layout.Layer3HeaderLength = length;
+    layout.Layer4Type = GetLayer4Type(ip->Protocol);
+    buffer += length;
+    bytesRemaining -= length;
 }
 
-NxLayer3Layout
-NxGetIPv4Layout(NxPacketHeaderParser & parser)
+enum class IPv6ExtensionParseResult
 {
-    auto const ipv4Header = parser.TryTakeHeader<KIPv4Header>();
-    if (!(ipv4Header && ipv4Header->is_WellFormed()))
-    {
-        return{};
-    }
+    Ok,
+    UnknownExtension,
+    MalformedExtension,
+};
 
-    auto const ipv4HeaderLength = ipv4Header->get_HeaderSize();
-
-    // The ENTIRE header must be contiguous, including the options,
-    // so return the header, and then advance again.
-    if (ipv4HeaderLength > sizeof(KIPv4Header))
-    {
-        parser.Retreat(sizeof(KIPv4Header));
-        if (!parser.TryGetContiguousBuffer(ipv4HeaderLength))
-        {
-            return{};
-        }
-    }
-
-    auto const layer3Type =
-        ipv4Header->has_Options()
-        ? NET_PACKET_LAYER3_TYPE_IPV4_WITH_OPTIONS
-        : NET_PACKET_LAYER3_TYPE_IPV4_NO_OPTIONS;
-
-    return{layer3Type, ipv4HeaderLength, NxGetLayer4Type(ipv4Header->Protocol)};
-}
-
-NxLayer3Layout
-NxGetIPv6Layout(NxPacketHeaderParser & parser)
+static
+IPv6ExtensionParseResult
+ParseIPv6ExtensionHeader(
+    _In_ ULONG headerType,
+    _In_reads_bytes_(bytesRemaining) UCHAR const *buffer,
+    _In_ ULONG bytesRemaining,
+    _Out_ ULONG *length,
+    _Out_ ULONG *nextHeaderType)
 {
-    auto const ipv6Header = parser.TryTakeHeader<KIPv6Header>();
-    if (!ipv6Header)
+    switch (headerType)
     {
-        return{};
-    }
-
-    UINT16 ipv6HeaderLength = sizeof(KIPv6Header);
-    auto extensionType = ipv6Header->NextHeader;
-
-    while (IsProtocolIPv6Extension(extensionType))
+    case IPPROTO_HOPOPTS:
+    case IPPROTO_DSTOPTS:
+    case IPPROTO_ROUTING:
     {
-        auto header = parser.TryTakeHeader<KIPv6ExtensionHeader>(KIPv6ExtensionHeader::get_HeaderSize());
-        if (!header)
+        auto extension = (IPV6_EXTENSION_HEADER UNALIGNED const*)buffer;
+
+        if (sizeof(IPV6_EXTENSION_HEADER) > bytesRemaining ||
+            (ULONG)IPV6_EXTENSION_HEADER_LENGTH(extension->Length) > bytesRemaining)
         {
-            return{};
+            return IPv6ExtensionParseResult::MalformedExtension;
         }
 
-        UINT8 extSize;
-        if (!header->tryget_ExtensionSize(extensionType, &extSize))
+        *nextHeaderType = extension->NextHeader;
+        *length = IPV6_EXTENSION_HEADER_LENGTH(extension->Length);
+        return IPv6ExtensionParseResult::Ok;
+    }
+
+    case IPPROTO_AH:
+    {
+        auto extension = (IPV6_EXTENSION_HEADER UNALIGNED const*)buffer;
+
+        if (sizeof(IPV6_EXTENSION_HEADER) > bytesRemaining ||
+            (ULONG)IP_AUTHENTICATION_HEADER_LENGTH(extension->Length) > bytesRemaining)
         {
-            return{};
+            return IPv6ExtensionParseResult::MalformedExtension;
         }
 
-        // The ENTIRE header must be contiguous, including the extensions,
-        // so return the header, and then advance again.
-        parser.Retreat(ipv6HeaderLength + KIPv6ExtensionHeader::get_HeaderSize());
+        *nextHeaderType = extension->NextHeader;
+        *length = IP_AUTHENTICATION_HEADER_LENGTH(extension->Length);
+        return IPv6ExtensionParseResult::Ok;
+    }
 
-        ipv6HeaderLength += extSize;
-        extensionType = header->NextHeader;
+    case IPPROTO_FRAGMENT:
+    {
+        auto extension = (IPV6_FRAGMENT_HEADER UNALIGNED const*)buffer;
 
-        if (!parser.TryGetContiguousBuffer(ipv6HeaderLength))
+        if (sizeof(IPV6_FRAGMENT_HEADER) > bytesRemaining)
         {
-            return{};
+            return IPv6ExtensionParseResult::MalformedExtension;
+        }
+
+        *nextHeaderType = extension->NextHeader;
+        *length = sizeof(IPV6_FRAGMENT_HEADER);
+        return IPv6ExtensionParseResult::Ok;
+    }
+    }
+
+    return IPv6ExtensionParseResult::UnknownExtension;
+}
+
+static
+void
+ParseIPv6Header(
+    _Inout_ UCHAR const *&buffer,
+    _Inout_ ULONG &bytesRemaining,
+    _Out_ NET_PACKET_LAYOUT &layout)
+{
+    if (bytesRemaining < sizeof(IPV6_HEADER))
+    {
+        layout.Layer3Type = NET_PACKET_LAYER3_TYPE_UNSPECIFIED;
+        return;
+    }
+
+    auto ip = (IPV6_HEADER UNALIGNED const*)buffer;
+    auto nextHeader = (ULONG)ip->NextHeader;
+
+    auto offset = (ULONG)sizeof(IPV6_HEADER);
+
+    while (true)
+    {
+        ULONG extensionLength;
+        switch (ParseIPv6ExtensionHeader(nextHeader, buffer + offset, bytesRemaining - offset, &extensionLength, &nextHeader))
+        {
+        case IPv6ExtensionParseResult::MalformedExtension:
+            layout.Layer3Type = NET_PACKET_LAYER3_TYPE_UNSPECIFIED;
+            return;
+
+        case IPv6ExtensionParseResult::Ok:
+            offset += extensionLength;
+            break;
+
+        case IPv6ExtensionParseResult::UnknownExtension:
+            if (offset > 0x1ff)
+            {
+                layout.Layer3Type = NET_PACKET_LAYER3_TYPE_UNSPECIFIED;
+                return;
+            }
+            else if (offset == sizeof(IPV6_HEADER))
+            {
+                layout.Layer3Type = NET_PACKET_LAYER3_TYPE_IPV6_NO_EXTENSIONS;
+            }
+            else
+            {
+                layout.Layer3Type = NET_PACKET_LAYER3_TYPE_IPV6_WITH_EXTENSIONS;
+            }
+
+            layout.Layer3HeaderLength = offset;
+            layout.Layer4Type = GetLayer4Type(nextHeader);
+            buffer += offset;
+            bytesRemaining -= offset;
+            return;
         }
     }
-
-    auto const layer3Type =
-        ipv6HeaderLength > sizeof(KIPv6Header)
-        ? NET_PACKET_LAYER3_TYPE_IPV6_WITH_EXTENSIONS
-        : NET_PACKET_LAYER3_TYPE_IPV6_NO_EXTENSIONS;
-
-    return{ layer3Type, ipv6HeaderLength, NxGetLayer4Type(extensionType) };
 }
 
-NxLayer4Layout
-NxGetTcpLayout(NxPacketHeaderParser & parser)
+static
+void
+ParseTcpHeader(
+    _Inout_ UCHAR const *&buffer,
+    _Inout_ ULONG &bytesRemaining,
+    _Out_ NET_PACKET_LAYOUT &layout)
 {
-    auto const tcpHeader = parser.TryTakeHeader<KTcpHeader>();
-    if (!(tcpHeader && tcpHeader->is_WellFormed()))
+    if (bytesRemaining < sizeof(TCP_HDR))
     {
-        return{};
+        layout.Layer4Type = NET_PACKET_LAYER4_TYPE_UNSPECIFIED;
+        return;
     }
 
-    return{ NET_PACKET_LAYER4_TYPE_TCP, tcpHeader->get_HeaderSize() };
+    auto tcp = (TCP_HDR UNALIGNED const *)buffer;
+    auto length = (ULONG)tcp->th_len * 4;
+    if (bytesRemaining < length || length > TH_MAX_LEN)
+    {
+        layout.Layer4Type = NET_PACKET_LAYER4_TYPE_UNSPECIFIED;
+        return;
+    }
+
+    layout.Layer4HeaderLength = length;
+    buffer += length;
+    bytesRemaining -= length;
 }
 
-NxLayer4Layout
-NxGetUdpLayout(NxPacketHeaderParser & parser)
+static
+void
+ParseUdpHeader(
+    _Inout_ UCHAR const *&buffer,
+    _Inout_ ULONG &bytesRemaining,
+    _Out_ NET_PACKET_LAYOUT &layout)
 {
-    UNREFERENCED_PARAMETER(parser);
-    if (!parser.TryTakeHeader<KUdpHeader>())
+    const auto UDP_HEADER_SIZE = 8;
+
+    if (bytesRemaining < UDP_HEADER_SIZE)
     {
-        return{};
+        layout.Layer4Type = NET_PACKET_LAYER4_TYPE_UNSPECIFIED;
+        return;
     }
 
-    return{ NET_PACKET_LAYER4_TYPE_UDP, KUdpHeader::get_HeaderSize() };
-}
-
-NxLayer2Layout
-NxGetLayer2Layout(NDIS_MEDIUM mediaType, NxPacketHeaderParser & parser)
-{
-    switch (mediaType)
-    {
-    case NdisMedium802_3:
-        return NxGetEthernetLayout(parser);
-    default:
-        return{};
-    }
-}
-
-NxLayer3Layout
-NxGetLayer3Layout(NET_PACKET_LAYER3_TYPE type, NxPacketHeaderParser & parser)
-{
-    switch (type)
-    {
-    case NET_PACKET_LAYER3_TYPE_IPV4_UNSPECIFIED_OPTIONS:
-        return NxGetIPv4Layout(parser);
-    case NET_PACKET_LAYER3_TYPE_IPV6_UNSPECIFIED_EXTENSIONS:
-        return NxGetIPv6Layout(parser);
-    default:
-        return{};
-    }
-}
-
-NxLayer4Layout
-NxGetLayer4Layout(NET_PACKET_LAYER4_TYPE type, NxPacketHeaderParser & parser)
-{
-    switch (type)
-    {
-    case NET_PACKET_LAYER4_TYPE_TCP:
-        return NxGetTcpLayout(parser);
-    case NET_PACKET_LAYER4_TYPE_UDP:
-        return NxGetUdpLayout(parser);
-    default:
-        return{};
-    }
+    layout.Layer4HeaderLength = UDP_HEADER_SIZE;
+    buffer += UDP_HEADER_SIZE;
+    bytesRemaining -= UDP_HEADER_SIZE;
 }
 
 NET_PACKET_LAYOUT
-NxGetPacketLayout(NDIS_MEDIUM mediaType, NET_PACKET const & packet)
+NxGetPacketLayout(
+    _In_ NDIS_MEDIUM mediaType,
+    _In_ NET_DATAPATH_DESCRIPTOR const * descriptor,
+    _In_ NET_PACKET const *packet)
 {
-    NET_PACKET_LAYOUT layout = { 0 };
+    auto fragment = NET_PACKET_GET_FRAGMENT(packet, descriptor, 0);
+    auto buffer = (UCHAR const*)fragment->VirtualAddress + fragment->Offset;
+    auto bytesRemaining = (ULONG)fragment->ValidLength;
 
-    NxPacketHeaderParser parser(packet);
+    NET_PACKET_LAYOUT layout = { };
 
-    auto const l2Layout = NxGetLayer2Layout(mediaType, parser);
-
-    if (l2Layout.Type == NET_PACKET_LAYER2_TYPE_UNSPECIFIED)
+    switch (mediaType)
     {
-        return layout;
+    case NdisMedium802_3:
+        ParseEthernetHeader(buffer, bytesRemaining, layout);
+        break;
+    case NdisMediumIP:
+    case NdisMediumWiMAX:
+    case NdisMediumWirelessWan:
+        ParseRawIPHeader(buffer, bytesRemaining, layout);
+        break;
     }
 
-    layout.Layer2Type = l2Layout.Type;
-    layout.Layer2HeaderLength = l2Layout.Length;
-
-    auto const l3Layout = NxGetLayer3Layout(l2Layout.L3Type, parser);
-
-    if (l3Layout.Type == NET_PACKET_LAYER3_TYPE_UNSPECIFIED)
+    switch (layout.Layer3Type)
     {
-        return layout;
+    case NET_PACKET_LAYER3_TYPE_IPV4_UNSPECIFIED_OPTIONS:
+        ParseIPv4Header(buffer, bytesRemaining, layout);
+        break;
+    case NET_PACKET_LAYER3_TYPE_IPV6_UNSPECIFIED_EXTENSIONS:
+        ParseIPv6Header(buffer, bytesRemaining, layout);
+        break;
     }
 
-    layout.Layer3Type = l3Layout.Type;
-    layout.Layer3HeaderLength = l3Layout.Length;
-
-    auto const l4Layout = NxGetLayer4Layout(l3Layout.L4Type, parser);
-
-    if (l4Layout.Type == NET_PACKET_LAYER4_TYPE_UNSPECIFIED)
+    switch (layout.Layer4Type)
     {
-        return layout;
+    case NET_PACKET_LAYER4_TYPE_TCP:
+        ParseTcpHeader(buffer, bytesRemaining, layout);
+        break;
+    case NET_PACKET_LAYER4_TYPE_UDP:
+        ParseUdpHeader(buffer, bytesRemaining, layout);
+        break;
     }
-
-    layout.Layer4Type = l4Layout.Type;
-    layout.Layer4HeaderLength = l4Layout.Length;
 
     return layout;
 }

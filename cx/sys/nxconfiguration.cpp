@@ -1,40 +1,23 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
- 
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxConfiguration.cpp
 
 Abstract:
 
     This implements the Nx Adapter Configuration object.
 
-
-
-
-
-Environment:
-
-    kernel mode only
-
-Revision History:
-
 --*/
 
 #include "Nx.hpp"
 
-// Tracing support
-extern "C" {
 #include "NxConfiguration.tmh"
-}
 
 NxConfiguration::NxConfiguration(
     _In_ PNX_PRIVATE_GLOBALS      NxPrivateGlobals,
     _In_ NETCONFIGURATION         Configuration,
     _In_ PNxConfiguration         ParentNxConfiguration,
-    _In_ PNxAdapter               NxAdapter) : 
-    CFxObject(Configuration), 
+    _In_ PNxAdapter               NxAdapter) :
+    CFxObject(Configuration),
     m_ParentNxConfiguration(ParentNxConfiguration),
     m_NxAdapter(NxAdapter),
     m_NdisConfigurationHandle(NULL)
@@ -44,6 +27,57 @@ NxConfiguration::NxConfiguration(
     UNREFERENCED_PARAMETER(NxPrivateGlobals);
 
     FuncExit(FLAG_CONFIGURATION);
+}
+
+PAGED NTSTATUS
+NxConfiguration::ReadConfiguration(
+    _Out_ PNDIS_CONFIGURATION_PARAMETER *ParameterValue,
+    _In_  PCUNICODE_STRING               Keyword,
+    _In_  NDIS_PARAMETER_TYPE            ParameterType)
+{
+    NDIS_STATUS ndisStatus = NDIS_STATUS_SUCCESS;
+    NdisWdfReadConfiguration(
+        &ndisStatus,
+        ParameterValue,
+        m_NdisConfigurationHandle,
+        (PNDIS_STRING)Keyword,
+        ParameterType);
+
+    NTSTATUS status = STATUS_SUCCESS;
+    switch (ndisStatus)
+    {
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    case NDIS_STATUS_FAILURE:
+        status = STATUS_OBJECT_NAME_NOT_FOUND;
+        break;
+    default:
+        status = NdisConvertNdisStatusToNtStatus(ndisStatus);
+        break;
+    }
+
+    if (!NT_SUCCESS(status))
+    {
+        LogError(GetRecorderLog(), FLAG_CONFIGURATION,
+            "NdisWdfReadConfiguration failed to read keyword %wZ : status=%!STATUS!, ndisStatus=%!NDIS_STATUS!",
+            Keyword, status, ndisStatus);
+        return status;
+    }
+
+    return status;
 }
 
 NxConfiguration::~NxConfiguration()
@@ -60,12 +94,12 @@ NxConfiguration::_EvtCleanup(
     _In_  WDFOBJECT Configuration
     )
 /*++
-Routine Description: 
+Routine Description:
     A WDF Event Callback
- 
+
     This routine is called when the client driver WDFDEVICE object is being
     deleted. This happens when WDF is processing the REMOVE irp for the client.
- 
+
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
@@ -92,13 +126,13 @@ NxConfiguration::_Create(
     _Out_    PNxConfiguration*        NxConfigurationArg
 )
 /*++
-Routine Description: 
+Routine Description:
     Static method that creates the NETCONFIGURATION object
-    and opens it. 
- 
+    and opens it.
+
     This is the internal implementation of the NetAdapterOpenConfiguration
     public API.
- 
+
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
@@ -129,7 +163,7 @@ Routine Description:
     // Ensure that the destructor would be called when this object is destroyed.
     //
     NxConfiguration::_SetObjectAttributes(&attributes);
-    
+
     status = WdfObjectCreate(&attributes, (WDFOBJECT*)&netConfiguration);
     if (!NT_SUCCESS(status)) {
         LogError(NxAdapter->GetRecorderLog(), FLAG_CONFIGURATION,
@@ -139,24 +173,24 @@ Routine Description:
     }
 
     //
-    // Since we just created the NetAdapter, the NxConfiguration object has 
-    // yet not been constructed. Get the nxConfiguration's memory. 
+    // Since we just created the NetAdapter, the NxConfiguration object has
+    // yet not been constructed. Get the nxConfiguration's memory.
     //
     nxConfigurationMemory = (PVOID) GetNxConfigurationFromHandle(netConfiguration);
 
     //
-    // Use the inplacement new and invoke the constructor on the 
+    // Use the inplacement new and invoke the constructor on the
     // NxConfiguration's memory
     //
     nxConfiguration = new (nxConfigurationMemory) NxConfiguration(PrivateGlobals,
                                                                   netConfiguration,
                                                                   ParentNxConfiguration,
                                                                   NxAdapter);
-    
+
     __analysis_assume(nxConfiguration != NULL);
 
     NT_ASSERT(nxConfiguration);
-    
+
     *NxConfigurationArg = nxConfiguration;
 
     status = STATUS_SUCCESS;
@@ -170,9 +204,9 @@ NxConfiguration::Open(
     VOID
 )
 /*++
-Routine Description: 
-    Method that opens the created configuration. 
- 
+Routine Description:
+    Method that opens the created configuration.
+
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
@@ -182,7 +216,7 @@ Routine Description:
 
     // Opaque Handle for the Ndis Adapter Configuration given by ndis.sys
     NDIS_HANDLE               ndisConfigurationHandle;
-                              
+
     NDIS_CONFIGURATION_OBJECT configObject;
 
     NT_ASSERT(m_ParentNxConfiguration == NULL);
@@ -198,7 +232,7 @@ Routine Description:
 
     configObject.NdisHandle = m_NxAdapter->m_NdisAdapterHandle;
 
-    ndisStatus = NdisOpenConfigurationEx(&configObject, 
+    ndisStatus = NdisOpenConfigurationEx(&configObject,
                                          &ndisConfigurationHandle);
 
     if (ndisStatus != NDIS_STATUS_SUCCESS) {
@@ -209,7 +243,7 @@ Routine Description:
     }
 
     m_NdisConfigurationHandle = ndisConfigurationHandle;
-    
+
     status = STATUS_SUCCESS;
 
     FuncExit(FLAG_CONFIGURATION);
@@ -221,9 +255,9 @@ NxConfiguration::OpenAsSubConfiguration(
     PCUNICODE_STRING  SubConfigurationName
 )
 /*++
-Routine Description: 
-    Method that opens the created sub configuration. 
- 
+Routine Description:
+    Method that opens the created sub configuration.
+
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
@@ -233,10 +267,10 @@ Routine Description:
 
     // Opaque Handle for the Sub Ndis Adapter Configuration given by ndis.sys
     NDIS_HANDLE               ndisConfigurationHandle;
-                              
+
     NT_ASSERT(m_ParentNxConfiguration);
 
-    NdisOpenConfigurationKeyByName(&ndisStatus, 
+    NdisOpenConfigurationKeyByName(&ndisStatus,
                                    m_ParentNxConfiguration->m_NdisConfigurationHandle,
                                    (PNDIS_STRING)SubConfigurationName,
                                    &ndisConfigurationHandle);
@@ -249,7 +283,7 @@ Routine Description:
     }
 
     m_NdisConfigurationHandle = ndisConfigurationHandle;
-    
+
     status = STATUS_SUCCESS;
 
     FuncExit(FLAG_CONFIGURATION);
@@ -271,8 +305,8 @@ NxConfiguration::Close(
     )
 {
     //
-    // For this object Close is equivalent to Delete. 
-    // The Cleanup Callback closes the configuration. 
+    // For this object Close is equivalent to Delete.
+    // The Cleanup Callback closes the configuration.
     //
     WdfObjectDelete(GetFxObject());
 }
@@ -314,28 +348,27 @@ NxConfiguration::QueryUlong(
 Routine Description:
 
     This method is queries a Ulong value from the Adapter Configuration
- 
+
 Arguments:
 
     Flags - A value defined in the NET_CONFIGURATION_QUERY_ULONG_FLAGS enum
- 
+
     ValueName - Name of the Ulong to be querried.
- 
+
     Value - Address of the memory where the querried ULONG would be written
- 
+
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
-    
+
     NTSTATUS status;
-    NDIS_STATUS ndisStatus;
     PNDIS_CONFIGURATION_PARAMETER ndisConfigurationParam;
     NDIS_PARAMETER_TYPE ndisParamType;
 
     *Value = 0;
 
     switch (Flags) {
-    case NET_CONFIGURATION_QUERY_ULONG_NO_FLAGS: 
+    case NET_CONFIGURATION_QUERY_ULONG_NO_FLAGS:
         ndisParamType = NdisParameterInteger;
         break;
     case NET_CONFIGURATION_QUERY_ULONG_MAY_BE_STORED_AS_HEX_STRING:
@@ -349,25 +382,13 @@ Arguments:
         return status;
     }
 
-    NdisWdfReadConfiguration(&ndisStatus,
-                             &ndisConfigurationParam,
-                             m_NdisConfigurationHandle,
-                             (PNDIS_STRING)ValueName,
-                             ndisParamType);
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        ReadConfiguration(&ndisConfigurationParam, ValueName, ndisParamType));
 
-    status = NdisConvertNdisStatusToNtStatus(ndisStatus);
-
-    if (!NT_SUCCESS(status)) {
+    if ((NdisParameterInteger != ndisConfigurationParam->ParameterType) &&
+        (NdisParameterHexInteger != ndisConfigurationParam->ParameterType)) {
         LogError(GetRecorderLog(), FLAG_CONFIGURATION,
-                 "NdisWdfReadConfiguration failed with status %!STATUS! ndisStatus %!NDIS_STATUS!", status, ndisStatus);
-        FuncExit(FLAG_CONFIGURATION);
-        return status;
-    }
-
-    if ((ndisParamType != NdisParameterInteger) && 
-        (ndisParamType != NdisParameterHexInteger)) {
-        LogError(GetRecorderLog(), FLAG_CONFIGURATION,
-                 "NdisWdfReadConfiguration succeeded but returned data of incorrect type %!NDIS_PARAMETER_TYPE!", ndisParamType);
+                 "ReadConfiguration returned data of type %!NDIS_PARAMETER_TYPE!, but the caller requested an Integer type", ndisConfigurationParam->ParameterType);
         FuncExit(FLAG_CONFIGURATION);
         return STATUS_OBJECT_TYPE_MISMATCH;
     }
@@ -378,7 +399,7 @@ Arguments:
                "Read Configuration Value %wZ : %d", ValueName, *Value);
 
     status = STATUS_SUCCESS;
-    
+
     FuncExit(FLAG_CONFIGURATION);
     return status;
 }
@@ -395,49 +416,39 @@ NxConfiguration::QueryString(
 Routine Description:
 
     This method is queries a String value from the Adapter Configuration
- 
+
 Arguments:
 
     ValueName - Name of the String to be querried.
- 
+
     StringAttributes - optional WDF_OBJECT_ATTRIBUTES for the string
- 
-    WdfString - Output WDFSTRING object. 
- 
+
+    WdfString - Output WDFSTRING object.
+
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
-    
+
     NTSTATUS status;
-    NDIS_STATUS ndisStatus;
     PNDIS_CONFIGURATION_PARAMETER ndisConfigurationParam;
     WDF_OBJECT_ATTRIBUTES attribs;
 
-    NdisWdfReadConfiguration(&ndisStatus,
-                             &ndisConfigurationParam,
-                             m_NdisConfigurationHandle,
-                             (PNDIS_STRING)ValueName,
-                             NdisParameterString);
-    
-    status = NdisConvertNdisStatusToNtStatus(ndisStatus);
-
-    if (!NT_SUCCESS(status)) {
-        LogError(GetRecorderLog(), FLAG_CONFIGURATION,
-                 "NdisWdfReadConfiguration failed with status %!STATUS! ndisStatus %!NDIS_STATUS!", status, ndisStatus);
-        FuncExit(FLAG_CONFIGURATION);
-        return status;
-    }
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        ReadConfiguration(
+            &ndisConfigurationParam,
+            ValueName,
+            NdisParameterString));
 
     if (NdisParameterString != ndisConfigurationParam->ParameterType) {
         LogError(GetRecorderLog(), FLAG_CONFIGURATION,
-                 "The Read Parameter is not of type String however is of type %!NDIS_PARAMETER_TYPE!",
+                 "ReadConfiguration returned data of type %!NDIS_PARAMETER_TYPE!, but the caller requested a String type",
                  ndisConfigurationParam->ParameterType);
         FuncExit(FLAG_CONFIGURATION);
         status = STATUS_OBJECT_TYPE_MISMATCH;
         return status;
     }
 
-    LogVerbose(GetRecorderLog(), FLAG_CONFIGURATION, "Read Configuratration Value %wZ : %wZ", 
+    LogVerbose(GetRecorderLog(), FLAG_CONFIGURATION, "Read Configuratration Value %wZ : %wZ",
                ValueName, (PUNICODE_STRING)&ndisConfigurationParam->ParameterData.StringData);
 
     //
@@ -447,7 +458,7 @@ Arguments:
     if (StringAttributes == WDF_NO_OBJECT_ATTRIBUTES) {
         WDF_OBJECT_ATTRIBUTES_INIT(&attribs);
         StringAttributes = &attribs;
-    } 
+    }
 
     //
     // If the client didn't specify a parent object explicitly
@@ -457,7 +468,7 @@ Arguments:
         StringAttributes->ParentObject = GetFxObject();
     }
 
-    status = WdfStringCreate((PCUNICODE_STRING)&ndisConfigurationParam->ParameterData.StringData, 
+    status = WdfStringCreate((PCUNICODE_STRING)&ndisConfigurationParam->ParameterData.StringData,
                              StringAttributes,
                              WdfString);
 
@@ -465,7 +476,7 @@ Arguments:
         LogError(GetRecorderLog(), FLAG_CONFIGURATION,
                  "WdfStringCreate failed %!STATUS!", status);
     }
-    
+
     FuncExit(FLAG_CONFIGURATION);
     return status;
 }
@@ -482,56 +493,46 @@ NxConfiguration::QueryMultiString(
 Routine Description:
 
     This method is queries a Multi String value from the Adapter Configuration
- 
+
 Arguments:
 
     ValueName - Name of the String to be querried.
- 
+
     StringsAttributes - For each string in the multi-string, a WDFSTRING object
         is created and added to the input Collection. The StringsAttributes is
         used while allocating the string objects.
         These string objects are parented to the collection object unless
         the client explicitly specifies the Parent.
- 
-    Collection - Input collection to which the WDFSTRING objects are added. 
- 
+
+    Collection - Input collection to which the WDFSTRING objects are added.
+
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
-    
+
     NTSTATUS status;
-    NDIS_STATUS ndisStatus;
     PNDIS_CONFIGURATION_PARAMETER ndisConfigurationParam;
 
-    NdisWdfReadConfiguration(&ndisStatus,
-                             &ndisConfigurationParam,
-                             m_NdisConfigurationHandle,
-                             (PNDIS_STRING)ValueName,
-                             NdisParameterMultiString);
-
-    status = NdisConvertNdisStatusToNtStatus(ndisStatus);
-
-    if (!NT_SUCCESS(status)) {
-        LogError(GetRecorderLog(), FLAG_CONFIGURATION,
-                 "NdisWdfReadConfiguration failed with status %!STATUS! ndisStatus %!NDIS_STATUS!", status, ndisStatus);
-        FuncExit(FLAG_CONFIGURATION);
-        return status;
-    }
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        ReadConfiguration(
+            &ndisConfigurationParam,
+            ValueName,
+            NdisParameterMultiString));
 
     if (NdisParameterMultiString != ndisConfigurationParam->ParameterType) {
         LogError(GetRecorderLog(), FLAG_CONFIGURATION,
-                 "The Read Parameter is not of type MultiString however is of type %!NDIS_PARAMETER_TYPE!",
+                 "ReadConfiguration returned data of type %!NDIS_PARAMETER_TYPE!, but the caller requested a MultiString type",
                  ndisConfigurationParam->ParameterType);
         FuncExit(FLAG_CONFIGURATION);
         return STATUS_OBJECT_TYPE_MISMATCH;
     }
 
-    status = NxWdfCollectionAddMultiSz(Collection, 
+    status = NxWdfCollectionAddMultiSz(Collection,
                                        StringsAttributes,
                                        (PWCHAR)ndisConfigurationParam->ParameterData.StringData.Buffer,
                                        ndisConfigurationParam->ParameterData.StringData.Length,
                                        GetRecorderLog());
-    
+
     FuncExit(FLAG_CONFIGURATION);
     return status;
 }
@@ -550,48 +551,38 @@ NxConfiguration::QueryBinary(
 Routine Description:
 
     This method is queries a binary datat from the Adapter Configuration
- 
+
 Arguments:
 
     ValueName - Name of the Data to be querried.
- 
+
     PoolType - PoolType as described by the documentation of WdfMemoryCreate
- 
+
     MemoryAttributes - optional WDF_OBJECT_ATTRIBUTES for the memory object
         that is allocated and returned as part of this function.
         The memory objects is parented to the Configuration object unless
         the client explicitly specifies the Parent.
- 
-    WdfMemory - Output WDFMEMORY object representing the Data read 
- 
+
+    WdfMemory - Output WDFMEMORY object representing the Data read
+
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
-    
+
     NTSTATUS status;
-    NDIS_STATUS ndisStatus;
     PNDIS_CONFIGURATION_PARAMETER ndisConfigurationParam;
     WDF_OBJECT_ATTRIBUTES attribs;
     PVOID buffer;
 
-    NdisWdfReadConfiguration(&ndisStatus,
-                             &ndisConfigurationParam,
-                             m_NdisConfigurationHandle,
-                             (PNDIS_STRING)ValueName,
-                             NdisParameterBinary);
-
-    status = NdisConvertNdisStatusToNtStatus(ndisStatus);
-
-    if (!NT_SUCCESS(status)) {
-        LogError(GetRecorderLog(), FLAG_CONFIGURATION,
-                 "NdisWdfReadConfiguration failed with status %!STATUS! ndisStatus %!NDIS_STATUS!", status, ndisStatus);
-        FuncExit(FLAG_CONFIGURATION);
-        return status;
-    }
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        ReadConfiguration(
+            &ndisConfigurationParam,
+            ValueName,
+            NdisParameterBinary));
 
     if (NdisParameterBinary != ndisConfigurationParam->ParameterType) {
         LogError(GetRecorderLog(), FLAG_CONFIGURATION,
-                 "The Read Parameter is not of type Binary however is of type %!NDIS_PARAMETER_TYPE!",
+                 "ReadConfiguration returned data of type %!NDIS_PARAMETER_TYPE!, but the caller requested a Binary type",
                  ndisConfigurationParam->ParameterType);
         FuncExit(FLAG_CONFIGURATION);
         status = STATUS_NOT_FOUND;
@@ -605,7 +596,7 @@ Arguments:
     if (MemoryAttributes == WDF_NO_OBJECT_ATTRIBUTES) {
         WDF_OBJECT_ATTRIBUTES_INIT(&attribs);
         MemoryAttributes = &attribs;
-    } 
+    }
 
     //
     // If the client didn't specify a parent object explicitly
@@ -616,17 +607,17 @@ Arguments:
     }
 
     //
-    // Create a new memory object. 
-    // We dont use WdfMemoryCreatePreallocated since the lifetime of the 
-    // memory object being created may be different from the 
-    // memory returned by NdisWdfReadConfiguration. Instead we crate a 
-    // new memory object and copy the contents to it.  
+    // Create a new memory object.
+    // We dont use WdfMemoryCreatePreallocated since the lifetime of the
+    // memory object being created may be different from the
+    // memory returned by NdisWdfReadConfiguration. Instead we crate a
+    // new memory object and copy the contents to it.
     //
-    status = WdfMemoryCreate(MemoryAttributes, 
-                             PoolType, 
-                             0,  /*Use Default Tag for this Driver*/                            
+    status = WdfMemoryCreate(MemoryAttributes,
+                             PoolType,
+                             0,  /*Use Default Tag for this Driver*/
                              ndisConfigurationParam->ParameterData.BinaryData.Length,
-                             WdfMemory, 
+                             WdfMemory,
                              &buffer);
 
     if (!NT_SUCCESS(status)) {
@@ -634,7 +625,7 @@ Arguments:
                  "WdfMemoryCreate failed %!STATUS!", status);
         FuncExit(FLAG_CONFIGURATION);
     }
-    
+
     RtlCopyMemory(buffer,
                   ndisConfigurationParam->ParameterData.BinaryData.Buffer,
                   ndisConfigurationParam->ParameterData.BinaryData.Length);
@@ -646,85 +637,69 @@ Arguments:
 _Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS
-NxConfiguration::QueryNetworkAddress(
-    _In_     ULONG                                 BufferLength,
-    _Out_writes_bytes_to_(BufferLength,*ResultLength)
-             PVOID                                 NetworkAddressBuffer,
-    _Out_    PULONG                                ResultLength
+NxConfiguration::QueryLinkLayerAddress(
+    _Out_    NET_ADAPTER_LINK_LAYER_ADDRESS         *LinkLayerAddress
     )
 /*++
 Routine Description:
 
-    This method is queries the network address (typically the mac) address
-    of the adapter
- 
+    This method queries from registry the link layer address of the adapter
+
 Arguments:
-    BufferLength - The size, in bytes, of the buffer that
-        is pointed to by NetworkAddressBuffer.
- 
-    NetworkAddressBuffer [out] - A caller-supplied pointer to a caller-allocated
-        buffer that receives the requested network address as a byte array.
-        The pointer can be NULL if the BufferLength parameter is zero.
- 
-    ResultLength [out] - A caller-supplied location that, on return,
-        contains the size, in bytes, of the information that the method stored
-        in PropertyBuffer. If the function's return value is
-        STATUS_BUFFER_TOO_SMALL, this location receives the required buffer size.
- 
-Returns : 
-    STATUS_BUFFER_TOO_SMALL - If the supplied buffer is too small to recieve
-        the information. 
+
+    Configuration - Pointer to the Adapter Configuration opened
+    in a prior call to NetAdapterOpenConfiguration or
+    NetConfigurationOpenSubConfiguration
+
+    LinkLayerAddress [out] - A caller-supplied location that, on return,
+    contains the queried link layer address.
+
+Returns:
+
+    STATUS_BUFFER_OVERFLOW - Returned if the value stored in the registry
+    was larger than NDIS_MAX_PHYS_ADDRESS_LENGTH
 
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
-    
+
     NTSTATUS status;
     NDIS_STATUS ndisStatus;
-    PVOID networkAddressBufferLocal;
-    UINT resultLengthLocal;
-
-    *ResultLength = 0;
+    PVOID networkAddressBuffer;
+    UINT resultLength;
 
     NdisReadNetworkAddress(&ndisStatus,
-                           &networkAddressBufferLocal,
-                           &resultLengthLocal,
+                           &networkAddressBuffer,
+                           &resultLength,
                            m_NdisConfigurationHandle);
 
     status = NdisConvertNdisStatusToNtStatus(ndisStatus);
 
     if (!NT_SUCCESS(status)) {
 
-        NT_ASSERT(status != STATUS_BUFFER_TOO_SMALL);
-
-        //
-        // As per our API contract, the STATUS_BUFFER_TOO_SMALL has 
-        // special meaning. We cannot ensure that NDIS would not return
-        // that particular status to us in this call. 
-        //
-        if (status == STATUS_BUFFER_TOO_SMALL) {
-            status = STATUS_INSUFFICIENT_RESOURCES;
-        }
-
         LogInfo(GetRecorderLog(), FLAG_CONFIGURATION,
-                 "Failed to read network address. Likely there is no address stored for this adapter. Status %!STATUS! ndisStatus %!NDIS_STATUS!", 
-                  status, 
+                 "Failed to read network address. Likely there is no address stored for this adapter. Status %!STATUS! ndisStatus %!NDIS_STATUS!",
+                  status,
                   ndisStatus);
 
         FuncExit(FLAG_CONFIGURATION);
         return status;
     }
 
-    *ResultLength = (ULONG)resultLengthLocal;
+    if (resultLength > NDIS_MAX_PHYS_ADDRESS_LENGTH) {
+        LogError(GetRecorderLog(), FLAG_CONFIGURATION,
+            "NdisReadNetworkAddress returned too many bytes, resultLength=%u, NDIS_MAX_PHYS_ADDRESS_LENGTH=%u",
+            resultLength,
+            NDIS_MAX_PHYS_ADDRESS_LENGTH);
 
-    if (resultLengthLocal > BufferLength) {
         FuncExit(FLAG_CONFIGURATION);
-        return STATUS_BUFFER_TOO_SMALL;
+        return STATUS_BUFFER_OVERFLOW;
     }
 
-    RtlCopyMemory(NetworkAddressBuffer, 
-                  networkAddressBufferLocal, 
-                  resultLengthLocal);
+    NET_ADAPTER_LINK_LAYER_ADDRESS_INIT(
+        LinkLayerAddress,
+        static_cast<USHORT>(resultLength),
+        static_cast<UCHAR *>(networkAddressBuffer));
 
     FuncExit(FLAG_CONFIGURATION);
     return status;
@@ -741,17 +716,17 @@ NxConfiguration::AssignUlong(
 Routine Description:
 
     This method is assigns a Ulong value to the Adapter Configuration
- 
+
 Arguments:
 
     ValueName - Name of the Ulong to be assigned.
- 
+
     Value - The value of the ULONG
- 
+
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
-    
+
     NTSTATUS status;
     NDIS_STATUS ndisStatus;
     NDIS_CONFIGURATION_PARAMETER ndisConfigurationParam;
@@ -760,7 +735,7 @@ Arguments:
 
     ndisConfigurationParam.ParameterType = NdisParameterInteger;
     ndisConfigurationParam.ParameterData.IntegerData = Value;
-   
+
     NdisWriteConfiguration(&ndisStatus,
                            m_NdisConfigurationHandle,
                            (PNDIS_STRING)ValueName,
@@ -776,7 +751,7 @@ Arguments:
     }
 
     status = STATUS_SUCCESS;
-    
+
     FuncExit(FLAG_CONFIGURATION);
     return status;
 }
@@ -792,28 +767,28 @@ NxConfiguration::AssignUnicodeString(
 Routine Description:
 
     This method is assigns a Ulong value to the Adapter Configuration
- 
+
 Arguments:
 
     ValueName - Name of the Unicode String to be assigned.
- 
+
     Value - The Unicode String to be assigned
- 
+
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
-    
+
     NTSTATUS status;
     NDIS_STATUS ndisStatus;
     NDIS_CONFIGURATION_PARAMETER ndisConfigurationParam;
 
     RtlZeroMemory(&ndisConfigurationParam, sizeof(NDIS_CONFIGURATION_PARAMETER));
 
-    ndisConfigurationParam.ParameterType = NdisParameterString; 
+    ndisConfigurationParam.ParameterType = NdisParameterString;
     ndisConfigurationParam.ParameterData.StringData.Buffer = Value->Buffer;
     ndisConfigurationParam.ParameterData.StringData.Length = Value->Length;
     ndisConfigurationParam.ParameterData.StringData.MaximumLength = Value->MaximumLength;
-   
+
     NdisWriteConfiguration(&ndisStatus,
                            m_NdisConfigurationHandle,
                            (PNDIS_STRING)ValueName,
@@ -829,7 +804,7 @@ Arguments:
     }
 
     status = STATUS_SUCCESS;
-    
+
     FuncExit(FLAG_CONFIGURATION);
     return status;
 }
@@ -847,25 +822,25 @@ NxConfiguration::AssignBinary(
 Routine Description:
 
     This method is assigns binary data to the Adapter Configuration
- 
+
 Arguments:
 
     ValueName - Name of the Binary Data to be assigned.
- 
+
     Buffer - The buffer holding the binary data
- 
-    BufferLength - The length of the buffer in bytes. 
+
+    BufferLength - The length of the buffer in bytes.
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
-    
+
     NTSTATUS status;
     NDIS_STATUS ndisStatus;
     NDIS_CONFIGURATION_PARAMETER ndisConfigurationParam;
 
     RtlZeroMemory(&ndisConfigurationParam, sizeof(NDIS_CONFIGURATION_PARAMETER));
 
-    ndisConfigurationParam.ParameterType = NdisParameterBinary; 
+    ndisConfigurationParam.ParameterType = NdisParameterBinary;
 
     if (BufferLength >= USHORT_MAX) {
         LogError(GetRecorderLog(), FLAG_CONFIGURATION,
@@ -876,7 +851,7 @@ Arguments:
 
     ndisConfigurationParam.ParameterData.BinaryData.Buffer = Buffer;
     ndisConfigurationParam.ParameterData.BinaryData.Length = (USHORT)BufferLength;
-   
+
     NdisWriteConfiguration(&ndisStatus,
                            m_NdisConfigurationHandle,
                            (PNDIS_STRING)ValueName,
@@ -892,7 +867,7 @@ Arguments:
     }
 
     status = STATUS_SUCCESS;
-    
+
     FuncExit(FLAG_CONFIGURATION);
     return status;
 }
@@ -908,39 +883,39 @@ NxConfiguration::AssignMultiString(
 Routine Description:
 
     This method is assigns a Multi String to the Adapter Configuration
- 
+
 Arguments:
 
     ValueName - Name of the Binary Data to be assigned.
- 
+
     StringsCollection - Collection of WDFSTRINGs that would form the
         multisz string
- 
-Comments: 
- 
+
+Comments:
+
     This routine generates a MULTI_SZ style string from all the input strings
     present in the WDFCOLLECTION.
- 
-    Step1 : 
+
+    Step1 :
     Loop through all the WDFSTRINGs in the
     input collection and determine the size of final multi string
- 
+
     Step2 :
     Allocate the buffer to hold the Multi String
- 
+
     Step3 :
     Loop through the WDFSTRINGs in the collections again and this time
     build the multi string
-  
+
     The resulting string is of the following form
     <String1>W'\0'<String2>W'\0'...<StringN>W'\0'W'\0'
- 
+
     Step4 :
     Call NdisWriteConfiguration to assing the multi string
 --*/
 {
     FuncEntry(FLAG_CONFIGURATION);
-    
+
     NTSTATUS status;
     NDIS_STATUS ndisStatus;
     NDIS_CONFIGURATION_PARAMETER ndisConfigurationParam;
@@ -951,19 +926,19 @@ Comments:
     ULONG index;
 
     numberOfStrings = WdfCollectionGetCount(StringsCollection);
-    ULONG cbLength;  
+    ULONG cbLength;
 
     WDFSTRING wdfstring;
     UNICODE_STRING unicodeString;
 
-    // 
-    // ** Step1 : 
+    //
+    // ** Step1 :
     // Loop through all the WDFSTRINGs in the
     // input collection and determine the size of final multi string
-    // 
+    //
 
     //
-    // Account for the 2nd Trailing NULL. 
+    // Account for the 2nd Trailing NULL.
     //
     cbLength = sizeof(WCHAR);
 
@@ -996,15 +971,15 @@ Comments:
 
     }
 
-    // 
+    //
     // ** Step2 :
     // Allocate the buffer to hold the Multi String
-    // 
+    //
 
     strBufferLength = cbLength;
 
-    strBuffer = (PUCHAR)ExAllocatePoolWithTag(NonPagedPoolNx, 
-                                              strBufferLength, 
+    strBuffer = (PUCHAR)ExAllocatePoolWithTag(NonPagedPoolNx,
+                                              strBufferLength,
                                               NETADAPTERCX_TAG);
 
     if (strBuffer == NULL) {
@@ -1015,16 +990,16 @@ Comments:
     }
 
     //
-    // Zero out the memory so that we dont have to explicitly program the 
-    // Null characters. 
+    // Zero out the memory so that we dont have to explicitly program the
+    // Null characters.
     //
     RtlZeroMemory(strBuffer, strBufferLength);
 
-    // 
+    //
     // ** Step3 :
     // Loop through the WDFSTRINGs in the collections again and this time
     // build the multi string
-    // 
+    //
 
     cbLength = 0;
 
@@ -1038,10 +1013,10 @@ Comments:
 
         if (cbLength + unicodeString.Length + sizeof(WCHAR) >= strBufferLength) {
             //
-            // Something Nasty Happened. The buffer we allocated 
+            // Something Nasty Happened. The buffer we allocated
             // to generate the multi string is not sufficient anymore.
             // Maybe the client changed the collection
-            // contents while we were processing this function, or there is 
+            // contents while we were processing this function, or there is
             // but in this function
             //
             LogError(GetRecorderLog(), FLAG_CONFIGURATION,
@@ -1049,9 +1024,9 @@ Comments:
             status = STATUS_BUFFER_OVERFLOW;
             goto Exit;
         }
-        
-        RtlCopyMemory(strBuffer + cbLength, 
-                      unicodeString.Buffer, 
+
+        RtlCopyMemory(strBuffer + cbLength,
+                      unicodeString.Buffer,
                       unicodeString.Length);
 
         cbLength += unicodeString.Length;
@@ -1080,24 +1055,24 @@ Comments:
         goto Exit;
     }
 
-    // 
+    //
     // ** Step4 :
     // Call NdisWriteConfiguration to assing the multi string
-    // 
+    //
 
     RtlZeroMemory(&ndisConfigurationParam, sizeof(NDIS_CONFIGURATION_PARAMETER));
 
-    ndisConfigurationParam.ParameterType = NdisParameterMultiString; 
+    ndisConfigurationParam.ParameterType = NdisParameterMultiString;
 
     //
-    // Build the StringData. 
+    // Build the StringData.
     // Note: It is ok to cast the ULONG cbLength to USHORT. We have already
     // checked above that the cbLength was smaller than the MAX_USHORT
     //
     ndisConfigurationParam.ParameterData.StringData.Buffer = (PWCH)strBuffer;
     ndisConfigurationParam.ParameterData.StringData.Length = (USHORT)cbLength;
     ndisConfigurationParam.ParameterData.StringData.MaximumLength = (USHORT)cbLength;
-   
+
     NdisWriteConfiguration(&ndisStatus,
                            m_NdisConfigurationHandle,
                            (PNDIS_STRING)ValueName,
@@ -1112,9 +1087,9 @@ Comments:
     }
 
     status = STATUS_SUCCESS;
-    
-Exit: 
-    
+
+Exit:
+
     if (strBuffer) {
         ExFreePool(strBuffer);
     }

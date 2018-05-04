@@ -1,24 +1,10 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxRequestQueue.hpp
 
 Abstract:
 
     This is the definition of the NxRequestQueue object.
-
-
-
-
-
-Environment:
-
-    kernel mode only
-
-Revision History:
 
 --*/
 
@@ -38,7 +24,7 @@ typedef class NxRequestQueue *PNxRequestQueue;
 class NxRequestQueue : public CFxObject<NETREQUESTQUEUE,
                                         NxRequestQueue,
                                         GetNxRequestQueueFromHandle,
-                                        false> 
+                                        false>
 {
 
 private:
@@ -48,7 +34,7 @@ private:
     PNX_PRIVATE_GLOBALS          m_NxPrivateGlobals;
 
     //
-    // A copy of the config structure that client passed in 
+    // A copy of the config structure that client passed in
     //
     NET_REQUEST_QUEUE_CONFIG     m_Config;
 
@@ -102,7 +88,7 @@ public:
         );
 
     RECORDER_LOG
-    GetRecorderLog() { 
+    GetRecorderLog() {
         return m_NxAdapter->GetRecorderLog();
     }
 
@@ -110,7 +96,7 @@ public:
     QueueNdisOidRequest(
         _In_ PNDIS_OID_REQUEST NdisOidRequest
         );
-    
+
     VOID
     DispatchRequest(
         _In_ PNxRequest NxRequest
@@ -140,7 +126,7 @@ Routine Description:
     This routine is just a wrapper around the _GetNxRequestQueueFromHandle function.
     To be able to define a the NxRequestQueue class above, we need a forward declaration of the
     accessor function. Since _GetNxRequestQueueFromHandle is defined by Wdf, we dont want to
-    assume a prototype of that function for the foward declaration. 
+    assume a prototype of that function for the foward declaration.
 
 --*/
 

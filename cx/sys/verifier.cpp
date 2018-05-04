@@ -1,30 +1,16 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-    Verifier.cpp
 
 Abstract:
     Contains verifier function's implementations
-
-
-
-
-Environment:
-    kernel mode only
-
-Revision History:
 
 --*/
 
 #include "Nx.hpp"
 
-extern "C" {
 #include "verifier.tmh"
-}
 
-#define NET_RING_BUFFER_FROM_NET_PACKET(_netpacket) (NET_RING_BUFFER *)((PUCHAR)(_netpacket) - (_netpacket)->Reserved2)
 #define NXQUEUE_FROM_RING_BUFFER(rb) ((NxQueue*)(rb)->OSReserved2[1])
 
 //
@@ -242,7 +228,7 @@ Verifier_VerifyNetRequest(
     _In_ PNxRequest          pNxRequest
     )
 {
-    switch (pNxRequest->m_NdisOidRequest->RequestType) 
+    switch (pNxRequest->m_NdisOidRequest->RequestType)
     {
         case NdisRequestSetInformation:
             __fallthrough;
@@ -266,7 +252,7 @@ Verifier_VerifyNetRequest(
 VOID
 Verifier_VerifyNotNull(
     _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
-    _In_ PVOID Ptr
+    _In_ void const * const Ptr
     )
 {
     if (!Ptr)
@@ -338,13 +324,13 @@ Verifier_VerifyQueueConfiguration(
     //
     // Currently only DefaultSequential and DefaultParallel Queues can
     // be created, and only one of each can be created per NxAdapter
-    // Verify that client isnt creating a duplicate queue. 
+    // Verify that client isnt creating a duplicate queue.
     //
 
-    switch (QueueConfig->Type) 
+    switch (QueueConfig->Type)
     {
         case NetRequestQueueDefaultSequential:
-            if (nxAdapter->m_DefaultRequestQueue != NULL) 
+            if (nxAdapter->m_DefaultRequestQueue != NULL)
             {
                 Verifier_ReportViolation(
                     PrivateGlobals,
@@ -356,7 +342,7 @@ Verifier_VerifyQueueConfiguration(
             break;
 
         case NetRequestQueueDefaultParallel:
-            if (nxAdapter->m_DefaultDirectRequestQueue != NULL) 
+            if (nxAdapter->m_DefaultDirectRequestQueue != NULL)
             {
                 Verifier_ReportViolation(
                     PrivateGlobals,
@@ -384,13 +370,13 @@ Verifier_VerifyQueueConfiguration(
     //
     // The Request queues allow the client to register handlers for varous requests
     // using the NET_REQUEST_QUEUE_CONFIG_ADD_XXX_HANDLER
-    // The registration requires memory allocation and thus can fail. To keep the 
+    // The registration requires memory allocation and thus can fail. To keep the
     // client API simple, we don't return a failure in those APIs, we just
     // make a note of that error in the AddHandlerError bit field.
-    // This routine fails the Queue Creation in case any bit of the 
+    // This routine fails the Queue Creation in case any bit of the
     // AddHandlerError is set.
     //
-    if (QueueConfig->AddHandlerError.AsUchar != 0) 
+    if (QueueConfig->AddHandlerError.AsUchar != 0)
     {
         NET_REQUEST_QUEUE_ADD_HANDLER_ERROR error;
 
@@ -398,7 +384,7 @@ Verifier_VerifyQueueConfiguration(
 
         status = STATUS_UNSUCCESSFUL;
 
-        if (error.AllocationFailed) 
+        if (error.AllocationFailed)
         {
             Verifier_ReportViolation(
                 PrivateGlobals,
@@ -411,7 +397,7 @@ Verifier_VerifyQueueConfiguration(
             error.AllocationFailed = 0;
         }
 
-        if (error.CallbackNull) 
+        if (error.CallbackNull)
         {
             Verifier_ReportViolation(
                 PrivateGlobals,
@@ -424,7 +410,7 @@ Verifier_VerifyQueueConfiguration(
             error.CallbackNull = 0;
         }
 
-        if (error.AsUchar != 0) 
+        if (error.AsUchar != 0)
         {
             Verifier_ReportViolation(
                 PrivateGlobals,
@@ -553,16 +539,6 @@ Verifier_VerifyLinkLayerCapabilities(
     _In_ PNET_ADAPTER_LINK_LAYER_CAPABILITIES LinkLayerCapabilities
     )
 {
-    if (LinkLayerCapabilities->PhysicalAddress.Length > NDIS_MAX_PHYS_ADDRESS_LENGTH)
-    {
-        Verifier_ReportViolation(
-            PrivateGlobals,
-            VerifierAction_BugcheckAlways,
-            FailureCode_MacAddressLengthTooLong,
-            LinkLayerCapabilities->PhysicalAddress.Length,
-            NDIS_MAX_PHYS_ADDRESS_LENGTH);
-    }
-
     if (!VERIFIER_CHECK_FLAGS(LinkLayerCapabilities->SupportedStatistics, NET_ADAPTER_STATISTICS_SUPPORTED_FLAGS))
     {
         Verifier_ReportViolation(
@@ -581,6 +557,25 @@ Verifier_VerifyLinkLayerCapabilities(
             FailureCode_InvalidLinkLayerCapabilities,
             0, // What field has invalid flags
             LinkLayerCapabilities->SupportedPacketFilters);
+    }
+}
+
+VOID
+Verifier_VerifyLinkLayerAddress(
+    _In_ NX_PRIVATE_GLOBALS *PrivateGlobals,
+    _In_ NET_ADAPTER_LINK_LAYER_ADDRESS *LinkLayerAddress
+    )
+{
+    if (LinkLayerAddress->Length > NDIS_MAX_PHYS_ADDRESS_LENGTH)
+    {
+        // The NIC driver tried to set a link layer address with a length larger
+        // than the maximum allowed by NDIS
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_MacAddressLengthTooLong,
+            LinkLayerAddress->Length,
+            NDIS_MAX_PHYS_ADDRESS_LENGTH);
     }
 }
 
@@ -683,25 +678,13 @@ Verifier_VerifyQueryNetworkAddressParameters(
     _In_ PVOID NetworkAddressBuffer
     )
 {
-    if ((BufferLength == 0) && (NetworkAddressBuffer != NULL)) 
+    if ((BufferLength == 0) || (NetworkAddressBuffer == NULL))
     {
         Verifier_ReportViolation(
             PrivateGlobals,
             VerifierAction_DbgBreakIfDebuggerPresent,
             FailureCode_QueryNetworkAddressInvalidParameter,
-            0, // If BufferLength is 0, NetworkAddressBuffer should be NULL
-            0);
-
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    if ((BufferLength != 0) && (NetworkAddressBuffer == NULL)) 
-    {
-        Verifier_ReportViolation(
-            PrivateGlobals,
-            VerifierAction_DbgBreakIfDebuggerPresent,
-            FailureCode_QueryNetworkAddressInvalidParameter,
-            1, // If BufferLength is not 0, NetworkAddressBuffer should be non NULL
+            0,
             0);
 
         return STATUS_INVALID_PARAMETER;
@@ -711,34 +694,43 @@ Verifier_VerifyQueryNetworkAddressParameters(
 }
 
 VOID
-Verifier_VerifyNetPacketUniqueType(
+Verifier_VerifyNetPacketContextToken(
     _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
+    _In_ NET_DATAPATH_DESCRIPTOR const * Descriptor,
     _In_ NET_PACKET* NetPacket,
-    _In_ PCNET_CONTEXT_TYPE_INFO UniqueType
+    _In_ PNET_PACKET_CONTEXT_TOKEN Token
     )
 {
-    auto rb = NET_RING_BUFFER_FROM_NET_PACKET(NetPacket);
-    NxQueue *queue = NXQUEUE_FROM_RING_BUFFER(rb);
     UNREFERENCED_PARAMETER(NetPacket);
 
-    if (queue->m_clientContext == 0)
+    // If verifier is enabled, make sure the packet context
+    // token is valid
+    if (PrivateGlobals->CxVerifierOn)
     {
-        // Packet has no context
-        Verifier_ReportViolation(
-            PrivateGlobals,
-            VerifierAction_BugcheckAlways,
-            FailureCode_NetPacketDoesNotHaveContext,
-            0,
-            0);
-    }
+        auto rb = NET_DATAPATH_DESCRIPTOR_GET_PACKET_RING_BUFFER(Descriptor);
+        NxQueue *queue = NXQUEUE_FROM_RING_BUFFER(rb);
 
-    if (queue->m_clientContext != UniqueType)
-    {
-        Verifier_ReportViolation(PrivateGlobals,
-            VerifierAction_BugcheckAlways,
-            FailureCode_NetPacketContextTypeMismatch,
-            (ULONG_PTR)queue->m_clientContext,
-            (ULONG_PTR)UniqueType);
+        bool tokenFound = false;
+        for (auto& contextInfo : queue->GetClientContextInfo())
+        {
+            if ((ULONG_PTR)Token == (ULONG_PTR)&contextInfo)
+            {
+                tokenFound = true;
+                break;
+            }
+        }
+
+        if (!tokenFound)
+        {
+            // Token was not found in the queue that owns the
+            // NET_PACKET, this is not valid
+            Verifier_ReportViolation(
+                PrivateGlobals,
+                VerifierAction_BugcheckAlways,
+                FailureCode_InvalidPacketContextToken,
+                (ULONG_PTR)Token,
+                0);
+        }
     }
 }
 
@@ -785,13 +777,14 @@ Verifier_VerifyQueueInitContext(
             0);
     }
 
-    if (NetQueueInit->CreatedQueueObject)
+    auto const index = NetQueueInit->QueueContextIndex;
+    if (NetQueueInit->QueueContexts[index].CreatedQueueObject)
     {
         Verifier_ReportViolation(
             PrivateGlobals,
             VerifierAction_BugcheckAlways,
             FailureCode_QueueAlreadyCreated,
-            (ULONG_PTR)NetQueueInit->CreatedQueueObject.get(), // the existing queue object
+            (ULONG_PTR)NetQueueInit->QueueContexts[index].CreatedQueueObject.get(),
             0);
     }
 }
@@ -833,18 +826,6 @@ Verifier_VerifyNetRxQueueConfiguration(
             FailureCode_NetQueueInvalidConfiguration,
             0,
             0);
-    }
-
-    // A valid alignment requirement is either the default value or in the format 2^n - 1
-    if (Configuration->AlignmentRequirement != NET_RX_QUEUE_DEFAULT_ALIGNMENT &&
-       (Configuration->AlignmentRequirement & (Configuration->AlignmentRequirement + 1)) != 0)
-    {
-        Verifier_ReportViolation(
-            PrivateGlobals,
-            VerifierAction_BugcheckAlways,
-            FailureCode_NetQueueInvalidConfiguration,
-            1,
-            Configuration->AlignmentRequirement);
     }
 }
 
@@ -900,41 +881,12 @@ Verifier_VerifyObjectAttributesContextSize(
 }
 
 VOID
-Verifier_VerifyDatapathCapabilities(
-    _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
-    _In_ PNET_ADAPTER_DATAPATH_CAPABILITIES DataPathCapabilities
-    )
-{
-    // Make sure the adapter has at least one queue
-    if ((DataPathCapabilities->NumTxQueues) == 0 &&
-        (DataPathCapabilities->NumRxQueues) == 0)
-    {
-        Verifier_ReportViolation(PrivateGlobals,
-            VerifierAction_BugcheckAlways,
-            FailureCode_InvalidDatapathCapabilities,
-            0,
-            0);
-    }
-}
-
-VOID
 Verifier_VerifyNetAdapterConfig(
     _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
     _In_ PNET_ADAPTER_CONFIG AdapterConfig
     )
 {
-
-    if (AdapterConfig->Type != NET_ADAPTER_DRIVER_TYPE_MINIPORT) 
-    {
-        Verifier_ReportViolation(
-            PrivateGlobals,
-            VerifierAction_BugcheckAlways,
-            FailureCode_InvalidNetAdapterConfig,
-            0,
-            0);
-    }
-
-    if (AdapterConfig->EvtAdapterSetCapabilities == NULL) 
+    if (AdapterConfig->EvtAdapterSetCapabilities == NULL)
     {
         Verifier_ReportViolation(
             PrivateGlobals,
@@ -953,5 +905,414 @@ Verifier_VerifyNetAdapterConfig(
             FailureCode_InvalidNetAdapterConfig,
             0,
             0);
+    }
+}
+
+VOID
+Verifier_VerifyReceiveScalingCapabilities(
+    _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
+    _In_ PCNET_ADAPTER_RECEIVE_SCALING_CAPABILITIES Capabilities
+    )
+{
+    if (! RTL_IS_POWER_OF_TWO(Capabilities->IndirectionTableSize))
+    {
+        Verifier_ReportViolation(PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_NotPowerOfTwo,
+            Capabilities->IndirectionTableSize,
+            0);
+    }
+
+    if (! RTL_IS_POWER_OF_TWO(Capabilities->NumberOfQueues))
+    {
+        Verifier_ReportViolation(PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_NotPowerOfTwo,
+            Capabilities->NumberOfQueues,
+            0);
+    }
+
+    if (Capabilities->ReceiveScalingHashTypes >=
+        (NetAdapterReceiveScalingHashTypeToeplitz << 1))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidReceiveScalingHashType,
+            Capabilities->ReceiveScalingHashTypes,
+            0);
+    }
+
+    if (Capabilities->ReceiveScalingProtocolTypes >=
+        (NetAdapterReceiveScalingProtocolTypeUdp << 1))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidReceiveScalingProtocolType,
+            Capabilities->ReceiveScalingProtocolTypes,
+            0);
+    }
+
+    if (Capabilities->ReceiveScalingEncapsulationTypes.Outer >=
+        (NetAdapterReceiveScalingEncapsulationTypeVXLan << 1))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidReceiveScalingEncapsulationType,
+            Capabilities->ReceiveScalingEncapsulationTypes.Outer,
+            0);
+    }
+
+    if (Capabilities->ReceiveScalingEncapsulationTypes.Inner >=
+        (NetAdapterReceiveScalingEncapsulationTypeVXLan << 1))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidReceiveScalingEncapsulationType,
+            Capabilities->ReceiveScalingEncapsulationTypes.Inner,
+            0);
+    }
+}
+
+VOID
+Verifier_VerifyNetPacketContextAttributes(
+    _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
+    _In_ PNET_PACKET_CONTEXT_ATTRIBUTES PacketContextAttributes
+)
+{
+    if (PacketContextAttributes->ContextSizeOverride != 0 &&
+        PacketContextAttributes->ContextSizeOverride < PacketContextAttributes->ContextTypeInfo->Size)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidPacketContextSizeOverride,
+            (ULONG_PTR)PacketContextAttributes->ContextSizeOverride,
+            (ULONG_PTR)PacketContextAttributes->ContextTypeInfo->Size);
+    }
+}
+
+VOID
+Verifier_VerifyNetPacketExtensionName(
+    _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
+    _In_ PCWSTR ExtensionName
+)
+{
+    if ((wcsstr(ExtensionName, L"ms_") == ExtensionName) &&
+        (!(wcscmp(ExtensionName, NET_PACKET_EXTENSION_CHECKSUM_NAME) == 0 ||
+           wcscmp(ExtensionName, NET_PACKET_EXTENSION_LSO_NAME) == 0)))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidNetPacketExtensionName,
+            (ULONG_PTR)ExtensionName,
+            0);
+    }
+}
+
+VOID
+Verifier_VerifyNetPacketExtensionVersionedSize(
+    _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
+    _In_ PNET_PACKET_EXTENSION NetPacketExtension
+)
+{
+    bool reportVersionedSizeViolation = false;
+    ULONG expectedSize = 0;
+
+    if (wcscmp(NetPacketExtension->Name, NET_PACKET_EXTENSION_CHECKSUM_NAME) == 0)
+    {
+        switch (NetPacketExtension->Version)
+        {
+        case NET_PACKET_EXTENSION_CHECKSUM_VERSION_1:
+            if (NetPacketExtension->ExtensionSize != NET_PACKET_EXTENSION_CHECKSUM_VERSION_1_SIZE)
+            {
+                expectedSize = NET_PACKET_EXTENSION_CHECKSUM_VERSION_1_SIZE;
+                reportVersionedSizeViolation = true;
+            }
+            break;
+        default:
+            reportVersionedSizeViolation = true;
+            break;
+        }
+    }
+
+    if (wcscmp(NetPacketExtension->Name, NET_PACKET_EXTENSION_LSO_NAME) == 0)
+    {
+        switch (NetPacketExtension->Version)
+        {
+        case NET_PACKET_EXTENSION_LSO_VERSION_1:
+            if (NetPacketExtension->ExtensionSize != NET_PACKET_EXTENSION_LSO_VERSION_1_SIZE)
+            {
+                expectedSize = NET_PACKET_EXTENSION_LSO_VERSION_1_SIZE;
+                reportVersionedSizeViolation = true;
+            }
+            break;
+        default:
+            reportVersionedSizeViolation = true;
+            break;
+        }
+    }
+
+    if (reportVersionedSizeViolation)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_NetPacketExtensionVersionedSizeMismatch,
+            (ULONG_PTR)NetPacketExtension,
+            expectedSize);
+    }
+}
+
+VOID
+Verifier_VerifyNetPacketExtension(
+    _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
+    _In_ PNET_PACKET_EXTENSION NetPacketExtension
+)
+{
+    if ((NetPacketExtension->Name == nullptr) ||
+        (NetPacketExtension->Name[0] == L'\0'))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidNetPacketExtensionName,
+            (ULONG_PTR)NetPacketExtension,
+            0);
+    }
+
+    Verifier_VerifyNetPacketExtensionName(PrivateGlobals, NetPacketExtension->Name);
+
+    if (NetPacketExtension->Version == 0)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidNetPacketExtensionVersion,
+            (ULONG_PTR)NetPacketExtension,
+            0);
+    }
+
+    if ((NetPacketExtension->Alignment == 0) || 
+        ((NetPacketExtension->Alignment & (NetPacketExtension->Alignment + 1)) != 0) ||
+        (NetPacketExtension->Alignment > alignof(NET_PACKET) - 1))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidNetPacketExtensionAlignment,
+            (ULONG_PTR)NetPacketExtension,
+            0);
+    }
+
+    if ((NetPacketExtension->ExtensionSize == 0) ||
+        (NetPacketExtension->ExtensionSize > MAXIMUM_ALLOWED_EXTENSION_SIZE))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidNetPacketExtensionExtensionSize,
+            (ULONG_PTR)NetPacketExtension,
+            0);
+    }
+
+    Verifier_VerifyNetPacketExtensionVersionedSize(PrivateGlobals, NetPacketExtension);
+}
+
+VOID
+Verifier_VerifyNetPacketExtensionQuery(
+    _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
+    _In_ PNET_PACKET_EXTENSION_QUERY NetPacketExtension
+)
+{
+    if ((NetPacketExtension->Name == nullptr) ||
+        (NetPacketExtension->Name[0] == L'\0'))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidNetPacketExtensionName,
+            (ULONG_PTR)NetPacketExtension,
+            0);
+    }
+
+    Verifier_VerifyNetPacketExtensionName(PrivateGlobals, NetPacketExtension->Name);
+
+    if (NetPacketExtension->Version == 0)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidNetPacketExtensionVersion,
+            (ULONG_PTR)NetPacketExtension,
+            0);
+    }
+}
+
+VOID
+Verifier_VerifyNetAdapterTxCapabilities(
+    _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
+    _In_ const NET_ADAPTER_TX_CAPABILITIES *TxCapabilities
+    )
+{
+    // If the mapping requirement is DMA, the adapter has to provide the DMA capabilities
+    if (TxCapabilities->MappingRequirement == NetMemoryMappingRequirementDmaMapped &&
+        TxCapabilities->DmaCapabilities == nullptr)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidAdapterTxCapabilities,
+            (ULONG_PTR)TxCapabilities,
+            1);
+    }
+
+    if (TxCapabilities->MaximumNumberOfQueues == 0)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidAdapterTxCapabilities,
+            (ULONG_PTR)TxCapabilities,
+            2);
+    }
+
+    // A valid fragment alignment requirement is either the default value or in the format (2^n)
+    if (TxCapabilities->FragmentBufferAlignment != NET_ADAPTER_FRAGMENT_DEFAULT_ALIGNMENT &&
+        !RTL_IS_POWER_OF_TWO(TxCapabilities->FragmentBufferAlignment))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidAdapterTxCapabilities,
+            (ULONG_PTR)TxCapabilities,
+            3);
+    }
+
+    if ((TxCapabilities->FragmentRingNumberOfElementsHint > 0) &&
+        !RTL_IS_POWER_OF_TWO(TxCapabilities->FragmentRingNumberOfElementsHint))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_NotPowerOfTwo,
+            TxCapabilities->FragmentRingNumberOfElementsHint,
+            4);
+    }
+}
+
+VOID
+Verifier_VerifyNetAdapterRxCapabilities(
+    _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
+    _In_ const NET_ADAPTER_RX_CAPABILITIES *RxCapabilities
+    )
+{
+    // If the adapter does not ask the OS to allocate receive fragments, then 
+    // EvtAdapterReturnRxBuffer must be set
+    if (RxCapabilities->AllocationMode == NetRxFragmentBufferAllocationModeDriver)
+    {
+        if ((RxCapabilities->AttachmentMode != NetRxFragmentBufferAttachmentModeDriver) ||
+            (RxCapabilities->EvtAdapterReturnRxBuffer == nullptr))
+        {
+            Verifier_ReportViolation(
+                PrivateGlobals,
+                VerifierAction_BugcheckAlways,
+                FailureCode_InvalidAdapterRxCapabilities,
+                (ULONG_PTR) RxCapabilities,
+                0);
+        }
+    }
+
+    // If the mapping requirement is DMA, the adapter has to provide the DMA capabilities
+    if (RxCapabilities->MappingRequirement == NetMemoryMappingRequirementDmaMapped &&
+        RxCapabilities->DmaCapabilities == nullptr)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidAdapterRxCapabilities,
+            (ULONG_PTR)RxCapabilities,
+            1);
+    }
+
+    if (RxCapabilities->MaximumNumberOfQueues == 0)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidAdapterRxCapabilities,
+            (ULONG_PTR)RxCapabilities,
+            2);
+    }
+
+    // A valid fragment alignment requirement is either the default value or in the format (2^n)
+    if (RxCapabilities->FragmentBufferAlignment != NET_ADAPTER_FRAGMENT_DEFAULT_ALIGNMENT &&
+        !RTL_IS_POWER_OF_TWO(RxCapabilities->FragmentBufferAlignment))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_NotPowerOfTwo,
+            RxCapabilities->FragmentBufferAlignment,
+            3);
+    }
+
+    if ((RxCapabilities->FragmentRingNumberOfElementsHint > 0) &&
+        !RTL_IS_POWER_OF_TWO(RxCapabilities->FragmentRingNumberOfElementsHint))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_NotPowerOfTwo,
+            RxCapabilities->FragmentRingNumberOfElementsHint,
+            4);
+    }
+}
+
+VOID
+Verifier_VerifyAdapterCanBeDeleted(
+    _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
+    _In_ NxAdapter const *Adapter
+    )
+{
+    WDFDEVICE parentDevice = Adapter->GetDevice();
+
+    if (parentDevice != nullptr)
+    {
+        NxDevice *nxDevice = GetNxDeviceFromHandle(parentDevice);
+
+        // The default NETADAPTER can't be deleted while the device
+        // is still started
+        if (Adapter->IsDefault() && nxDevice->IsStarted())
+        {
+            Verifier_ReportViolation(
+                PrivateGlobals,
+                VerifierAction_BugcheckAlways,
+                FailureCode_IllegalAdapterDelete,
+                reinterpret_cast<ULONG_PTR>(Adapter),
+                0);
+        }
+    }
+}
+
+VOID
+Verifier_VerifyDeviceAdapterCollectionIsEmpty(
+    _In_ NX_PRIVATE_GLOBALS *PrivateGlobals,
+    _In_ NxDevice const *Device,
+    _In_ NxAdapterCollection const *AdapterCollection
+    )
+{
+    if (AdapterCollection->Count() > 0)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_RemovingDeviceWithAdapters,
+            reinterpret_cast<ULONG_PTR>(Device),
+            reinterpret_cast<ULONG_PTR>(AdapterCollection));
     }
 }

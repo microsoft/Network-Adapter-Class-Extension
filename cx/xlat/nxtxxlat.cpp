@@ -1,10 +1,6 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-    Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxTxXlat.cpp
 
 Abstract:
 
@@ -17,26 +13,69 @@ Abstract:
 #include "NxXlatCommon.hpp"
 #include "NxTxXlat.tmh"
 
+#include "NxPerfTuner.hpp"
 #include "NxTxXlat.hpp"
 #include "NxPacketLayout.hpp"
 #include "NxChecksumInfo.hpp"
 
-#define TX_NUM_FRAGMENTS 20
+#include "NxNblTranslation.hpp"
+
+static
+void
+NetClientQueueNotify(
+    PVOID Queue
+    )
+{
+    reinterpret_cast<NxTxXlat *>(Queue)->Notify();
+}
+
+static const NET_CLIENT_QUEUE_NOTIFY_DISPATCH QueueDispatch
+{
+    { sizeof(NET_CLIENT_QUEUE_NOTIFY_DISPATCH) },
+    &NetClientQueueNotify
+};
+
+using PacketContext = NxNblTranslator::PacketContext;
+
+NxTxXlat::NxTxXlat(
+    NET_CLIENT_DISPATCH const * Dispatch,
+    NET_CLIENT_ADAPTER Adapter,
+    NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
+    ) noexcept :
+    m_dispatch(Dispatch),
+    m_adapter(Adapter),
+    m_adapterDispatch(AdapterDispatch),
+    m_contextBuffer(m_ringBuffer)
+{
+    m_adapterDispatch->GetProperties(m_adapter, &m_adapterProperties);
+    m_nblDispatcher = static_cast<INxNblDispatcher *>(m_adapterProperties.NblDispatcher);
+}
 
 NxTxXlat::~NxTxXlat()
 {
+    // Signals the EC to begin winding down
+    m_executionContext.RequestStop();
+
+    // Closes the NBL dispatcher and waits for all
+    // tracked NBLs to be returned
     m_nblDispatcher->SetTxHandler(nullptr);
-    m_executionContext.Stop();
+
+    // Waits until the EC completely exits
+    m_executionContext.CompleteStop();
 
     if (m_ringBuffer.Get())
     {
         for (auto i = 0ul; i < m_ringBuffer.Count(); i++)
         {
-            auto & packet = *m_ringBuffer.GetPacketAtIndex(i);
-            auto & context = GetPacketContext(packet);
+            auto & context = m_contextBuffer.GetPacketContext<PacketContext>(i);
 
             context.~PacketContext();
         }
+    }
+
+    if (m_queue)
+    {
+        m_adapterDispatch->DestroyQueue(m_adapter, m_queue);
     }
 }
 
@@ -49,15 +88,7 @@ NxTxXlat::ArmNetBufferListArrivalNotification()
 void
 NxTxXlat::ArmAdapterTxNotification()
 {
-    m_adapterQueue->SetArmed(true);
-}
-
-NxTxXlat::PacketContext &
-NxTxXlat::GetPacketContext(NET_PACKET &netPacket)
-{
-    auto & context = *reinterpret_cast<NxTxXlat::PacketContext*>(m_ringBuffer.GetAppContext(&netPacket));
-    context.ASSERT_VALID();
-    return context;
+    m_queueDispatch->SetArmed(m_queue, true);
 }
 
 NxTxXlat::ArmedNotifications
@@ -66,35 +97,37 @@ NxTxXlat::GetNotificationsToArm()
     ArmedNotifications notifications;
 
     // Shouldn't arm any notifications if we don't want to halt
-    if (m_producedPackets == 0 && m_completedPackets == 0)
+    if (!m_producedPackets && !m_completedPackets)
     {
-        // If 0 packets were produced and there are no NBLs available from the
-        // serialization queue, then arm the serialization queue for notification.
-        notifications.Flags.ShouldArmNblArrival = m_netBufferQueueEmpty;
+        // If the ringbuffer is not full (if there is room for OS to give more packets to NIC),
+        // arm the translater serialization queue notification so that when new NBL is sent
+        // to the translater later, it will wake up the transmit thread to send packets.
+        notifications.Flags.ShouldArmNblArrival = !m_ringBuffer.AllPacketsOwnedByNic();
 
         // If 0 packets were completed by the Adapter in the last iteration, then arm
         // the adapter to issue Tx completion notifications.
-        notifications.Flags.ShouldArmTxCompletion = m_outstandingPackets != 0;
+        notifications.Flags.ShouldArmTxCompletion = m_ringBuffer.AnyNicPackets();
 
         // At least one notification should be set whenever going through this path.
         //
-        // (m_producedPackets == 0, m_completedPackets == 0, m_netBufferQueueEmpty, m_outstandingPackets != 0)
-        // is a 4-tuple that combines to a 3 tuple of (ShouldHalt,ShouldArmNblArrival,ShouldArmTxCompletion).
+        // If the queue is not full, OS side notification will be armed, OS can wake translater
+        // if it has more work. If NIC side notification is armed, NIC can wake translater if
+        // it completed any packets.
         // 
-        // Whenever ShouldHalt is true, ShouldArmNblArrival or ShouldArmTxCompletion
-        // must be set. There is a one case of the above tuple (1,1,0,0) that would cause this to
-        // be false. This implies no work was done, but there were packets in the producer window
-        // (m_oustandingPackets == 0 implies all of them are), and there are packets available in the NBL
-        // serialization queue. In this case that means there is a malfunction in the producer routine if
-        // the code gets stuck in this way.
+        // By default if this if block is called, the thread is going to halt
+        // ShouldArmNblArrival or ShouldArmTxCompletion must be set. If there are
+        // more work, this function is a no-op and keeps the main thread alive.
         NT_ASSERT(notifications.Value);
     }
 
     return notifications;
 }
 
+_Use_decl_annotations_
 void
-NxTxXlat::ArmNotifications(ArmedNotifications notifications)
+NxTxXlat::ArmNotifications(
+    ArmedNotifications notifications
+    )
 {
     if (notifications.Flags.ShouldArmNblArrival)
     {
@@ -107,88 +140,55 @@ NxTxXlat::ArmNotifications(ArmedNotifications notifications)
     }
 }
 
-NxTxXlat::TranslationResult
-NxTxXlat::TranslateNetBufferToNetPacket( //mostly copied from RtlCopyMdltobuffer
-    _In_    NET_BUFFER      &netBuffer,
-    _Inout_ NET_PACKET      &netPacket)
+static EC_START_ROUTINE NetAdapterTransmitThread;
+
+_Use_decl_annotations_
+static
+EC_RETURN
+NetAdapterTransmitThread(
+    PVOID StartContext
+    )
 {
-    NetPacketReuseOne(&netPacket);
+    reinterpret_cast<NxTxXlat*>(StartContext)->TransmitThread();
+    return EC_RETURN();
+}
 
-    auto pCurrentFragment = &netPacket.Data;
+void
+NxTxXlat::SetupTxThreadProperties()
+{
+#if _KERNEL_MODE
+    // setup thread prioirty;
+    ULONG threadPriority =
+        m_dispatch->NetClientQueryDriverConfigurationUlong(TX_THREAD_PRIORITY);
 
-    PMDL mdl = NET_BUFFER_CURRENT_MDL(&netBuffer);
-    size_t mdlOffset = NET_BUFFER_CURRENT_MDL_OFFSET(&netBuffer);
-    auto bytesToCopy = NET_BUFFER_DATA_LENGTH(&netBuffer);
+    KeSetBasePriorityThread(KeGetCurrentThread(), threadPriority - (LOW_REALTIME_PRIORITY + LOW_PRIORITY)/2);
 
-    if (bytesToCopy == 0)
+    BOOLEAN setThreadAffinity =
+        m_dispatch->NetClientQueryDriverConfigurationBoolean(TX_THREAD_AFFINITY_ENABLED);
+
+    ULONG threadAffinity =
+        m_dispatch->NetClientQueryDriverConfigurationUlong(TX_THREAD_AFFINITY);
+
+    if (setThreadAffinity != FALSE)
     {
-        netPacket.Data.LastFragmentOfFrame = 1;
-        netPacket.Data.LastPacketOfChain = 1;
-        return TranslationResult::Success;
+        GROUP_AFFINITY Affinity = { 0 };
+        GROUP_AFFINITY old;
+        PROCESSOR_NUMBER CpuNum = { 0 };
+        KeGetProcessorNumberFromIndex(threadAffinity, &CpuNum);
+        Affinity.Group = CpuNum.Group;
+        Affinity.Mask =
+            (threadAffinity != THREAD_AFFINITY_NO_MASK) ?
+            AFFINITY_MASK(CpuNum.Number) : ((ULONG_PTR)-1);
+        KeSetSystemGroupAffinityThread(&Affinity, &old);
     }
+#endif
 
-    //
-    // While there is remaining data to be copied, and we have MDLs to walk...
-    //
-
-    for (size_t remain = bytesToCopy; mdl && (remain > 0); mdl = mdl->Next)
-    {
-
-        if (!pCurrentFragment)
-        {
-            return TranslationResult::InsufficientFragments;
-        }
-
-        //
-        // Skip zero length MDLs.
-        //
-
-        size_t const mdlByteCount = MmGetMdlByteCount(mdl);
-        if (mdlByteCount == 0)
-        {
-            continue;
-        }
-
-        //
-        // Compute the amount to transfer this time.
-        //
-
-        ASSERT(mdlOffset < mdlByteCount);
-        size_t const copySize = min(remain, mdlByteCount - mdlOffset);
-
-        //
-        // Perform the transfer
-        //
-        pCurrentFragment->Offset = mdlOffset;
-        pCurrentFragment->VirtualAddress = MmGetSystemAddressForMdlSafe(mdl, LowPagePriority | MdlMappingNoExecute);
-        pCurrentFragment->DmaLogicalAddress.QuadPart = reinterpret_cast<ULONG_PTR>(mdl);
-
-        pCurrentFragment->Capacity = mdlByteCount;
-        pCurrentFragment->ValidLength = copySize;
-
-        mdlOffset = 0;
-        remain -= copySize;
-
-        if (remain == 0)
-        {
-            pCurrentFragment->LastFragmentOfFrame = 1;
-        }
-
-        // LastPacketOfChain should be set in every fragment of the last
-        // packet. Right now we always have one frame per NET_PACKET, so
-        // we can get away with just setting the flag in every fragment up
-        // until the first LastFragmentOfFrame.
-        pCurrentFragment->LastPacketOfChain = 1;
-
-        pCurrentFragment = NET_PACKET_FRAGMENT_GET_NEXT(pCurrentFragment);
-    }
-
-    return TranslationResult::Success;
 }
 
 void
 NxTxXlat::TransmitThread()
 {
+    SetupTxThreadProperties();
     m_executionContext.WaitForStart();
 
     auto cancelIssued = false;
@@ -225,176 +225,72 @@ NxTxXlat::TransmitThread()
                 // One NBL may remain that has been partially programmed into the NIC.
                 // So that NBL is kept around until the end
 
-                m_adapterQueue->Cancel();
+                m_queueDispatch->Cancel(m_queue);
                 DropQueuedNetBufferLists();
 
                 cancelIssued = true;
             }
 
-            // The termination condition is that the NIC has returned all packets.
-            if (m_ringBuffer.GetNumPacketsOwnedByNic() == 0)
+            // The termination condition is that the NIC has returned all its
+            // packets.
+            if (!m_ringBuffer.AnyNicPackets())
             {
                 break;
             }
         }
     }
 
-    if (m_currentNbl)
+    if (m_ringBuffer.AnyReturnedPackets())
     {
-        m_currentNbl->Status = NDIS_STATUS_PAUSED;
-
-        m_nblDispatcher->SendNetBufferListsComplete(m_currentNbl, 1, 0);
+        DrainCompletions();
+        NT_ASSERT(!m_ringBuffer.AnyReturnedPackets());
     }
+
+    // DropQueuedNetBufferLists had completed as many NBLs as possible, but there's
+    // a chance that one parital NBL couldn't be completed up there.  Do it now.
+    AbortNbls(m_currentNbl);
+    m_currentNbl = nullptr;
+    m_currentNetBuffer = nullptr;
 }
 
 void
 NxTxXlat::DrainCompletions()
 {
-    m_completedPackets = 0;
+    NxNblTranslator translator{ m_contextBuffer, m_adapterProperties.MediaType };
+    translator.m_netPacketLsoOffset = m_lsoOffset;
 
-    ULONG numCompletedNbls = 0;
-    PNET_BUFFER_LIST pHead = nullptr;
+    auto const returned = m_ringBuffer.ReturnedPackets();
+    auto const result = translator.CompletePackets(m_descriptor, returned);
 
-    while (auto pCompletedPacket = m_ringBuffer.TakeNextPacketFromNic())
+    m_completedPackets = result.CompletedTo != returned.begin();
+
+    if (result.CompletedChain)
     {
-        auto & completedPacketExtension = GetPacketContext(*pCompletedPacket);
-
-        if (completedPacketExtension.NetBufferListToComplete)
-        {
-            completedPacketExtension.NetBufferListToComplete->Next = pHead;
-            pHead = completedPacketExtension.NetBufferListToComplete;
-
-            numCompletedNbls += 1;
-
-            completedPacketExtension.NetBufferListToComplete = nullptr;
-        }
-
-        --m_outstandingPackets;
-        ++m_completedPackets;
+        m_nblDispatcher->SendNetBufferListsComplete(
+            result.CompletedChain, result.NumCompletedNbls, 0);
     }
 
-    if (pHead)
-    {
-        m_nblDispatcher->SendNetBufferListsComplete(pHead, numCompletedNbls, 0);
-    }
-}
-
-PNET_BUFFER
-GetCurrentNetBuffer(NET_BUFFER_LIST & netBufferList)
-{
-    if (netBufferList.Scratch)
-    {
-        return static_cast<PNET_BUFFER>(netBufferList.Scratch);
-    }
-    else
-    {
-        return NET_BUFFER_LIST_FIRST_NB(&netBufferList);
-    }
-}
-
-void
-SetCurrentNetBuffer(NET_BUFFER_LIST & netBufferList, _In_opt_ PNET_BUFFER pNetBuffer)
-{
-    netBufferList.Scratch = pNetBuffer;
-}
-
-void
-NxTxXlat::ReinitializePacket(_In_ NET_PACKET & netPacket)
-{
-    NetPacketReuseOne(&netPacket);
-
-    // In the Tx path the value of LastFragmentOfFrame and LastPacketOfChain depends on the NET_BUFFER
-    // being translated, clear them in all the fragments
-    for (auto fragment = &netPacket.Data;fragment;fragment = NET_PACKET_FRAGMENT_GET_NEXT(fragment))
-    {
-        fragment->LastFragmentOfFrame = 0;
-        fragment->LastPacketOfChain = 0;
-    }
+    m_ringBuffer.AdvanceNext(result.CompletedTo);
 }
 
 void
 NxTxXlat::TranslateNbls()
 {
-    m_producedPackets = 0;
+    m_producedPackets = false;
 
-    PNET_BUFFER_LIST nextNbl;
-    for (NOTHING; m_currentNbl; m_currentNbl = nextNbl)
-    {
-        nextNbl = m_currentNbl->Next;
+    if (!m_currentNbl)
+        return;
 
-        auto const pCurrentNetBuffer = GetCurrentNetBuffer(*m_currentNbl);
-        SetCurrentNetBuffer(*m_currentNbl, nullptr);
+    NxNblTranslator translator{ m_contextBuffer, m_adapterProperties.MediaType };
+    translator.m_netPacketChecksumOffset = m_checksumOffset;
+    translator.m_netPacketLsoOffset = m_lsoOffset;
 
-        for (auto & nb : pCurrentNetBuffer)
-        {
-            auto pCurrentPacket = m_ringBuffer.GetNextPacketToGiveToNic();
-            if (!pCurrentPacket)
-            {
-                // There are no more packets in the ring buffer that we can give to the NIC.
-                //
-                // Record the current net buffer in Scratch so that we can resume
-                // from that net buffer when ProducePackets is next called.
-                SetCurrentNetBuffer(*m_currentNbl, &nb);
-                return;
-            }
+    auto const availablePacketRange = m_ringBuffer.AvailablePackets();
+    auto const nextUntranslatedPacket = translator.TranslateNbls(m_currentNbl, m_currentNetBuffer, m_descriptor, availablePacketRange);
 
-            ReinitializePacket(*pCurrentPacket);
+    m_producedPackets = (nextUntranslatedPacket != availablePacketRange.begin());
 
-            switch (TranslateNetBufferToNetPacket(nb, *pCurrentPacket))
-            {
-            case TranslationResult::InsufficientFragments:
-
-
-
-
-
-
-                DbgBreakPoint();
-
-                pCurrentPacket->IgnoreThisPacket = true;
-
-                break;
-            case TranslationResult::Success:
-                // Copy thread information to the corresponding packet extension
-                NET_PACKET_INTERNAL_802_15_4_INFO(pCurrentPacket, m_thread802_15_4MSIExExtensionOffset) = NET_BUFFER_LIST_INFO(m_currentNbl, MediaSpecificInformationEx);
-                NET_PACKET_INTERNAL_802_15_4_STATUS(pCurrentPacket, m_thread802_15_4StatusOffset) = NET_BUFFER_LIST_STATUS(m_currentNbl);
-
-                pCurrentPacket->Layout = NxGetPacketLayout(m_mediaType, *pCurrentPacket);
-
-                auto const &checksumInfo =
-                    *(PNDIS_TCP_IP_CHECKSUM_NET_BUFFER_LIST_INFO)
-                    &m_currentNbl->NetBufferListInfo[TcpIpChecksumNetBufferListInfo];
-
-#if DBG
-                if (pCurrentPacket->Layout.Layer4Type == NET_PACKET_LAYER4_TYPE_TCP)
-                {
-                    NT_ASSERT(checksumInfo.Transmit.TcpHeaderOffset == (ULONG)(pCurrentPacket->Layout.Layer2HeaderLength + pCurrentPacket->Layout.Layer3HeaderLength));
-                }
-#endif
-
-                pCurrentPacket->Checksum = NxTranslateTxPacketChecksum(*pCurrentPacket, checksumInfo);
-                break;
-            }
-
-            // If this is the final NB in the NBL, then the NBL needs
-            // to be completed when the associated net packet is completed.
-            if (!nb.Next)
-            {
-                auto & currentPacketExtension = GetPacketContext(*pCurrentPacket);
-
-                // When the associated NET_PACKET is completed, the associated NBL
-                // must be completed
-                currentPacketExtension.NetBufferListToComplete = m_currentNbl;
-
-                // break the NBL chain
-                m_currentNbl->Next = nullptr;
-            }
-
-            ++m_producedPackets;
-            ++m_outstandingPackets;
-            m_ringBuffer.GiveNextPacketToNic();
-        }
-    }
+    m_ringBuffer.AdvanceEnd(nextUntranslatedPacket);
 }
 
 void
@@ -432,42 +328,37 @@ NxTxXlat::DropQueuedNetBufferLists()
 
     if (m_currentNbl)
     {
-        auto nblToComplete = m_currentNbl;
-
-        // If the NBL is partially consumed, it
-        // cannot be completed immediately
-        if (GetCurrentNetBuffer(*m_currentNbl))
+        if (m_currentNetBuffer == m_currentNbl->FirstNetBuffer)
         {
-            nblToComplete = m_currentNbl->Next;
+            AbortNbls(m_currentNbl);
+            m_currentNbl = nullptr;
+            m_currentNetBuffer = nullptr;
+        }
+        else
+        {
+            // At least one NB from the first NBL was already given to the NIC, so we
+            // can't immediately complete it.  Complete the rest, at least.
+            AbortNbls(m_currentNbl->Next);
             m_currentNbl->Next = nullptr;
         }
-
-        if (nblToComplete)
-        {
-            ULONG numNblsCompleted = 0;
-
-            for (auto & nbl : nblToComplete)
-            {
-                nbl.Status = NDIS_STATUS_PAUSED;
-                numNblsCompleted += 1;
-            }
-
-            m_nblDispatcher->SendNetBufferListsComplete(nblToComplete, numNblsCompleted, 0);
-        }
     }
 
-    if (auto queuedNbls = DequeueNetBufferListQueue())
-    {
-        ULONG numNblsCompleted = 0;
+    AbortNbls(DequeueNetBufferListQueue());
+}
 
-        for (auto & queuedNbl : queuedNbls)
-        {
-            queuedNbl.Status = NDIS_STATUS_PAUSED;
-            numNblsCompleted += 1;
-        }
+void
+NxTxXlat::AbortNbls(
+    _In_opt_ NET_BUFFER_LIST *nblChain)
+{
+    if (!nblChain)
+        return;
 
-        m_nblDispatcher->SendNetBufferListsComplete(queuedNbls, numNblsCompleted, 0);
-    }
+    ndisSetStatusInNblChain(nblChain, NDIS_STATUS_PAUSED);
+
+    m_nblDispatcher->SendNetBufferListsComplete(
+        nblChain,
+        ndisNumNblsInNblChain(nblChain),
+        0);
 }
 
 void
@@ -479,41 +370,27 @@ NxTxXlat::PollNetBufferLists()
     // m_currentNbl can be empty if either the last iteration of the translation
     // routine drained the current set of NBLs or if the last iteration
     // tried to dequeue from the serialized NBL forest and came up empty.
-    //
-    // Therefore sets m_netBufferQueueEmpty in the latter case to be checked when
-    // determining if the translator should halt.
     if (!m_currentNbl)
     {
         m_currentNbl = DequeueNetBufferListQueue();
         if (m_currentNbl)
         {
-            m_netBufferQueueEmpty = false;
-
-            // When dequeuing the current NBL chain, reset the scratch field for
-            // all NBLs. This field is needed for tracking the current NB when restarting.
-            for (auto & nbl : m_currentNbl)
-            {
-                nbl.Scratch = nullptr;
-                nbl.Status = NDIS_STATUS_SUCCESS;
-            }
-        }
-        else
-        {
-            m_netBufferQueueEmpty = true;
+            m_currentNetBuffer = m_currentNbl->FirstNetBuffer;
         }
     }
 }
 
 void
 NxTxXlat::SendNetBufferLists(
-    _In_ NET_BUFFER_LIST *nblChain,
-    _In_ ULONG portNumber,
-    _In_ ULONG numberOfNbls,
-    _In_ ULONG sendFlags)
+    _In_ NET_BUFFER_LIST * NblChain,
+    _In_ ULONG PortNumber,
+    _In_ ULONG NumberOfNbls,
+    _In_ ULONG SendFlags
+    )
 {
-    UNREFERENCED_PARAMETER((portNumber, numberOfNbls, sendFlags));
+    UNREFERENCED_PARAMETER((PortNumber, NumberOfNbls, SendFlags));
 
-    m_synchronizedNblQueue.Enqueue(nblChain);
+    m_synchronizedNblQueue.Enqueue(NblChain);
 
     if (m_queueNotification.TestAndClear())
     {
@@ -530,61 +407,148 @@ NxTxXlat::DequeueNetBufferListQueue()
 void
 NxTxXlat::YieldToNetAdapter()
 {
-    m_adapterQueue->Advance();
+    if (m_ringBuffer.AnyNicPackets())
+    {
+        m_queueDispatch->Advance(m_queue);
+    }
 }
 
 NTSTATUS
 NxTxXlat::Initialize(
-    _In_ HNETPACKETCLIENT packetClient,
-    _In_ NXQUEUE_CREATION_PARAMETERS const *params,
-    _Out_ NXQUEUE_CREATION_RESULT *result)
+    void
+    )
 {
-    m_thread802_15_4MSIExExtensionOffset = NetPacketGetExtensionOffset(packetClient, THREAD_802_15_4_MSIEx_PACKET_EXTENSION_NAME);
-    m_thread802_15_4StatusOffset = NetPacketGetExtensionOffset(packetClient, THREAD_802_15_4_STATUS_PACKET_EXTENSION_NAME);
+    m_descriptor = m_queueDispatch->GetNetDatapathDescriptor(m_queue);
 
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        m_ringBuffer.Initialize(
-            packetClient,
-            params->RingBufferSize,
-            TX_NUM_FRAGMENTS,
-            sizeof(PacketContext),
-            params->ClientContextSize),
-        "Failed to initialize ring buffer. NxTxXlat=%p", this);
+        m_ringBuffer.Initialize(NET_DATAPATH_DESCRIPTOR_GET_PACKET_RING_BUFFER(m_descriptor)),
+        "Failed to initialize packet ring buffer.");
 
-    m_ringBuffer.Get()->OSReserved2[1] = params->OSReserved2_1;
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        m_contextBuffer.Initialize(sizeof(PacketContext)),
+        "Failed to initialize private context.");
 
     for (auto i = 0ul; i < m_ringBuffer.Count(); i++)
     {
-        new (m_ringBuffer.GetAppContext(m_ringBuffer.GetPacketAtIndex(i))) PacketContext();
+        new (&m_contextBuffer.GetPacketContext<PacketContext>(i)) PacketContext();
     }
-
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        m_executionContext.Initialize(this, [](PVOID context) -> EC_RETURN {
-            static_cast<NxTxXlat *>(context)->TransmitThread();
-            return EC_RETURN();
-        }),
-        "Failed to start Rx execution context. NxTxXlat=%p", this);
-
-    result->ContextOffset = m_ringBuffer.GetClientContextOffset();
-    result->RingBuffer = m_ringBuffer.Get();
-    result->Thread802_15_4MSIExExtensionOffset = m_thread802_15_4MSIExExtensionOffset;
-    result->Thread802_15_4StatusOffset = m_thread802_15_4StatusOffset;
 
     return STATUS_SUCCESS;
 }
 
-NTSTATUS 
-NxTxXlat::StartQueue(_In_ INxAdapter *adapter)
+size_t
+NxTxXlat::GetPacketExtensionOffsets(
+    PCWSTR ExtensionName,
+    ULONG ExtensionVersion
+    ) const
 {
-    m_mediaType = adapter->GetMediaType();
+    NET_CLIENT_PACKET_EXTENSION extension = {};
+    extension.Name = ExtensionName;
+    extension.Version = ExtensionVersion;
+    return m_queueDispatch->GetPacketExtensionOffset(m_queue, &extension);
+}
 
-    INxAdapterQueue* adapterQueue;
+NTSTATUS
+NxTxXlat::PreparePacketExtensions(
+    _Inout_ Rtl::KArray<NET_CLIENT_PACKET_EXTENSION>& addedPacketExtensions
+    )
+{
+    // checksum
+    NET_CLIENT_PACKET_EXTENSION extension = {};
+    extension.Name = NET_PACKET_EXTENSION_CHECKSUM_NAME;
+    extension.Version = NET_PACKET_EXTENSION_CHECKSUM_VERSION_1;
+
+    //
+    // Need to figure out how this would inter-op with capabilities interception
+    // ideally here we should check both (Registered) && (Enabled) before we add
+    // this extension to queue config.
+    //
+    if (NT_SUCCESS(m_adapterDispatch->QueryRegisteredPacketExtension(m_adapter, &extension)))
+    {
+        CX_RETURN_NTSTATUS_IF(
+            STATUS_INSUFFICIENT_RESOURCES,
+            !addedPacketExtensions.append(extension));
+    }
+
+    extension.Name = NET_PACKET_EXTENSION_LSO_NAME;
+    extension.Version = NET_PACKET_EXTENSION_LSO_VERSION_1;
+
+    if (NT_SUCCESS(m_adapterDispatch->QueryRegisteredPacketExtension(m_adapter, &extension)))
+    {
+        CX_RETURN_NTSTATUS_IF(
+            STATUS_INSUFFICIENT_RESOURCES,
+            !addedPacketExtensions.append(extension));
+    }
+
+    // more to come later!
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS 
+NxTxXlat::StartQueue(
+    void
+    )
+{
+    NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES datapathCapabilities;
+    m_adapterDispatch->GetDatapathCapabilities(m_adapter, &datapathCapabilities);
+
+    NX_PERF_TX_NIC_CHARACTERISTICS perfCharacteristics = {};
+    NX_PERF_TX_TUNING_PARAMETERS perfParameters;
+    perfCharacteristics.Nic.IsDriverVerifierEnabled = !!m_adapterProperties.DriverIsVerifying;
+    perfCharacteristics.Nic.MediaType = m_mediaType;
+    perfCharacteristics.FragmentRingNumberOfElementsHint = datapathCapabilities.PreferredTxFragmentRingSize;
+    perfCharacteristics.MaximumFragmentBufferSize = datapathCapabilities.MaximumTxFragmentSize;
+    perfCharacteristics.NominalLinkSpeed = datapathCapabilities.NominalMaxTxLinkSpeed;
+    perfCharacteristics.MaxPacketSizeWithLso = datapathCapabilities.MtuWithLso;
+
+    NxPerfTunerCalculateTxParameters(&perfCharacteristics, &perfParameters);
+
+    NET_CLIENT_QUEUE_CONFIG config;
+    NET_CLIENT_QUEUE_CONFIG_INIT(
+        &config,
+        perfParameters.PacketRingElementCount,
+        perfParameters.FragmentRingElementCount);
+
+    Rtl::KArray<NET_CLIENT_PACKET_EXTENSION> addedPacketExtensions;
+
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        adapter->OpenQueue(this, NxQueueType::Tx, &adapterQueue),
-        "Failed to open a Tx queue. NxTxXlat=%p", this);
+        PreparePacketExtensions(addedPacketExtensions),
+        "Failed to add packet extensions to the RxQueue");
 
-    m_adapterQueue.reset(adapterQueue);
+    if (addedPacketExtensions.count() != 0)
+    {
+        config.PacketExtensions = &addedPacketExtensions[0];
+        config.NumberOfPacketExtensions = addedPacketExtensions.count();
+    }
+
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        m_adapterDispatch->CreateTxQueue(
+            m_adapter,
+            this,
+            &QueueDispatch,
+            &config,
+            &m_queue,
+            &m_queueDispatch),
+        "Failed to create Tx queue. NxTxXlat=%p", this);
+
+    // checksum offset
+    m_checksumOffset = GetPacketExtensionOffsets(
+        NET_PACKET_EXTENSION_CHECKSUM_NAME, NET_PACKET_EXTENSION_CHECKSUM_VERSION_1);
+
+    m_lsoOffset = GetPacketExtensionOffsets(
+        NET_PACKET_EXTENSION_LSO_NAME, NET_PACKET_EXTENSION_LSO_VERSION_1);
+
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        Initialize(),
+        "Failed to initialize Tx ring buffer.");
+
     m_nblDispatcher->SetTxHandler(this);
+
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        m_executionContext.Initialize(this, NetAdapterTransmitThread),
+        "Failed to start Tx execution context. NxTxXlat=%p", this);
+
+    m_executionContext.SetDebugNameHint(L"Transmit", m_queueDispatch->GetQueueId(m_queue), m_adapterProperties.NetLuid);
 
     m_executionContext.Start();
 

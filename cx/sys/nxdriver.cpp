@@ -1,50 +1,34 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxDriver.cpp
 
 Abstract:
 
     This is the main NetAdapterCx driver framework.
 
-
-
-
-
-Environment:
-
-    kernel mode only
-
-Revision History:
-
 --*/
 
 #include "Nx.hpp"
 
-// Tracing support
-extern "C" {
 #include "NxDriver.tmh"
-}
 
 NxDriver::NxDriver(
     _In_ WDFDRIVER                Driver,
     _In_ PNX_PRIVATE_GLOBALS      NxPrivateGlobals
-    ) : CFxObject(Driver), 
-    m_Driver(Driver)
+    ) : CFxObject(Driver),
+    m_Driver(Driver),
+    m_PrivateGlobals(NxPrivateGlobals)
 /*++
-Routine Description: 
- 
+Routine Description:
+
     Constructor for the NxDriver Class.
     NxDriver is an object created on top of the context of the client's
-    WDFDRIVER object. 
- 
-Arguments: 
+    WDFDRIVER object.
+
+Arguments:
     Driver - The WDFDRIVER object of the client.
-    NxPrivateGlobals - Clients Globals. 
- 
+    NxPrivateGlobals - Clients Globals.
+
 --*/
 {
     FuncEntry(FLAG_DRIVER);
@@ -52,11 +36,11 @@ Arguments:
     RECORDER_LOG_CREATE_PARAMS  recorderLogCreateParams;
     NTSTATUS                    status;
     RECORDER_LOG                recorderLog;
-   
+
     UNREFERENCED_PARAMETER(NxPrivateGlobals);
 
     //
-    // Create a WPP Log buffer for the client. 
+    // Create a WPP Log buffer for the client.
     //
 
     RECORDER_LOG_CREATE_PARAMS_INIT(&recorderLogCreateParams, NULL);
@@ -103,10 +87,10 @@ Arguments:
 
 NxDriver::~NxDriver()
 /*++
-Routine Description: 
- 
+Routine Description:
+
     D'tor for the NxDriver object.
- 
+
 --*/
 {
     FuncEntry(FLAG_DRIVER);
@@ -139,7 +123,7 @@ NxDriver::_CreateIfNeeded(
     }
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, NxDriver);
-    
+
     //
     // Callin this ensures that our d'tor will be called on destory.
     //
@@ -155,102 +139,84 @@ NxDriver::_CreateIfNeeded(
     status = WdfObjectAllocateContext(Driver,
                                       &attributes,
                                       &nxDriverAsContext);
-    
+
     if (!NT_SUCCESS(status)) {
         LogInitMsg(TRACE_LEVEL_ERROR, "WdfObjectAllocateContext Failed %!STATUS!", status);
         FuncExit(FLAG_DRIVER);
         return status;
     }
-    
+
     nxDriver = new (nxDriverAsContext) NxDriver(Driver, NxPrivateGlobals);
 
     __analysis_assume(nxDriver != NULL);
 
     NT_ASSERT(nxDriver);
-    
+
     NxPrivateGlobals->NxDriver = nxDriver;
-        
+
     FuncExit(FLAG_DRIVER);
     return status;
-    
+
 }
 
 NTSTATUS
 NxDriver::_CreateAndRegisterIfNeeded(
     _In_ WDFDRIVER                      Driver,
-    _In_ NET_ADAPTER_DRIVER_TYPE        DriverType,
     _In_ PNX_PRIVATE_GLOBALS            NxPrivateGlobals
     )
 /*++
-Routine Description: 
+Routine Description:
     This routine is called when a new instance of the NxAdapter is getting
     created.
- 
+
     In response this routine registers with Ndis.sys it it hasnt already
-    registered. 
- 
-Arguments: 
- 
+    registered.
+
+Arguments:
+
     Driver - The NxDriver Object
- 
+
     NxPrivateGlobals - The clients globals.
- 
+
 --*/
 
 {
-    NTSTATUS status;
-    PNxDriver nxDriver;
-
     FuncEntry(FLAG_DRIVER);
 
-    WdfWaitLockAcquire(g_RegistrationLock, NULL);
+    {
+        auto exclusive = wil::acquire_wdf_wait_lock(g_RegistrationLock);
 
-    status = _CreateIfNeeded(Driver, NxPrivateGlobals);
-    if (!NT_SUCCESS(status)) {
-        goto Exit;
-    }
+        CX_RETURN_IF_NOT_NT_SUCCESS(
+            _CreateIfNeeded(Driver, NxPrivateGlobals));
 
-    nxDriver = NxPrivateGlobals->NxDriver;
+        NxDriver *nxDriver = NxPrivateGlobals->NxDriver;
 
-    if (DriverType == NET_ADAPTER_DRIVER_TYPE_MINIPORT) {
         if (nxDriver->m_NdisMiniportDriverHandle != NULL) {
-            // Already Registerd
-            goto Exit;
+            // Already registered
+            return STATUS_SUCCESS;
         }
-    } else {
-        status = STATUS_INVALID_PARAMETER;
-        LogInitMsg(TRACE_LEVEL_ERROR, "Unexpected Driver Type %!NET_ADAPTER_DRIVER_TYPE!", DriverType);
-        goto Exit;
+
+        CX_RETURN_IF_NOT_NT_SUCCESS(nxDriver->Register());
     }
 
-    status = nxDriver->Register(DriverType);
-    if (!NT_SUCCESS(status)) { 
-        goto Exit;
-    }
-
-Exit:
-
-    WdfWaitLockRelease(g_RegistrationLock);
     FuncExit(FLAG_DRIVER);
-    return status;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS
-NxDriver::Register(
-    _In_ NET_ADAPTER_DRIVER_TYPE        DriverType
-    )
+NxDriver::Register()
 /*++
-Routine Description: 
+Routine Description:
     This routine is called when the client driver calls NetAdapterDriverRegister
     API.
- 
+
     In response this routine registers with Ndis.sys on the behalf of the
     client driver.
- 
-Arguments: 
- 
-    DriverType - Type of the miniport driver (regular or intermediate) 
- 
+
+Arguments:
+
+    DriverType - Type of the miniport driver (regular or intermediate)
+
 --*/
 
 {
@@ -264,15 +230,15 @@ Arguments:
     NDIS_HANDLE                             ndisMiniportDriverHandle;
     NDIS_MINIPORT_DRIVER_CHARACTERISTICS    ndisMPChars;
 
-
-    // Register with Ndis.sys on behalf of the client. To to that : 
-    // get the WDM driver object, registry path, and prepare the 
-    // miniport driver chars structure, and then call 
-
-
+    //
+    // Register with Ndis.sys on behalf of the client. To to that :
+    // get the WDM driver object, registry path, and prepare the
+    // miniport driver chars structure, and then call
+    // NdisWdfRegisterMiniportDriver
+    //
 
     driverObject = WdfDriverWdmGetDriverObject(GetFxObject());
-    
+
     status = RtlUnicodeStringInit(&registryPath, WdfDriverGetRegistryPath(GetFxObject()));
 
     if(!WIN_VERIFY(NT_SUCCESS(status))) {
@@ -283,8 +249,8 @@ Arguments:
     RtlZeroMemory(&ndisMPChars, sizeof(ndisMPChars));
 
     ndisMPChars.Header.Type        = NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS;
-    ndisMPChars.Header.Size        = NDIS_SIZEOF_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_2;
-    ndisMPChars.Header.Revision    = NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_2;
+    ndisMPChars.Header.Size        = NDIS_SIZEOF_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_3;
+    ndisMPChars.Header.Revision    = NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_3;
     ndisMPChars.MajorNdisVersion   = NDIS_MINIPORT_MAJOR_VERSION;
     ndisMPChars.MinorNdisVersion   = NDIS_MINIPORT_MINOR_VERSION;
 
@@ -321,33 +287,33 @@ Arguments:
     ndisMPChars.ShutdownHandlerEx           =  NxAdapter::_EvtNdisShutdownEx;
     ndisMPChars.CancelOidRequestHandler     =  NxAdapter::_EvtNdisCancelOidRequest;
     ndisMPChars.CancelDirectOidRequestHandler = NxAdapter::_EvtNdisCancelDirectOidRequest;
+    ndisMPChars.SynchronousOidRequestHandler = NxAdapter::_EvtNdisSynchronousOidRequestHandler;
     #pragma prefast(pop)
 
-
-
-
-
-
-
-
+    LogVerbose(GetRecorderLog(), FLAG_DRIVER, "Calling NdisWdfRegisterMiniportDriver");
+    status = NdisWdfRegisterMiniportDriver(driverObject,
+                                           &registryPath,
+                                           NetAdapterCxDriverHandle,
+                                           (NDIS_HANDLE)this,
+                                           &ndisMPChars,
+                                           &ndisMiniportDriverHandle);
 
     if (!NT_SUCCESS(status)) {
-
+        LogError(GetRecorderLog(), FLAG_DRIVER, "NdisWdfRegisterMiniportDriver Failed %!STATUS!", status);
         FuncExit(FLAG_DRIVER);
         return status;
     }
 
     //
-    // Store the NDIS's miniport driver handle in NxDriver object for 
-    // future reference. 
+    // Store the NDIS's miniport driver handle in NxDriver object for
+    // future reference.
     //
-    NT_ASSERTMSG("Unexpected Driver Type", DriverType == NET_ADAPTER_DRIVER_TYPE_MINIPORT);
     NT_ASSERT(m_NdisMiniportDriverHandle == NULL);
     m_NdisMiniportDriverHandle = ndisMiniportDriverHandle;
-    
+
     FuncExit(FLAG_DRIVER);
     return status;
-    
+
 }
 
 NDIS_STATUS
@@ -357,9 +323,9 @@ NxDriver::_EvtNdisSetOptions(
     )
 /*++
 Routine Description:
- 
+
     An Ndis Event Callback
- 
+
     The MiniportSetOptions function registers optional handlers.  For each
     optional handler that should be registered, this function makes a call
     to NdisSetOptionalHandlers.
@@ -394,15 +360,15 @@ NxDriver::_EvtWdfCleanup(
     _In_  WDFOBJECT Driver
     )
 /*++
-Routine Description: 
- 
+Routine Description:
+
     A WDF Event Callback
- 
+
     This event callback is called when the client's WDFDRIVER object
     is being deleted.
- 
+
     NetAdapterCx.sys unregisters the client from Ndis.sys in this routine.
- 
+
 --*/
 {
     FuncEntry(FLAG_DRIVER);
@@ -419,4 +385,12 @@ Routine Description:
 
     FuncExit(FLAG_DRIVER);
     return;
+}
+
+NX_PRIVATE_GLOBALS *
+NxDriver::GetPrivateGlobals(
+    void
+    ) const
+{
+    return m_PrivateGlobals;
 }

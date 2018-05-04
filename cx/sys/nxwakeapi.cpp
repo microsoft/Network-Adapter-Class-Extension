@@ -1,24 +1,10 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxWakeApi.cpp
 
 Abstract:
 
     This module contains the "C" interface for the NxWake object.
-
-
-
-
-
-Environment:
-
-    kernel mode only
-
-Revision History:
 
 --*/
 
@@ -35,9 +21,9 @@ extern "C" {
 extern "C" {
 
 WDFAPI
-_IRQL_requires_(DISPATCH_LEVEL)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 ULONG
-NETEXPORT(NetPowerSettingsGetEnabledWakePatterns)(
+NETEXPORT(NetPowerSettingsGetEnabledWakePatternFlags)(
     _In_     PNET_DRIVER_GLOBALS    Globals,
     _In_     NETPOWERSETTINGS       NetPowerSettings
     )
@@ -49,7 +35,7 @@ Routine Description:
 Arguments:
      NetPowerSettings - The NetPowerSettings object
 
-Returns: 
+Returns:
     A bitmap flags represting which Wake patterns need
     to be enabled in the hardware for arming the device for wake.
     Refer to the documentation of NDIS_PM_PARAMETERS for more details
@@ -63,6 +49,7 @@ Returns:
     PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
     nxWake = GetNxWakeFromHandle(NetPowerSettings);
 
@@ -73,9 +60,9 @@ Returns:
 }
 
 WDFAPI
-_IRQL_requires_(DISPATCH_LEVEL)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 ULONG
-NETEXPORT(NetPowerSettingsGetEnabledProtocolOffloads)(
+NETEXPORT(NetPowerSettingsGetEnabledProtocolOffloadFlags)(
     _In_     PNET_DRIVER_GLOBALS                         Globals,
     _In_     NETPOWERSETTINGS                             Adapter
     )
@@ -88,9 +75,9 @@ Routine Description:
 
 Arguments:
     NetPowerSettings - The NetPowerSettings object
- 
-Returns: 
-    A bitmap flag representing EnabledProtocolOffloads 
+
+Returns:
+    A bitmap flag representing EnabledProtocolOffloads
     Refer to the documentation of NDIS_PM_PARAMETERS for more details
 
     This API must only be called during a power transition.
@@ -102,6 +89,7 @@ Returns:
     PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
     nxWake = GetNxWakeFromHandle(Adapter);
 
@@ -116,7 +104,7 @@ Returns:
 }
 
 WDFAPI
-_IRQL_requires_(DISPATCH_LEVEL)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 ULONG
 NETEXPORT(NetPowerSettingsGetEnabledMediaSpecificWakeUpEvents)(
     _In_     PNET_DRIVER_GLOBALS    Globals,
@@ -124,15 +112,15 @@ NETEXPORT(NetPowerSettingsGetEnabledMediaSpecificWakeUpEvents)(
     )
 /*++
 Routine Description:
-    Returns a ULONG value that contains a bitwise OR of flags. 
-    These flags specify the media-specific wake-up events that a network adapter 
+    Returns a ULONG value that contains a bitwise OR of flags.
+    These flags specify the media-specific wake-up events that a network adapter
     supports. Refer to the documentation of NDIS_PM_PARAMETERS for more details
 
     This API must only be called during a power transition.
 Arguments:
     NetPowerSettings - The NetPowerSettings object
- 
-Returns: 
+
+Returns:
     A bitmap flags represting which media-specific wake-up events need
     to be enabled in the hardware for arming the device for wake.
 
@@ -146,6 +134,7 @@ Returns:
     PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
     nxWake = GetNxWakeFromHandle(NetPowerSettings);
     Verifier_VerifyNetPowerSettingsAccessible(pNxPrivateGlobals, nxWake);
@@ -155,7 +144,7 @@ Returns:
 }
 
 WDFAPI
-_IRQL_requires_(DISPATCH_LEVEL)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 ULONG
 NETEXPORT(NetPowerSettingsGetEnabledWakeUpFlags)(
     _In_     PNET_DRIVER_GLOBALS    Globals,
@@ -168,8 +157,8 @@ Routine Description:
 
 Arguments:
     NetPowerSettings - The NetPowerSettings object
- 
-Returns: 
+
+Returns:
     A bitmap flags represting the WakeUp flags need
     to be enabled in the hardware for arming the device for wake.
     Refer to the documentation of WakeUpFlags field of NDIS_PM_PARAMETERS
@@ -180,6 +169,7 @@ Returns:
     PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
     nxWake = GetNxWakeFromHandle(NetPowerSettings);
 
@@ -190,7 +180,7 @@ Returns:
 }
 
 WDFAPI
-_IRQL_requires_(DISPATCH_LEVEL)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 PNDIS_PM_WOL_PATTERN
 NETEXPORT(NetPowerSettingsGetWakePattern)(
     _In_     PNET_DRIVER_GLOBALS    Globals,
@@ -201,9 +191,9 @@ NETEXPORT(NetPowerSettingsGetWakePattern)(
 Routine Description:
     Returns a PNDIS_PM_WOL_PATTERN structure at Index (0 based).
 
-    This API must only be called during a power transition or from the 
-    EvtPreviewWolPattern callback. In both cases, the driver should only access/examine 
-    the  PNDIS_PM_WOL_PATTERN (obtained from this API) and should NOT cache or retain 
+    This API must only be called during a power transition or from the
+    EvtPreviewWakePattern callback. In both cases, the driver should only access/examine
+    the  PNDIS_PM_WOL_PATTERN (obtained from this API) and should NOT cache or retain
     a reference to the WoL pattern(s). This is because the Cx will automatically
     release it while handling WOL pattern removal.
 
@@ -211,7 +201,7 @@ Arguments:
     NetPowerSettings - The NetPowerSettings object
     Index - 0 based index. This value must be < NetPowerSettingsGetWoLPatternCount
 
-Returns: 
+Returns:
     PNDIS_PM_WOL_PATTERN structure at Index. Returns NULL if Index is invalid.
 
 --*/
@@ -224,11 +214,12 @@ Returns:
     pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
     nxWake = GetNxWakeFromHandle(NetPowerSettings);
     Verifier_VerifyNetPowerSettingsAccessible(pNxPrivateGlobals, nxWake);
 
-    nxWakePatternEntry = nxWake->GetEntryAtIndex(Index, 
+    nxWakePatternEntry = nxWake->GetEntryAtIndex(Index,
                                                 NxPowerEntryTypeWakePattern);
     Verifier_VerifyNotNull(pNxPrivateGlobals, nxWakePatternEntry);
 
@@ -237,7 +228,7 @@ Returns:
 }
 
 WDFAPI
-_IRQL_requires_(DISPATCH_LEVEL)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 ULONG
 NETEXPORT(NetPowerSettingsGetWakePatternCount)(
     _In_     PNET_DRIVER_GLOBALS    Globals,
@@ -247,17 +238,17 @@ NETEXPORT(NetPowerSettingsGetWakePatternCount)(
 Routine Description:
     Returns the number of WoL Patterns stored in the NETPOWERSETTINGS object.
 
-    IMPORTANT: This includes both, wake patterns that are enabled and 
-    disabled. The driver can use the  NetPowerSettingsIsWakePatternEnabled 
+    IMPORTANT: This includes both, wake patterns that are enabled and
+    disabled. The driver can use the  NetPowerSettingsIsWakePatternEnabled
     API to check if a particular wake pattern is enabled.
 
-    This API must only be called during a power transition or from the 
-    EvtPreviewWolPattern callback.
+    This API must only be called during a power transition or from the
+    EvtPreviewWakePattern callback.
 
 Arguments:
     NetPowerSettings - The NetPowerSettings object
- 
-Returns: 
+
+Returns:
     Returns the number of WoL Patterns stored in the NETPOWERSETTINGS object.
 --*/
 {
@@ -266,6 +257,7 @@ Returns:
     PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
     nxWake = GetNxWakeFromHandle(NetPowerSettings);
 
@@ -276,7 +268,7 @@ Returns:
 }
 
 WDFAPI
-_IRQL_requires_(DISPATCH_LEVEL)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 BOOLEAN
 NETEXPORT(NetPowerSettingsIsWakePatternEnabled)(
     _In_     PNET_DRIVER_GLOBALS    Globals,
@@ -286,19 +278,19 @@ NETEXPORT(NetPowerSettingsIsWakePatternEnabled)(
 /*++
 Routine Description:
     This API can be used to determine if the PNDIS_PM_WOL_PATTERN obtained from
-    a prior call to NetPowerSettingsGetWoLPattern is enabled. If it is enabled 
-    the driver must program its hardware to enable the wake pattern during a 
+    a prior call to NetPowerSettingsGetWoLPattern is enabled. If it is enabled
+    the driver must program its hardware to enable the wake pattern during a
     power down transition.
 
-    This API must only be called during a power transition or from the 
-    EvtPreviewWolPattern callback.
+    This API must only be called during a power transition or from the
+    EvtPreviewWakePattern callback.
 
 Arguments:
     NetPowerSettings - The NetPowerSettings object
-    NdisPmWolPattern - Pointer to NDIS_PM_WOL_PATTERN structure that must be 
+    NdisPmWolPattern - Pointer to NDIS_PM_WOL_PATTERN structure that must be
                 obtained by a prior call to NetPowerSettingsGetWoLPattern
 
-Returns: 
+Returns:
     Returns TRUE if the WoL pattern has been enabled and driver must enable it
         in its hardware. Returns FALSE if the pattern is not enabled.
 --*/
@@ -309,6 +301,7 @@ Returns:
     PNX_NET_POWER_ENTRY nxWakeEntry;
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
     nxWake = GetNxWakeFromHandle(NetPowerSettings);
 
@@ -321,7 +314,7 @@ Returns:
     return nxWakeEntry->Enabled;
 }
 
-_IRQL_requires_max_(DISPATCH_LEVEL)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 ULONG
 NETEXPORT(NetPowerSettingsGetWakePatternCountForType)(
@@ -331,22 +324,22 @@ NETEXPORT(NetPowerSettingsGetWakePatternCountForType)(
     )
 /*++
 Routine Description:
-    Returns the number of WoL Patterns stored in the NETPOWERSETTINGS object for 
+    Returns the number of WoL Patterns stored in the NETPOWERSETTINGS object for
     a particular Wol Pattern Type
 
-    IMPORTANT: This includes both, wake patterns that are enabled and 
-    disabled. The driver can use the  NetPowerSettingsIsWakePatternEnabled 
+    IMPORTANT: This includes both, wake patterns that are enabled and
+    disabled. The driver can use the  NetPowerSettingsIsWakePatternEnabled
     API to check if a particular wake pattern is enabled.
 
     This API must only be called during a power transition or from the
-    EvtPreviewWolPattern callback.
+    EvtPreviewWakePattern callback.
 
 Arguments:
     NetPowerSettings - The NetPowerSettings object
     WakePatternType - The WakePatternType that needs to be looked up
 
 Returns:
-    Returns the number of WoL Patterns stored in the NETPOWERSETTINGS object for 
+    Returns the number of WoL Patterns stored in the NETPOWERSETTINGS object for
     the WakePatternType specified
 --*/
 {
@@ -355,6 +348,7 @@ Returns:
     PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
     nxWake = GetNxWakeFromHandle(NetPowerSettings);
 
@@ -364,7 +358,7 @@ Returns:
     return nxWake->GetWakePatternCountForType(WakePatternType);
 }
 
-_IRQL_requires_max_(DISPATCH_LEVEL)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 ULONG
 NETEXPORT(NetPowerSettingsGetProtocolOffloadCount)(
@@ -374,18 +368,18 @@ NETEXPORT(NetPowerSettingsGetProtocolOffloadCount)(
 /*++
 Routine Description:
     Returns the number of protocol offloads stored in the NETPOWERSETTINGS object.
-    
+
     IMPORTANT: This includes both, offloads that are enabled and disabled.
     The driver can use the NetPowerSettingsIsProtocolOffloadEnabled API to check
     if a particular protocol offload is enabled.
 
-    This API must only be called during a power transition or from the 
-    EvtPreviewWolPattern callback.
+    This API must only be called during a power transition or from the
+    EvtPreviewProtocolOffload callback.
 
 Arguments:
     NetPowerSettings - The NetPowerSettings object
- 
-Returns: 
+
+Returns:
     Returns the number of protocol offloads stored in the NETPOWERSETTINGS object.
 --*/
 {
@@ -394,6 +388,7 @@ Returns:
     PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
     nxWake = GetNxWakeFromHandle(NetPowerSettings);
 
@@ -403,7 +398,7 @@ Returns:
     return nxWake->GetProtocolOffloadCount();
 }
 
-_IRQL_requires_max_(DISPATCH_LEVEL)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 ULONG
 NETEXPORT(NetPowerSettingsGetProtocolOffloadCountForType)(
@@ -413,7 +408,7 @@ NETEXPORT(NetPowerSettingsGetProtocolOffloadCountForType)(
     )
 /*++
 Routine Description:
-    Returns the number of protocol offloads in the NETPOWERSETTINGS object for 
+    Returns the number of protocol offloads in the NETPOWERSETTINGS object for
     the particular offload type
 
     IMPORTANT: This includes both, offloads that are enabled and disabled.
@@ -421,14 +416,14 @@ Routine Description:
     if a particular protocol offload is enabled.
 
     This API must only be called during a power transition or from the
-    EvtPreviewWolPattern callback.
+    EvtPreviewProtocolOffload callback.
 
 Arguments:
     NetPowerSettings - The NetPowerSettings object
     ProtocolOffloadType - The offload type that needs to be looked up
 
 Returns:
-    Returns the number of protocol offloads in the NETPOWERSETTINGS object for 
+    Returns the number of protocol offloads in the NETPOWERSETTINGS object for
     the specified protocol offload type
 --*/
 {
@@ -437,6 +432,7 @@ Returns:
     PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
     nxWake = GetNxWakeFromHandle(NetPowerSettings);
 
@@ -446,7 +442,7 @@ Returns:
     return nxWake->GetProtocolOffloadCountForType(ProtocolOffloadType);
 }
 
-_IRQL_requires_max_(DISPATCH_LEVEL)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 PNDIS_PM_PROTOCOL_OFFLOAD
 NETEXPORT(NetPowerSettingsGetProtocolOffload)(
@@ -459,18 +455,18 @@ Routine Description:
     Returns a PNDIS_PM_PROTOCOL_OFFLOAD structure at the provided Index.
     Note that the Index is 0 based.
 
-    This API must only be called during a power transition or from the 
-    EvtPreviewProtocolOffload callback. In both cases, the driver should only 
+    This API must only be called during a power transition or from the
+    EvtPreviewProtocolOffload callback. In both cases, the driver should only
     access/examine the  PNDIS_PM_PROTOCOL_OFFLOAD (obtained from this API) and
-    should NOT cache or retain a reference to the protocol offload. 
-    This is because the Cx will automatically release it while handling 
+    should NOT cache or retain a reference to the protocol offload.
+    This is because the Cx will automatically release it while handling
     offload removal without notifying the driver
 
 Arguments:
     NetPowerSettings - The NetPowerSettings object
     Index - 0 based index. This value must be < NetPowerSettingsGetProtocolOffloadCount
 
-Returns: 
+Returns:
     PNDIS_PM_PROTOCOL_OFFLOAD structure at Index. Returns NULL if Index is invalid.
 
 --*/
@@ -483,6 +479,7 @@ Returns:
     pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
     nxWake = GetNxWakeFromHandle(NetPowerSettings);
     Verifier_VerifyNetPowerSettingsAccessible(pNxPrivateGlobals, nxWake);
@@ -493,10 +490,10 @@ Returns:
     FuncExit(FLAG_POWER);
     return nxPowerEntry ? &(nxPowerEntry->NdisProtocolOffload) : NULL;
 }
- 
+
 
 WDFAPI
-_IRQL_requires_max_(DISPATCH_LEVEL)
+_IRQL_requires_max_(PASSIVE_LEVEL)
 BOOLEAN
 NETEXPORT(NetPowerSettingsIsProtocolOffloadEnabled)(
     _In_ PNET_DRIVER_GLOBALS       DriverGlobals,
@@ -505,18 +502,18 @@ NETEXPORT(NetPowerSettingsIsProtocolOffloadEnabled)(
     )
 /*++
 Routine Description:
-    This API can be used to determine if the PNDIS_PM_PROTOCOL_OFFLOAD obtained 
-    from a prior call to NetPowerSettingsGetProtocolOffload is enabled. 
+    This API can be used to determine if the PNDIS_PM_PROTOCOL_OFFLOAD obtained
+    from a prior call to NetPowerSettingsGetProtocolOffload is enabled.
 
-    This API must only be called during a power transition or from the 
+    This API must only be called during a power transition or from the
     EvtPreviewProtocolOffload callback.
 
 Arguments:
     NetPowerSettings - The NetPowerSettings object
-    NdisOffload - Pointer to PNDIS_PM_PROTOCOL_OFFLOAD structure that must be 
+    NdisOffload - Pointer to PNDIS_PM_PROTOCOL_OFFLOAD structure that must be
                 obtained by a prior call to NetPowerSettingsGetProtocolOffload
 
-Returns: 
+Returns:
     Returns TRUE if the protocol offload has been enabled.
     Returns FALSE if the offload is not enabled.
 --*/
@@ -527,6 +524,7 @@ Returns:
     PNX_NET_POWER_ENTRY nxPowerEntry;
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
     nxWake = GetNxWakeFromHandle(NetPowerSettings);
 

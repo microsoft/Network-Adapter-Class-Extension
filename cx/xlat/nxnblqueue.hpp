@@ -1,10 +1,6 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-    Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxNblQueue.hpp
 
 Abstract:
 
@@ -27,7 +23,14 @@ public:
     void Enqueue(_In_ PNET_BUFFER_LIST pNbl);
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
-    PNET_BUFFER_LIST DequeueAll();
+    void Enqueue(_Inout_ NBL_QUEUE *queue);
+
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    void DequeueAll(_Out_ NBL_QUEUE *destination);
+
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    NET_BUFFER_LIST *DequeueAll();
+
 
 private:
 

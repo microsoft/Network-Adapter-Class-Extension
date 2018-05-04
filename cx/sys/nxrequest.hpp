@@ -1,24 +1,10 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxRequest.hpp
 
 Abstract:
 
     This is the definition of the NxRequest object.
-
-
-
-
-
-Environment:
-
-    kernel mode only
-
-Revision History:
 
 --*/
 
@@ -38,7 +24,7 @@ typedef class NxRequest *PNxRequest;
 class NxRequest : public CFxCancelableObject<NETREQUEST,
                                              NxRequest,
                                              GetNxRequestFromHandle,
-                                             false> 
+                                             false>
 {
     friend class NxRequestQueue;
 
@@ -63,7 +49,7 @@ private:
     //
     LIST_ENTRY                   m_CancelTempListEntry;
 
-public: 
+public:
 
     //
     // Pointer to the Ndis Oid Request
@@ -84,7 +70,7 @@ public:
 private:
     NxRequest(
         _In_ PNX_PRIVATE_GLOBALS      NxPrivateGlobals,
-        _In_ NETREQUEST               NetRequest, 
+        _In_ NETREQUEST               NetRequest,
         _In_ PNxAdapter               NxAdapter,
         _In_ PNDIS_OID_REQUEST        NdisOidRequest,
         _In_ NDIS_OID                 OidId,
@@ -107,7 +93,7 @@ public:
         );
 
     RECORDER_LOG
-    GetRecorderLog() { 
+    GetRecorderLog() {
         return m_NxAdapter->GetRecorderLog();
     }
 
@@ -135,6 +121,8 @@ public:
         _In_ ULONG BytesNeeded
         );
 
+    PNxAdapter
+    GetNxAdapter() const;
 };
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxRequest, _GetNxRequestFromHandle);
@@ -150,7 +138,7 @@ Routine Description:
     This routine is just a wrapper around the _GetNxRequestFromHandle function.
     To be able to define a the NxRequest class above, we need a forward declaration of the
     accessor function. Since _GetNxRequestFromHandle is defined by Wdf, we dont want to
-    assume a prototype of that function for the foward declaration. 
+    assume a prototype of that function for the foward declaration.
 
 --*/
 

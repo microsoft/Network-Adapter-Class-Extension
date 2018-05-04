@@ -1,10 +1,6 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
 /*++
-
-    Copyright (C) Microsoft Corporation. All rights reserved.
-
-Module Name:
-
-    NxNblDatapath.cpp
 
 Abstract:
 
@@ -36,7 +32,6 @@ NxNblDatapath::SetTxHandler(_In_opt_ INxNblTx *tx)
     }
     else
     {
-        WIN_ASSERT(m_tx != nullptr);
         m_txRundown.CloseAndWait();
         m_tx = nullptr;
     }
@@ -53,7 +48,6 @@ NxNblDatapath::SetRxHandler(_In_opt_ INxNblRx *rx)
     }
     else
     {
-        WIN_ASSERT(m_rx != nullptr);
         m_rxRundown.CloseAndWait();
         m_rx = nullptr;
     }
@@ -127,9 +121,15 @@ NxNblDatapath::ReturnNetBufferLists(
     _In_ NET_BUFFER_LIST *nblChain,
     _In_ ULONG receiveReturnFlags)
 {
-    auto numberOfNbls = ndisNumNblsInNblChain(nblChain);
+#if DBG
+    auto actualNumberOfNbls = ndisNumNblsInNblChain(nblChain);
+#endif
 
-    m_rx->ReturnNetBufferLists(nblChain, numberOfNbls, receiveReturnFlags);
+    auto numberOfNbls = 
+        m_rx->ReturnNetBufferLists(nblChain, receiveReturnFlags);
+
+    NT_ASSERT(numberOfNbls == actualNumberOfNbls);
+
     m_rxRundown.Release(numberOfNbls);
 }
 
