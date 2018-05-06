@@ -2,11 +2,17 @@
 The Network Adapter Class Extension to WDF (NetAdapterCx) brings together the productivity of WDF with the networking performance of NDIS.
 The goal of NetAdpaterCx is to make it easy to write a great driver for your NIC.
 
-## Lastest Release - Windows 10 Creators Update (version 1703)
+## Lastest Release - Windows 10 April 2018 Update (version 1803)
 
 **Source Code to NetAdpaterCx.sys**: Right here
 
 **API Documentation**: [Network Adapter WDF Class Extension (Cx)](https://aka.ms/netadapter/doc)
+
+**Visual Studio 2017**: [Visual Studio 2017 Download](https://www.visualstudio.com/downloads/)
+
+**Windows 10 WDK**: [Windows 10 WDK Download](https://docs.microsoft.com/en-us/windows-hardware/drivers/download-the-wdk)
+
+**Windows 10 SDK**: [Windows 10 SDK Download](https://developer.microsoft.com/en-US/windows/downloads/windows-10-sdk)
 
 **Driver Samples**: [Microsoft/NetAdapter-Cx-Driver-Samples](https://github.com/Microsoft/NetAdapter-Cx-Driver-Samples "Driver Samples")
 
@@ -36,8 +42,6 @@ The code has several major pieces:
 NetAdapterCx.sys uses a few simple utility headers to wrap low-level kernel calls.
 For example, KSpinLock.h provides a convenient wrapper around the kernel's native spinlock.
 KRegKey.h provides convenient C++ wrappers to access the registry.
-
-nblutil.h is largely stand-alone; you may find it useful in your own network driver project.
 
 ### The core NetAdapterCx.sys implementation
 
