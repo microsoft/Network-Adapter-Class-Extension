@@ -13,7 +13,7 @@ Abstract:
 Environment:
 
     Kernel mode or usermode unittest
-    
+
 --*/
 
 #pragma once

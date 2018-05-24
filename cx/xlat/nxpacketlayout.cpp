@@ -50,7 +50,7 @@ NxGetPacketEtherType(
 static
 void
 ParseEthernetHeader(
-    _Inout_ UCHAR const *&buffer,
+    _Outref_result_bytebuffer_(bytesRemaining) UCHAR const *&buffer,
     _Inout_ ULONG &bytesRemaining,
     _Out_ NET_PACKET_LAYOUT &layout)
 {
@@ -150,7 +150,7 @@ GetLayer4Type(
 static
 void
 ParseIPv4Header(
-    _Inout_ UCHAR const *&buffer,
+    _Outref_result_bytebuffer_(bytesRemaining) UCHAR const *&buffer,
     _Inout_ ULONG &bytesRemaining,
     _Out_ NET_PACKET_LAYOUT &layout)
 {
@@ -248,7 +248,7 @@ ParseIPv6ExtensionHeader(
 static
 void
 ParseIPv6Header(
-    _Inout_ UCHAR const *&buffer,
+    _Outref_result_bytebuffer_(bytesRemaining) UCHAR const *&buffer,
     _Inout_ ULONG &bytesRemaining,
     _Out_ NET_PACKET_LAYOUT &layout)
 {
@@ -303,7 +303,7 @@ ParseIPv6Header(
 static
 void
 ParseTcpHeader(
-    _Inout_ UCHAR const *&buffer,
+    _Outref_result_bytebuffer_(bytesRemaining) UCHAR const *&buffer,
     _Inout_ ULONG &bytesRemaining,
     _Out_ NET_PACKET_LAYOUT &layout)
 {
@@ -352,6 +352,8 @@ NxGetPacketLayout(
     _In_ NET_DATAPATH_DESCRIPTOR const * descriptor,
     _In_ NET_PACKET const *packet)
 {
+    NT_ASSERT(packet->FragmentValid == TRUE);
+
     auto fragment = NET_PACKET_GET_FRAGMENT(packet, descriptor, 0);
     auto buffer = (UCHAR const*)fragment->VirtualAddress + fragment->Offset;
     auto bytesRemaining = (ULONG)fragment->ValidLength;

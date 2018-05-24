@@ -115,7 +115,7 @@ class KWaitEvent : public KWaitEventBase<manual_reset_event_t>
 {
 public:
 
-    PAGED KWaitEvent() WI_NOEXCEPT
+    PAGED KWaitEvent() noexcept
     {
         InitializeBase();
     }
@@ -146,7 +146,7 @@ class KAutoEvent : public KWaitEventBase<auto_reset_event_t>
 {
 public:
 
-    PAGED KAutoEvent() WI_NOEXCEPT
+    PAGED KAutoEvent() noexcept
     {
         InitializeBase();
     }

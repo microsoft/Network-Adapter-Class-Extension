@@ -7,7 +7,7 @@ template<ULONG SIGNATURE>
 struct KRTL_CLASS NdisDebugBlock
 {
 #if DBG
-    PAGED ~NdisDebugBlock() 
+    PAGED ~NdisDebugBlock()
     {
         ASSERT_VALID();
         Signature |= 0x80;

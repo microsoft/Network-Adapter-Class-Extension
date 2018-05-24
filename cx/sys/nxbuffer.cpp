@@ -11,6 +11,9 @@ Abstract:
 #include "Nx.hpp"
 
 #include "NxBuffer.tmh"
+#include "NxBuffer.hpp"
+
+#include "NxQueue.hpp"
 
 #define NXQUEUE_FROM_RING_BUFFER(rb) ((NxQueue*)(rb)->OSReserved2[1])
 

@@ -10,7 +10,39 @@ Abstract:
 
 #pragma once
 
-#include <wil\resource.h>
+#include <FxObjectBase.hpp>
+#include <KWaitEvent.h>
+
+class AsyncResult
+{
+public:
+
+    void
+    Set(
+        _In_ NTSTATUS Status
+        );
+
+    NTSTATUS
+    Wait(
+        void
+        );
+
+private:
+
+    KAutoEvent m_signal;
+    NTSTATUS m_status = STATUS_SUCCESS;
+};
+
+enum class DeviceState
+{
+    Initialized = 0,
+    SelfManagedIoInitialized,
+    Started,
+    ReleasingPhase1,
+    ReleasingPhase2,
+    Released,
+    Removed
+};
 
 _Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -68,3 +100,8 @@ using unique_wdf_reference = wil::unique_any<TWdfHandle, decltype(&::_WdfObjectD
 
 template<typename TFxObject>
 using unique_fx_ptr = wistd::unique_ptr<TFxObject, CFxObjectDeleter>;
+
+NET_ADAPTER_DATAPATH_CALLBACKS
+GetDefaultDatapathCallbacks(
+    void
+    );

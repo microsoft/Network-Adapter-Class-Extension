@@ -3,6 +3,9 @@
 #include "Nx.hpp"
 
 #include "NxAdapterCollection.tmh"
+#include "NxAdapterCollection.hpp"
+
+#include "NxAdapter.hpp"
 
 NxAdapterCollection::NxAdapterCollection(
     void
@@ -23,6 +26,14 @@ NxAdapterCollection::Initialize(
         "Failed to create NxAdapterCollection wait lock");
 
     return STATUS_SUCCESS;
+}
+
+bool
+NxAdapterCollection::Empty(
+    void
+    ) const
+{
+    return m_Count == 0;
 }
 
 ULONG
@@ -75,14 +86,8 @@ NxAdapterCollection::AddAdapter(
 {
     auto lock = wil::acquire_wdf_wait_lock(m_ListLock);
 
-    // For now make the first created adapter be the default
-    auto setAsDefault = IsListEmpty(&m_ListHead);
-
     InsertTailList(&m_ListHead, &Adapter->m_Linkage);
     m_Count++;
-
-    if (setAsDefault)
-        Adapter->SetAsDefault();
 }
 
 _Use_decl_annotations_

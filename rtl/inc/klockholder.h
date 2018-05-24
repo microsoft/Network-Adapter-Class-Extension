@@ -7,10 +7,10 @@
 class KRTL_CLASS KLockHolder
 {
 private:
-    
+
     enum { Unlocked, Shared, Exclusive } m_State;
 
-public:    
+public:
 
     PAGED KLockHolder(KPushLockBase &lock) : m_Lock(lock), m_State(Unlocked) { }
     PAGED ~KLockHolder()

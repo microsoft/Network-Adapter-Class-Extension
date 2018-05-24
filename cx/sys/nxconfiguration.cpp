@@ -11,22 +11,26 @@ Abstract:
 #include "Nx.hpp"
 
 #include "NxConfiguration.tmh"
+#include "NxConfiguration.hpp"
+
+#include "NxAdapter.hpp"
+#include "NxMacros.hpp"
+#include "NxUtility.hpp"
+#include "verifier.hpp"
+
+struct NX_PRIVATE_GLOBALS;
 
 NxConfiguration::NxConfiguration(
-    _In_ PNX_PRIVATE_GLOBALS      NxPrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS *     NxPrivateGlobals,
     _In_ NETCONFIGURATION         Configuration,
-    _In_ PNxConfiguration         ParentNxConfiguration,
-    _In_ PNxAdapter               NxAdapter) :
+    _In_ NxConfiguration *        ParentNxConfiguration,
+    _In_ NxAdapter *              NxAdapter) :
     CFxObject(Configuration),
     m_ParentNxConfiguration(ParentNxConfiguration),
     m_NxAdapter(NxAdapter),
     m_NdisConfigurationHandle(NULL)
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
     UNREFERENCED_PARAMETER(NxPrivateGlobals);
-
-    FuncExit(FLAG_CONFIGURATION);
 }
 
 PAGED NTSTATUS
@@ -82,11 +86,7 @@ NxConfiguration::ReadConfiguration(
 
 NxConfiguration::~NxConfiguration()
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
     NT_ASSERT(m_NdisConfigurationHandle == NULL);
-
-    FuncExit(FLAG_CONFIGURATION);
 }
 
 VOID
@@ -102,10 +102,7 @@ Routine Description:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
-    PNxConfiguration nxConfiguration = GetNxConfigurationFromHandle((NETCONFIGURATION)Configuration);
-
+    auto nxConfiguration = GetNxConfigurationFromHandle((NETCONFIGURATION)Configuration);
     if (nxConfiguration->m_NdisConfigurationHandle) {
         //
         // Close Ndis Configuration
@@ -114,16 +111,15 @@ Routine Description:
         nxConfiguration->m_NdisConfigurationHandle = NULL;
     }
 
-    FuncExit(FLAG_CONFIGURATION);
     return;
 }
 
 NTSTATUS
 NxConfiguration::_Create(
-    _In_     PNX_PRIVATE_GLOBALS      PrivateGlobals,
-    _In_     PNxAdapter               NxAdapter,
-    _In_opt_ PNxConfiguration         ParentNxConfiguration,
-    _Out_    PNxConfiguration*        NxConfigurationArg
+    _In_     NX_PRIVATE_GLOBALS *     PrivateGlobals,
+    _In_     NxAdapter *              NxAdapter,
+    _In_opt_ NxConfiguration *        ParentNxConfiguration,
+    _Out_    NxConfiguration **       NxConfigurationArg
 )
 /*++
 Routine Description:
@@ -135,15 +131,11 @@ Routine Description:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
     NTSTATUS                  status;
 
     // The WDFOBJECT created by NetAdapterCx representing the Net Adapter
     NETCONFIGURATION          netConfiguration;
 
-    PNxConfiguration          nxConfiguration;
-    PVOID                     nxConfigurationMemory;
     WDF_OBJECT_ATTRIBUTES     attributes;
 
     //
@@ -168,7 +160,6 @@ Routine Description:
     if (!NT_SUCCESS(status)) {
         LogError(NxAdapter->GetRecorderLog(), FLAG_CONFIGURATION,
                  "WdfObjectCreate for NetConfiguration failed %!STATUS!", status);
-        FuncExit(FLAG_CONFIGURATION);
         return status;
     }
 
@@ -176,13 +167,13 @@ Routine Description:
     // Since we just created the NetAdapter, the NxConfiguration object has
     // yet not been constructed. Get the nxConfiguration's memory.
     //
-    nxConfigurationMemory = (PVOID) GetNxConfigurationFromHandle(netConfiguration);
+    void * nxConfigurationMemory = GetNxConfigurationFromHandle(netConfiguration);
 
     //
     // Use the inplacement new and invoke the constructor on the
     // NxConfiguration's memory
     //
-    nxConfiguration = new (nxConfigurationMemory) NxConfiguration(PrivateGlobals,
+    auto nxConfiguration = new (nxConfigurationMemory) NxConfiguration(PrivateGlobals,
                                                                   netConfiguration,
                                                                   ParentNxConfiguration,
                                                                   NxAdapter);
@@ -195,7 +186,6 @@ Routine Description:
 
     status = STATUS_SUCCESS;
 
-    FuncExit(FLAG_CONFIGURATION);
     return status;
 }
 
@@ -209,8 +199,6 @@ Routine Description:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
     NTSTATUS                  status;
     NDIS_STATUS               ndisStatus;
 
@@ -238,7 +226,6 @@ Routine Description:
     if (ndisStatus != NDIS_STATUS_SUCCESS) {
         LogError(m_NxAdapter->GetRecorderLog(), FLAG_CONFIGURATION,
                  "NdisOpenConfigurationEx failed ndis-status %!NDIS_STATUS!", ndisStatus);
-        FuncExit(FLAG_CONFIGURATION);
         return NdisConvertNdisStatusToNtStatus(ndisStatus);
     }
 
@@ -246,7 +233,6 @@ Routine Description:
 
     status = STATUS_SUCCESS;
 
-    FuncExit(FLAG_CONFIGURATION);
     return status;
 }
 
@@ -260,8 +246,6 @@ Routine Description:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
     NTSTATUS                  status;
     NDIS_STATUS               ndisStatus;
 
@@ -278,7 +262,6 @@ Routine Description:
     if (ndisStatus != NDIS_STATUS_SUCCESS) {
         LogError(m_NxAdapter->GetRecorderLog(), FLAG_CONFIGURATION,
                  "NdisOpenConfigurationKeyByName failed ndis-status %!NDIS_STATUS!", ndisStatus);
-        FuncExit(FLAG_CONFIGURATION);
         return NdisConvertNdisStatusToNtStatus(ndisStatus);
     }
 
@@ -286,7 +269,6 @@ Routine Description:
 
     status = STATUS_SUCCESS;
 
-    FuncExit(FLAG_CONFIGURATION);
     return status;
 }
 
@@ -316,7 +298,6 @@ NxConfiguration::AddAttributes(
     _In_ PWDF_OBJECT_ATTRIBUTES Attributes
     )
 {
-    FuncEntry(FLAG_CONFIGURATION);
     NTSTATUS status;
     status = WdfObjectAllocateContext(GetFxObject(), Attributes, NULL);
     if (!NT_SUCCESS(status)) {
@@ -324,7 +305,6 @@ NxConfiguration::AddAttributes(
                  "WdfObjectAllocateContext Failed %!STATUS!", status);
     }
 
-    FuncExit(FLAG_CONFIGURATION);
     return status;
 }
 
@@ -359,8 +339,6 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
     NTSTATUS status;
     PNDIS_CONFIGURATION_PARAMETER ndisConfigurationParam;
     NDIS_PARAMETER_TYPE ndisParamType;
@@ -378,7 +356,6 @@ Arguments:
         status = STATUS_INVALID_PARAMETER;
         LogError(GetRecorderLog(), FLAG_CONFIGURATION,
                  "Invalid Flags Value %!NET_CONFIGURATION_QUERY_ULONG_FLAGS!", Flags);
-        FuncExit(FLAG_CONFIGURATION);
         return status;
     }
 
@@ -389,7 +366,6 @@ Arguments:
         (NdisParameterHexInteger != ndisConfigurationParam->ParameterType)) {
         LogError(GetRecorderLog(), FLAG_CONFIGURATION,
                  "ReadConfiguration returned data of type %!NDIS_PARAMETER_TYPE!, but the caller requested an Integer type", ndisConfigurationParam->ParameterType);
-        FuncExit(FLAG_CONFIGURATION);
         return STATUS_OBJECT_TYPE_MISMATCH;
     }
 
@@ -400,7 +376,6 @@ Arguments:
 
     status = STATUS_SUCCESS;
 
-    FuncExit(FLAG_CONFIGURATION);
     return status;
 }
 
@@ -427,8 +402,6 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
     NTSTATUS status;
     PNDIS_CONFIGURATION_PARAMETER ndisConfigurationParam;
     WDF_OBJECT_ATTRIBUTES attribs;
@@ -443,7 +416,6 @@ Arguments:
         LogError(GetRecorderLog(), FLAG_CONFIGURATION,
                  "ReadConfiguration returned data of type %!NDIS_PARAMETER_TYPE!, but the caller requested a String type",
                  ndisConfigurationParam->ParameterType);
-        FuncExit(FLAG_CONFIGURATION);
         status = STATUS_OBJECT_TYPE_MISMATCH;
         return status;
     }
@@ -477,7 +449,6 @@ Arguments:
                  "WdfStringCreate failed %!STATUS!", status);
     }
 
-    FuncExit(FLAG_CONFIGURATION);
     return status;
 }
 
@@ -508,8 +479,6 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
     NTSTATUS status;
     PNDIS_CONFIGURATION_PARAMETER ndisConfigurationParam;
 
@@ -523,7 +492,6 @@ Arguments:
         LogError(GetRecorderLog(), FLAG_CONFIGURATION,
                  "ReadConfiguration returned data of type %!NDIS_PARAMETER_TYPE!, but the caller requested a MultiString type",
                  ndisConfigurationParam->ParameterType);
-        FuncExit(FLAG_CONFIGURATION);
         return STATUS_OBJECT_TYPE_MISMATCH;
     }
 
@@ -533,7 +501,6 @@ Arguments:
                                        ndisConfigurationParam->ParameterData.StringData.Length,
                                        GetRecorderLog());
 
-    FuncExit(FLAG_CONFIGURATION);
     return status;
 }
 
@@ -567,8 +534,6 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
     NTSTATUS status;
     PNDIS_CONFIGURATION_PARAMETER ndisConfigurationParam;
     WDF_OBJECT_ATTRIBUTES attribs;
@@ -584,7 +549,6 @@ Arguments:
         LogError(GetRecorderLog(), FLAG_CONFIGURATION,
                  "ReadConfiguration returned data of type %!NDIS_PARAMETER_TYPE!, but the caller requested a Binary type",
                  ndisConfigurationParam->ParameterType);
-        FuncExit(FLAG_CONFIGURATION);
         status = STATUS_NOT_FOUND;
         return status;
     }
@@ -623,14 +587,12 @@ Arguments:
     if (!NT_SUCCESS(status)) {
         LogError(GetRecorderLog(), FLAG_CONFIGURATION,
                  "WdfMemoryCreate failed %!STATUS!", status);
-        FuncExit(FLAG_CONFIGURATION);
     }
 
     RtlCopyMemory(buffer,
                   ndisConfigurationParam->ParameterData.BinaryData.Buffer,
                   ndisConfigurationParam->ParameterData.BinaryData.Length);
 
-    FuncExit(FLAG_CONFIGURATION);
     return status;
 }
 
@@ -661,8 +623,6 @@ Returns:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
     NTSTATUS status;
     NDIS_STATUS ndisStatus;
     PVOID networkAddressBuffer;
@@ -682,7 +642,6 @@ Returns:
                   status,
                   ndisStatus);
 
-        FuncExit(FLAG_CONFIGURATION);
         return status;
     }
 
@@ -692,7 +651,6 @@ Returns:
             resultLength,
             NDIS_MAX_PHYS_ADDRESS_LENGTH);
 
-        FuncExit(FLAG_CONFIGURATION);
         return STATUS_BUFFER_OVERFLOW;
     }
 
@@ -701,7 +659,6 @@ Returns:
         static_cast<USHORT>(resultLength),
         static_cast<UCHAR *>(networkAddressBuffer));
 
-    FuncExit(FLAG_CONFIGURATION);
     return status;
 }
 
@@ -725,8 +682,6 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
     NTSTATUS status;
     NDIS_STATUS ndisStatus;
     NDIS_CONFIGURATION_PARAMETER ndisConfigurationParam;
@@ -746,13 +701,11 @@ Arguments:
     if (!NT_SUCCESS(status)) {
         LogError(GetRecorderLog(), FLAG_CONFIGURATION,
                  "NdisWriteConfiguration failed with status %!STATUS! ndisStatus %!NDIS_STATUS!", status, ndisStatus);
-        FuncExit(FLAG_CONFIGURATION);
         return status;
     }
 
     status = STATUS_SUCCESS;
 
-    FuncExit(FLAG_CONFIGURATION);
     return status;
 }
 
@@ -776,8 +729,6 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
     NTSTATUS status;
     NDIS_STATUS ndisStatus;
     NDIS_CONFIGURATION_PARAMETER ndisConfigurationParam;
@@ -799,13 +750,11 @@ Arguments:
     if (!NT_SUCCESS(status)) {
         LogError(GetRecorderLog(), FLAG_CONFIGURATION,
                  "NdisWriteConfiguration failed with status %!STATUS! ndisStatus %!NDIS_STATUS!", status, ndisStatus);
-        FuncExit(FLAG_CONFIGURATION);
         return status;
     }
 
     status = STATUS_SUCCESS;
 
-    FuncExit(FLAG_CONFIGURATION);
     return status;
 }
 
@@ -832,8 +781,6 @@ Arguments:
     BufferLength - The length of the buffer in bytes.
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
     NTSTATUS status;
     NDIS_STATUS ndisStatus;
     NDIS_CONFIGURATION_PARAMETER ndisConfigurationParam;
@@ -845,7 +792,6 @@ Arguments:
     if (BufferLength >= USHORT_MAX) {
         LogError(GetRecorderLog(), FLAG_CONFIGURATION,
                  "Buffer size is too long: %d", BufferLength);
-        FuncExit(FLAG_CONFIGURATION);
         return STATUS_BUFFER_OVERFLOW;
     }
 
@@ -862,13 +808,11 @@ Arguments:
     if (!NT_SUCCESS(status)) {
         LogError(GetRecorderLog(), FLAG_CONFIGURATION,
                  "NdisWriteConfiguration failed with status %!STATUS! ndisStatus %!NDIS_STATUS!", status, ndisStatus);
-        FuncExit(FLAG_CONFIGURATION);
         return status;
     }
 
     status = STATUS_SUCCESS;
 
-    FuncExit(FLAG_CONFIGURATION);
     return status;
 }
 
@@ -914,8 +858,6 @@ Comments:
     Call NdisWriteConfiguration to assing the multi string
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
     NTSTATUS status;
     NDIS_STATUS ndisStatus;
     NDIS_CONFIGURATION_PARAMETER ndisConfigurationParam;
@@ -1093,7 +1035,6 @@ Exit:
     if (strBuffer) {
         ExFreePool(strBuffer);
     }
-    FuncExit(FLAG_CONFIGURATION);
     return status;
 }
 

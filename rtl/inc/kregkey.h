@@ -64,6 +64,14 @@ public:
         _In_ ULONG index,
         _Inout_ KPtr<Rtl::KString> &name);
 
+    PAGED NTSTATUS IsValuePresent(
+        _In_opt_ PCWSTR ValueName,
+        _Out_ bool &IsPresent);
+
+    PAGED NTSTATUS IsValuePresent(
+        _In_ PCUNICODE_STRING ValueName,
+        _Out_ bool &IsPresent);
+
     PAGED NTSTATUS QueryValueBoolean(
         _In_ PCWSTR Name,
         _Out_ BOOLEAN *Value,
@@ -113,8 +121,8 @@ public:
     PAGED NTSTATUS QueryValueGuid(
         _In_ PCUNICODE_STRING Name,
         _Out_ GUID *Value);
-    
-    template <typename Lambda>    
+
+    template <typename Lambda>
     PAGED NTSTATUS QueryValueBlob(
         _In_ PCWSTR Name,
         _In_ Lambda Callback)
@@ -127,7 +135,7 @@ public:
         return QueryValueBlob(&temp, Callback);
     }
 
-    template <typename Lambda>    
+    template <typename Lambda>
     PAGED NTSTATUS QueryValueBlob(
         _In_ PCUNICODE_STRING Name,
         _In_ Lambda Callback)
@@ -143,7 +151,7 @@ public:
         KEY_VALUE_PARTIAL_INFORMATION *Information = &StackInformation;
         wistd::unique_ptr<UCHAR[]> HeapBuffer;
 
-        ULONG BytesNeeded;    
+        ULONG BytesNeeded;
         NtStatus = ZwQueryValueKey(
                 *this,
                 const_cast<PUNICODE_STRING>(Name),
@@ -180,7 +188,7 @@ public:
         return Callback(Information->Data, Information->DataLength);
     }
 
-    template <typename CountLambda, typename PerStringLambda>    
+    template <typename CountLambda, typename PerStringLambda>
     PAGED NTSTATUS QueryValueMultisz(
         _In_ PCWSTR Name,
         _In_ CountLambda CountCallback,
@@ -194,7 +202,7 @@ public:
         return QueryValueMultisz(&temp, CountCallback, PerStringCallback);
     }
 
-    template <typename CountLambda, typename PerStringLambda>    
+    template <typename CountLambda, typename PerStringLambda>
     PAGED NTSTATUS QueryValueMultisz(
         _In_ PCUNICODE_STRING Name,
         _In_ CountLambda CountCallback,
@@ -211,7 +219,7 @@ public:
         KEY_VALUE_PARTIAL_INFORMATION *Information = &StackInformation;
         wistd::unique_ptr<UCHAR[]> HeapBuffer;
 
-        ULONG BytesNeeded;    
+        ULONG BytesNeeded;
         NtStatus = ZwQueryValueKey(
                 *this,
                 const_cast<PUNICODE_STRING>(Name),
@@ -285,13 +293,13 @@ public:
         {
             if (*CurrentStart == L'\0')
                 return STATUS_SUCCESS;
-        
+
             PCWSTR CurrentEnd = CurrentStart;
             do
             {
                 ++CurrentEnd;
             } while (*CurrentEnd != L'\0');
-        
+
             NtStatus = PerStringCallback(CurrentStart, Index);
             if (!NT_SUCCESS(NtStatus))
                 return NtStatus;

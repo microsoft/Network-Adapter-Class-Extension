@@ -15,37 +15,36 @@ Abstract:
 #include "NxTxXlat.hpp"
 #include "NxRxXlat.hpp"
 
-struct ReceiveScaleMapping
-{
-
-    PROCESSOR_NUMBER
-        Number;
-
-    Rtl::KArray<UINT16>
-        HashIndexes;
-
-    size_t
-        QueueIndex = ~0U;
-
-    ULONG
-        QueueId = ~0U;
-
-    bool
-        QueueCreated = false;
-
-};
-
 class NxTranslationApp :
     public INxApp
 {
 
 public:
 
+    _IRQL_requires_(PASSIVE_LEVEL)
     NxTranslationApp(
         _In_ NET_CLIENT_DISPATCH const * Dispatch,
         _In_ NET_CLIENT_ADAPTER Adapter,
         _In_ NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
         ) noexcept;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NET_CLIENT_ADAPTER_PROPERTIES
+    GetProperties(
+        void
+        ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES
+    GetDatapathCapabilities(
+        void
+        ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NET_CLIENT_ADAPTER_RECEIVE_SCALING_CAPABILITIES
+    GetReceiveScalingCapabilities(
+        void
+        ) const;
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
@@ -55,57 +54,30 @@ public:
 
     _IRQL_requires_(PASSIVE_LEVEL)
     void
+    StartDatapath(
+        void
+        );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    StopDatapath(
+        void
+        );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
     DestroyDatapath(
         void
         );
 
-    _IRQL_requires_(PASSIVE_LEVEL)
-    NTSTATUS
-    ReceiveScalingParametersSet(
-        _In_ NDIS_OID_REQUEST & Request
-        );
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    NTSTATUS
-    ReceiveScalingIndirectionTableEntriesSet(
-        _In_ NDIS_OID_REQUEST & Request
-        );
-
 private:
 
-    PAGED
+    _IRQL_requires_(PASSIVE_LEVEL)
+    PAGEDX
     NTSTATUS
-    StartTx(
+    CreateDefaultQueues(
         void
         );
-
-    PAGED
-    NTSTATUS
-    StartRx(
-        void
-        );
-
-    bool
-    ReceiveScalingEvaluateDisable(
-        _In_ NDIS_RECEIVE_SCALE_PARAMETERS const & Parameters
-        );
-
-    NTSTATUS
-    ReceiveScalingEvaluateEnable(
-        _In_ NDIS_RECEIVE_SCALE_PARAMETERS const & Parameters
-        );
-
-    NTSTATUS
-    NxTranslationApp::ReceiveScalingEvaluateIndirectionEntries(
-        _In_ PROCESSOR_NUMBER const * ProcessorNumbers,
-        _In_ size_t Count
-        );
-
-    KSpinLock
-        m_translatorLock;
-
-    Rtl::KArray<ReceiveScaleMapping>
-        m_receiveScaleMappings;
 
     wistd::unique_ptr<NxTxXlat>
         m_txQueue;

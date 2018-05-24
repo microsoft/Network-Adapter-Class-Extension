@@ -10,12 +10,13 @@ Abstract:
 
 #include "Nx.hpp"
 
+#include <NxApi.hpp>
+
 #include "NxConfigurationApi.tmh"
 
-//
-// extern the whole file
-//
-extern "C" {
+#include "NxConfiguration.hpp"
+#include "verifier.hpp"
+#include "version.hpp"
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
@@ -38,19 +39,13 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
-    PNxConfiguration  nxConfiguration;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxConfiguration = GetNxConfigurationFromHandle(Configuration);
+    GetNxConfigurationFromHandle(Configuration)->Close();
 
-    nxConfiguration->Close();
-
-    FuncExit(FLAG_CONFIGURATION);
     return;
 }
 
@@ -88,28 +83,23 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
-    PNxConfiguration         nxConfiguration;
-    PNxConfiguration         subNxConfiguration;
     NTSTATUS                 status;
-    PNX_PRIVATE_GLOBALS      pNxPrivateGlobals;
 
-    pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxConfiguration = GetNxConfigurationFromHandle(Configuration);
 
     *SubConfiguration = NULL;
 
+    NxConfiguration * subNxConfiguration;
+    auto nxConfiguration = GetNxConfigurationFromHandle(Configuration);
     status = NxConfiguration::_Create(pNxPrivateGlobals,
                                       nxConfiguration->m_NxAdapter,
                                       nxConfiguration,
                                       &subNxConfiguration);
     if (!NT_SUCCESS(status)){
-        FuncExit(FLAG_CONFIGURATION);
         return status;
     }
 
@@ -117,7 +107,6 @@ Arguments:
 
     if (!NT_SUCCESS(status)){
         subNxConfiguration->DeleteFromFailedOpen();
-        FuncExit(FLAG_CONFIGURATION);
         return status;
     }
 
@@ -130,7 +119,6 @@ Arguments:
 
         if (!NT_SUCCESS(status)){
             subNxConfiguration->Close();
-            FuncExit(FLAG_CONFIGURATION);
             return status;
         }
     }
@@ -141,7 +129,6 @@ Arguments:
     // to be called unless this call succeeds.
     //
     *SubConfiguration = subNxConfiguration->GetFxObject();
-    FuncExit(FLAG_CONFIGURATION);
     return status;
 }
 
@@ -175,18 +162,15 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
     NTSTATUS status;
-    PNxConfiguration  nxConfiguration;
 
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
     Verifier_VerifyQueryAsUlongFlags(pNxPrivateGlobals, Flags);
 
-    nxConfiguration = GetNxConfigurationFromHandle(Configuration);
+    auto nxConfiguration = GetNxConfigurationFromHandle(Configuration);
 
     switch (Flags) {
     case NET_CONFIGURATION_QUERY_ULONG_NO_FLAGS:
@@ -196,13 +180,11 @@ Arguments:
         status = STATUS_INVALID_PARAMETER;
         LogError(nxConfiguration->GetRecorderLog(), FLAG_CONFIGURATION,
                  "Invalid Flags Value %!NET_CONFIGURATION_QUERY_ULONG_FLAGS!", Flags);
-        FuncExit(FLAG_CONFIGURATION);
         return status;
     }
 
     status = nxConfiguration->QueryUlong(Flags, ValueName, Value);
 
-    FuncExit(FLAG_CONFIGURATION);
     return status;
 }
 
@@ -236,21 +218,12 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
-    NTSTATUS status;
-    PNxConfiguration  nxConfiguration;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxConfiguration = GetNxConfigurationFromHandle(Configuration);
-
-    status = nxConfiguration->QueryString(ValueName, StringAttributes, WdfString);
-
-    FuncExit(FLAG_CONFIGURATION);
-    return status;
+    return GetNxConfigurationFromHandle(Configuration)->QueryString(ValueName, StringAttributes, WdfString);
 }
 
 _Must_inspect_result_
@@ -287,21 +260,12 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
-    NTSTATUS status;
-    PNxConfiguration  nxConfiguration;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxConfiguration = GetNxConfigurationFromHandle(Configuration);
-
-    status = nxConfiguration->QueryMultiString(ValueName, StringsAttributes, Collection);
-
-    FuncExit(FLAG_CONFIGURATION);
-    return status;
+    return GetNxConfigurationFromHandle(Configuration)->QueryMultiString(ValueName, StringsAttributes, Collection);
 }
 
 _Must_inspect_result_
@@ -340,24 +304,15 @@ Arguments:
     WdfMemory - Output WDFMEMORY object representing the Data read
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
-    NTSTATUS status;
-    PNxConfiguration  nxConfiguration;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxConfiguration = GetNxConfigurationFromHandle(Configuration);
-
-    status = nxConfiguration->QueryBinary(ValueName,
+    return GetNxConfigurationFromHandle(Configuration)->QueryBinary(ValueName,
                                           PoolType,
                                           MemoryAttributes,
                                           WdfMemory);
-
-    FuncExit(FLAG_CONFIGURATION);
-    return status;
 }
 
 _Must_inspect_result_
@@ -390,22 +345,13 @@ Returns:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
-    NTSTATUS status;
-    PNxConfiguration  nxConfiguration;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
     Verifier_VerifyNotNull(pNxPrivateGlobals, LinkLayerAddress);
 
-    nxConfiguration = GetNxConfigurationFromHandle(Configuration);
-
-    status = nxConfiguration->QueryLinkLayerAddress(LinkLayerAddress);
-
-    FuncExit(FLAG_CONFIGURATION);
-    return status;
+    return GetNxConfigurationFromHandle(Configuration)->QueryLinkLayerAddress(LinkLayerAddress);
 }
 
 _Must_inspect_result_
@@ -437,21 +383,12 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
-    NTSTATUS status;
-    PNxConfiguration  nxConfiguration;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto  pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxConfiguration = GetNxConfigurationFromHandle(Configuration);
-
-    status = nxConfiguration->AssignUlong(ValueName, Value);
-
-    FuncExit(FLAG_CONFIGURATION);
-    return status;
+    return GetNxConfigurationFromHandle(Configuration)->AssignUlong(ValueName, Value);
 }
 
 _Must_inspect_result_
@@ -481,21 +418,12 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
-    NTSTATUS status;
-    PNxConfiguration  nxConfiguration;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxConfiguration = GetNxConfigurationFromHandle(Configuration);
-
-    status = nxConfiguration->AssignUnicodeString(ValueName, Value);
-
-    FuncExit(FLAG_CONFIGURATION);
-    return status;
+    return GetNxConfigurationFromHandle(Configuration)->AssignUnicodeString(ValueName, Value);
 }
 
 
@@ -528,21 +456,12 @@ Arguments:
     BufferLength - The length of the buffer in bytes.
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
-    NTSTATUS status;
-    PNxConfiguration  nxConfiguration;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxConfiguration = GetNxConfigurationFromHandle(Configuration);
-
-    status = nxConfiguration->AssignBinary(ValueName, Buffer, BufferLength);
-
-    FuncExit(FLAG_CONFIGURATION);
-    return status;
+    return GetNxConfigurationFromHandle(Configuration)->AssignBinary(ValueName, Buffer, BufferLength);
 }
 
 _Must_inspect_result_
@@ -573,21 +492,11 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_CONFIGURATION);
-
-    NTSTATUS status;
-    PNxConfiguration  nxConfiguration;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxConfiguration = GetNxConfigurationFromHandle(Configuration);
-
-    status = nxConfiguration->AssignMultiString(ValueName, StringsCollection);
-
-    FuncExit(FLAG_CONFIGURATION);
-    return status;
+    return GetNxConfigurationFromHandle(Configuration)->AssignMultiString(ValueName, StringsCollection);
 }
 
-} // extern "C"

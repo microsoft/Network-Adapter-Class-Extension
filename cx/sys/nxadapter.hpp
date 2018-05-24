@@ -34,76 +34,67 @@ Abstract:
 
 #endif // _KERNEL_MODE
 
+#include <FxObjectBase.hpp>
 #include <KWaitEvent.h>
 #include <smfx.h>
-#include <wil\resource.h>
 
-#include "FxObjectBase.hpp"
 #include "NxAdapterStateMachine.h"
-#include "NxForward.hpp"
 
 #include "NxPacketExtensionPrivate.hpp"
 
 #include <NetClientApi.h>
 
+#include "NxAdapterExtension.hpp"
+#include "NxUtility.hpp"
+
 #define PTR_TO_TAG(val) ((PVOID)(ULONG_PTR)(val))
 
-typedef union _AdapterFlags
-{
+#pragma warning(push)
 #pragma warning(disable:4201)
+
+union AdapterFlags
+{
     struct
     {
         //
-        // The SetGeneralAttributesInProgress adds validation that
-        // the client is calling certain SetCapabilities APIs
-        // only from EvtAdapterSetCapabilities callback
+        // TRUE if the client driver already called NetAdapterStart. Does not mean
+        // the adapter is fully started
         //
-        ULONG
-            SetGeneralAttributesInProgress : 1;
+        UINT32
+            StartCalled : 1;
 
         //
-        // Used to keep track of why the client's data path is paused.
+        // TRUE if the Cx already set the NDIS general attributes
         //
-        ULONG
-            PauseReasonNdis : 1;
+        UINT32
+            GeneralAttributesSet : 1;
 
-        ULONG
-            PauseReasonWdf : 1;
+        UINT32
+            StartPending : 1;
 
-        ULONG
-            PauseReasonStopping : 1;
+        UINT32
+            StopPending : 1;
 
-        //
-        // Stop reasons tell why the adapter did not start yet, MiniportInitializeEx
-        // is called only after all these flags are cleared
-        //
-
-        // The adapter can't start because the parent device is not started yet
-        ULONG
-            StopReasonPnp : 1;
-
-        // The adapter can't start because the driver did not call NetAdapterStart
-        ULONG
-            StopReasonApi : 1;
-
-        //
-        // If restart is a result of NDIS requesting restart, adapter must call
-        // NdisMRestartComplete.
-        //
-        ULONG
-            NdisMiniportRestartInProgress : 1;
-        //
-        //
-        //
-        ULONG
-            IsDefault : 1;
-
+        UINT32
+            Unused : 28;
     };
 
-    ULONG
-        Flags;
+    UINT32
+        AsInteger;
 
-} AdapterFlags;
+};
+
+C_ASSERT(sizeof(AdapterFlags) == sizeof(UINT32));
+
+#pragma warning(pop)
+
+enum class AdapterState
+{
+    Initialized = 0,
+    Started,
+    Stopping,
+    Stopped,
+};
 
 //
 // The NxAdapter is an object that represents a NetAdapterCx Client Adapter
@@ -153,16 +144,54 @@ NDIS_PM_CAPABILITIES_INIT_FROM_NET_ADAPTER_POWER_CAPABILITIES(
     }
 }
 
-PNxAdapter
+#define ADAPTER_INIT_SIGNATURE 'SIAN'
+
+struct PAGED AdapterInit : PAGED_OBJECT<'nIAN'>
+{
+    ULONG InitSignature = ADAPTER_INIT_SIGNATURE;
+    NETADAPTER CreatedAdapter = nullptr;
+
+    //
+    // Common to all types of adapters
+    //
+    NET_ADAPTER_DATAPATH_CALLBACKS DatapathCallbacks = {};
+    WDF_OBJECT_ATTRIBUTES NetRequestAttributes = {};
+
+    // For adapters layered on top of a WDFDEVICE
+    WDFDEVICE Device = nullptr;
+    WDF_OBJECT_ATTRIBUTES NetPowerSettingsAttributes = {};
+
+    // Used by other WDF class extensions that wish to hook NETADAPTER events
+    Rtl::KArray<AdapterExtensionInit> AdapterExtensions;
+
+    bool Default = false;
+};
+
+AdapterInit *
+GetAdapterInitFromHandle(
+    _In_ NX_PRIVATE_GLOBALS *PrivateGlobals,
+    _In_ PNETADAPTER_INIT Handle
+    );
+
+struct QUEUE_CREATION_CONTEXT;
+struct NX_PRIVATE_GLOBALS;
+
+class NxAdapter;
+class NxDriver;
+class NxQueue;
+class NxRequestQueue;
+class NxWake;
+
 FORCEINLINE
+NxAdapter *
 GetNxAdapterFromHandle(
     _In_ NETADAPTER Adapter
     );
 
-typedef class NxAdapter *PNxAdapter;
+
 class NxAdapter
     : public CFxObject<NETADAPTER, NxAdapter, GetNxAdapterFromHandle, false>
-    , private NxAdapterStateMachine<NxAdapter>
+    , public NxAdapterStateMachine<NxAdapter>
 {
     friend class NxAdapterCollection;
 
@@ -174,6 +203,21 @@ private:
     WDFDEVICE
         m_Device;
 
+    const bool
+        m_Default;
+
+    AdapterFlags
+        m_Flags;
+
+    AdapterState
+        m_State = AdapterState::Initialized;
+
+    AsyncResult
+        m_StartHandled;
+
+    KAutoEvent
+        m_StopHandled;
+
     LIST_ENTRY
         m_Linkage;
 
@@ -183,11 +227,17 @@ private:
     Rtl::KArray<wil::unique_wdf_object>
         m_txQueues;
 
+    Rtl::KArray<NxAdapterExtension>
+        m_adapterExtensions;
+
     //
     // Data path lock. Prevent concurrent queue create and destroy.
     //
     WDFWAITLOCK
         m_DataPathControlLock;
+
+    KAutoEvent
+        m_TransitionComplete;
 
     //
     // Certain callbacks must wait for the state machine to finish processing a
@@ -217,14 +267,6 @@ private:
     //
     WDFWORKITEM
         m_PowerRequiredWorkItem;
-
-    //
-    // Track WdfDeviceStopIdle failures so as to avoid imbalance of stop idle
-    // and resume idle. This relieves the caller (NDIS) from needing to keep
-    // track of failures.
-    //
-    volatile LONG
-        m_PowerRefFailureCount;
 
     //
     // Track whether the queued workitem ran.
@@ -271,30 +313,13 @@ private:
     //
     // All datapath apps on the adapter
     //
-    Rtl::KArray<wistd::unique_ptr<INxApp>>
+    Rtl::KArray<wistd::unique_ptr<INxApp>, NonPagedPoolNx>
         m_Apps;
 
     NxNblDatapath
         m_NblDatapath;
 
 #endif // _KERNEL_MODE
-
-    //
-    // Work item used to start NDIS datapath in case of a PnP rebalance,
-    // the KWaitEvent is used to make sure we delay any remove operations
-    // while the work item is executing
-    //
-    WDFWORKITEM
-        m_StartDatapathWorkItem;
-
-    KWaitEvent
-        m_StartDatapathWorkItemDone;
-
-    //
-    // Work item used to stop the adapter when NetAdapterStop is called (if needed)
-    //
-    WDFWORKITEM
-        m_StopAdapterWorkItem;
 
     //
     // Adapter registered packet extensions from application/miniport driver
@@ -308,6 +333,9 @@ private:
     // Receive scaling capabilities
     NET_ADAPTER_RECEIVE_SCALING_CAPABILITIES
         m_ReceiveScalingCapabilities = {};
+
+    UNICODE_STRING
+        m_BaseName = {};
 
 private:
 
@@ -326,86 +354,40 @@ private:
     EvtMachineDestroyedFunc
         EvtMachineDestroyed;
 
-    // State machine operations
-    SyncOperationDispatch
-        NdisInitialize;
-
-    SyncOperationDispatch
-        ShouldClientDataPathStartForSelfManagedIoRestart;
-
-    SyncOperationDispatch
-        ShouldClientDataPathStartForNdisRestart;
-
-    SyncOperationDispatch
-        ClientDataPathStarting;
-
     AsyncOperationDispatch
-        RestartDatapathAfterStop;
+        AsyncTransitionComplete;
 
     AsyncOperationDispatch
         NdisHalt;
 
-    AsyncOperationDispatch
-        ClientDataPathPaused;
-
-    AsyncOperationDispatch
-        ClientDataPathStarted;
-
-    AsyncOperationDispatch
-        PauseClientDataPathForNdisPause;
-
-    AsyncOperationDispatch
-        ClientDataPathPausing;
+    SyncOperationDispatch
+        AdapterPause;
 
     SyncOperationDispatch
-        ClientDataPathPauseComplete;
-
-    AsyncOperationDispatch
-        ClientDataPathStartFailed;
-
-    AsyncOperationDispatch
-        PauseClientDataPathForSelfManagedIoSuspend;
-
-    AsyncOperationDispatch
-        PauseClientDataPathForNdisPause2;
-
-    AsyncOperationDispatch
-        PauseClientDataPathForStop;
-
-    AsyncOperationDispatch
-        StoppingAdapterReportToNdis;
+        DatapathCreate;
 
     SyncOperationDispatch
-        ShouldAdapterStartForPnpStart;
+        DatapathDestroy;
 
     SyncOperationDispatch
-        ShouldAdapterStartForNetAdapterStart;
-
-    AsyncOperationDispatch
-        AdapterHalted;
+        DatapathStart;
 
     SyncOperationDispatch
-        InitializingReportToNdis;
+        DatapathStop;
+
+    SyncOperationDispatch
+        DatapathStartRestartComplete;
+
+    SyncOperationDispatch
+        DatapathStopPauseComplete;
+
+    SyncOperationDispatch
+        DatapathPauseComplete;
+
+    SyncOperationDispatch
+        DatapathRestartComplete;
 
 public:
-
-    //
-    // Arrary of active NETTX/RXQUEUE objects
-    //
-    WDFOBJECT
-        m_DataPathQueues[2];
-
-    //
-    // Event that is set when the Data Path is paused.
-    //
-    KAutoEvent
-        m_IsPaused;
-
-    //
-    // Event that is set when the adapter is halted
-    //
-    KWaitEvent
-        m_IsHalted;
 
     //
     // Copy of Capabilities set by the client.
@@ -440,28 +422,6 @@ public:
     NET_ADAPTER_LINK_LAYER_ADDRESS
         m_CurrentLinkLayerAddress;
 
-    // Receive scaling
-    struct ReceiveScaling
-    {
-
-        bool
-            Enabled = false;
-
-        bool
-            DatapathRunning = false;
-
-        NET_ADAPTER_RECEIVE_SCALING_HASH_TYPE
-            HashType = NetAdapterReceiveScalingHashTypeNone;
-
-        NET_ADAPTER_RECEIVE_SCALING_PROTOCOL_TYPE
-            ProtocolType = NetAdapterReceiveScalingProtocolTypeNone;
-
-        NET_ADAPTER_RECEIVE_SCALING_HASH_SECRET_KEY
-            HashSecretKey = { 0, {} };
-
-    }
-        m_ReceiveScaling;
-
     //
     // Opaque handle returned by ndis.sys for this adapter.
     //
@@ -469,10 +429,10 @@ public:
         m_NdisAdapterHandle;
 
     //
-    // A copy of the config structure that client passed to NetAdapterCx.
+    // A copy of the datapath callbacks structure that client passed to NetAdapterCx.
     //
-    NET_ADAPTER_CONFIG
-        m_Config;
+    NET_ADAPTER_DATAPATH_CALLBACKS
+        m_datapathCallbacks;
 
     //
     // optional callback API from the driver if rx buffer allocation mode
@@ -495,10 +455,10 @@ public:
     // Pointer to the Default and Default Direct Oid Queus
     //
 
-    PNxRequestQueue
+    NxRequestQueue *
         m_DefaultRequestQueue;
 
-    PNxRequestQueue
+    NxRequestQueue *
         m_DefaultDirectRequestQueue;
 
     //
@@ -507,31 +467,43 @@ public:
     LIST_ENTRY
         m_ListHeadAllOids;
 
-    AdapterFlags
-        m_Flags;
-
 #ifdef _KERNEL_MODE
     //
     // WakeList is used to manage wake patterns, WakeUpFlags and
     // MediaSpecificWakeUpEvents
     //
-    PNxWake
+    NxWake *
         m_NxWake;
 
 #endif // _KERNEL_MODE
 
+    AdapterState
+    GetCurrentState(
+        void
+        ) const;
+
     NTSTATUS
-    ApiStart(
+    ClientStart(
         void
         );
 
     void
-    PnpStart(
+    ClientStop(
         void
         );
 
     void
-    Stop(
+    StopPhase1(
+        void
+        );
+
+    void
+    StopPhase2(
+        void
+        );
+
+    void
+    ReportSurpriseRemove(
         void
         );
 
@@ -543,6 +515,11 @@ public:
     void
     GetDatapathCapabilities(
         _Out_ NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES * DatapathCapabilities
+        ) const;
+
+    void
+    GetReceiveScalingCapabilities(
+        _Out_ NET_CLIENT_ADAPTER_RECEIVE_SCALING_CAPABILITIES * Capabilities
         ) const;
 
     NTSTATUS
@@ -576,21 +553,6 @@ public:
     ReturnRxBuffer(
         _In_ PVOID RxBufferVa,
         _In_ PVOID RxBufferReturnContext
-        );
-
-    NTSTATUS
-    CreateQueueGroup(
-        _In_reads_(ClientQueueGroupConfig->NumberOfQueues) PVOID ClientQueueContexts[],
-        _In_ NET_CLIENT_QUEUE_NOTIFY_DISPATCH const * ClientDispatch,
-        _In_ NET_CLIENT_QUEUE_GROUP_CONFIG const * ClientQueueGroupConfig,
-        _Out_ NET_CLIENT_QUEUE_GROUP * AdapterQueueGroup,
-        _Out_writes_(ClientQueueGroupConfig->NumberOfQueues) NET_CLIENT_QUEUE AdapterQueues[],
-        _Out_ NET_CLIENT_QUEUE_DISPATCH const ** AdapterQueueDispatch
-        );
-
-    void
-    DestroyQueueGroup(
-        _In_ NET_CLIENT_QUEUE_GROUP AdapterQueueGroup
         );
 
     _IRQL_requires_(PASSIVE_LEVEL)
@@ -629,15 +591,34 @@ public:
 private:
 
     NxAdapter(
-        _In_ PNX_PRIVATE_GLOBALS NxPrivateGlobals,
-        _In_ NETADAPTER Adapter,
-        _In_ WDFDEVICE Device,
-        _In_ PNET_ADAPTER_CONFIG Config
+        _In_ NX_PRIVATE_GLOBALS * NxPrivateGlobals,
+        _In_ AdapterInit const *AdapterInit,
+        _In_ NETADAPTER Adapter
         );
 
     void
     DestroyQueue(
         _In_ NxQueue * Queue
+        );
+
+    NTSTATUS
+    InitializeAdapterExtensions(
+        _In_ AdapterInit const *AdapterInit
+        );
+
+    void
+    StartForClient(
+        _In_ DeviceState DeviceState
+        );
+
+    NTSTATUS
+    StartForClientInner(
+        _In_ DeviceState DeviceState
+        );
+
+    void
+    StopForClient(
+        _In_ DeviceState DeviceState
         );
 
 public:
@@ -646,23 +627,37 @@ public:
         void
         );
 
+    NX_PRIVATE_GLOBALS *
+    GetPrivateGlobals(
+        void
+        ) const;
+
+    NET_DRIVER_GLOBALS *
+    GetPublicGlobals(
+        void
+        ) const;
+
     NTSTATUS
     ValidatePowerCapabilities(
         void
-    );
+        );
 
     static
     NTSTATUS
     _Create(
-        _In_ PNX_PRIVATE_GLOBALS PrivateGlobals,
-        _In_ WDFDEVICE Device,
+        _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+        _In_ AdapterInit const *AdapterInit,
         _In_opt_ PWDF_OBJECT_ATTRIBUTES ClientAttributes,
-        _In_ PNET_ADAPTER_CONFIG Config,
-        _Out_ PNxAdapter * Adapter
+        _Out_ NxAdapter ** Adapter
         );
 
     NTSTATUS
     Init(
+        _In_ AdapterInit const *AdapterInit
+        );
+
+    void
+    PrepareForRebalance(
         void
         );
 
@@ -670,6 +665,11 @@ public:
     GetNdisHandle(
         VOID
         ) const;
+
+    void
+    Refresh(
+        _In_ DeviceState DeviceState
+        );
 
     static
     VOID
@@ -714,12 +714,6 @@ public:
     VOID
     _EvtNdisPowerDereference(
         _In_ NDIS_HANDLE NxAdapterAsContext
-        );
-
-    NTSTATUS
-    AcquirePowerReferenceHelper(
-        _In_ BOOLEAN WaitForD0,
-        _In_ PVOID Tag
         );
 
     static
@@ -773,11 +767,6 @@ public:
     _EvtNdisHaltEx(
         _In_ NDIS_HANDLE NxAdapterAsContext,
         _In_ NDIS_HALT_ACTION HaltAction
-        );
-
-    VOID
-    NdisHaltEx(
-        void
         );
 
     static
@@ -887,18 +876,6 @@ public:
         );
 
     static
-    VOID
-    _EvtStartDatapathWorkItem(
-        _In_ WDFWORKITEM WorkItem
-        );
-
-    static
-    VOID
-    _EvtStopAdapterWorkItem(
-        _In_ WDFWORKITEM WorkItem
-        );
-
-    static
     NTSTATUS
     _EvtNdisAllocateMiniportBlock(
         _In_  NDIS_HANDLE NxAdapterAsContext,
@@ -919,18 +896,22 @@ public:
         _In_ NDIS_HANDLE NxAdapterAsContext
         );
 
+    static
+    NTSTATUS
+    _EvtNdisMiniportDeviceReset(
+        _In_ NDIS_HANDLE NxAdapterAsContext,
+        _In_ NET_DEVICE_RESET_TYPE NetDeviceResetType
+        );
+
+    static
+    NTSTATUS
+    _EvtNdisMiniportQueryDeviceResetSupport(
+        _In_ NDIS_HANDLE NxAdapterAsContext,
+        _Out_ PULONG SupportedNetDeviceResetTypes
+        );
+
     NTSTATUS
     InitializeDatapath(
-        void
-        );
-
-    NTSTATUS
-    CreateDatapath(
-        void
-        );
-
-    void
-    DestroyDatapath(
         void
         );
 
@@ -938,6 +919,16 @@ public:
     GetNetLuid(
         void
         );
+
+    UNICODE_STRING const &
+    GetBaseName(
+        void
+        ) const;
+
+    bool
+    StartCalled(
+        void
+        ) const;
 
     NTSTATUS
     SetRegistrationAttributes(
@@ -970,6 +961,21 @@ public:
         _In_ NET_ADAPTER_RECEIVE_SCALING_CAPABILITIES const & Capabilities
         );
 
+    void
+    SetLinkLayerCapabilities(
+        _In_ NET_ADAPTER_LINK_LAYER_CAPABILITIES const & LinkLayerCapabilities
+        );
+
+    void
+    SetPowerCapabilities(
+        _In_ NET_ADAPTER_POWER_CAPABILITIES const & PowerCapabilities
+        );
+
+    void
+    SetCurrentLinkState(
+        _In_ NET_ADAPTER_LINK_STATE const & CurrentLinkState
+        );
+
     VOID
     ClearGeneralAttributes(
         void
@@ -979,6 +985,11 @@ public:
     SetMtuSize(
         _In_ ULONG mtuSize
         );
+
+    ULONG
+    GetMtuSize(
+        void
+        ) const;
 
     VOID
     IndicatePowerCapabilitiesToNdis(
@@ -1000,19 +1011,19 @@ public:
         void
         );
 
-    BOOLEAN
-    IsClientDataPathStarted(
-        void
-        );
-
     VOID
     InitializeSelfManagedIO(
         void
         );
 
-    VOID
-    SuspendSelfManagedIO(
+    NTSTATUS
+    InitializePowerManagement(
         void
+        );
+
+    VOID
+    SuspendSelfManagedIo(
+        _In_ bool SuspendForDx
         );
 
     VOID
@@ -1024,26 +1035,6 @@ public:
     WaitForStateChangeResult(
         void
         );
-
-    void
-    SignalMiniportStartComplete(
-        _In_ NTSTATUS Status
-        );
-
-    NTSTATUS
-    WaitForMiniportStart(
-        void
-        );
-
-    bool
-    AnyReasonToBePaused(
-        void
-        ) const;
-
-    bool
-    AnyReasonToBeStopped(
-        void
-        ) const;
 
     bool
     HasPermanentLinkLayerAddress(
@@ -1082,21 +1073,21 @@ public:
         _In_ QUEUE_CREATION_CONTEXT & QueueCreationContext
         );
 
-    VOID
-    SetAsDefault(
-        VOID
-        );
-
     bool
     IsDefault(
         VOID
         ) const;
+
+    void
+    DispatchRequest(
+        _In_ NETREQUEST Request
+        );
 };
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxAdapter, _GetNxAdapterFromHandle);
 
-PNxAdapter
 FORCEINLINE
+NxAdapter *
 GetNxAdapterFromHandle(
     _In_ NETADAPTER Adapter
     )

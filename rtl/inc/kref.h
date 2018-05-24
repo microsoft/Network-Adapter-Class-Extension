@@ -32,7 +32,7 @@ Usage:
 
     KRef is appropriate when ownership of a thing is complicated, because
     there are multiple owners, and these owners may go away in a
-    nondeterministic order.  If ownership is simpler, you should see KPtr 
+    nondeterministic order.  If ownership is simpler, you should see KPtr
     instead.  KPtr is more efficient in CPU time and space than KRef.
 
     To use a KRef, you need to allocate the first instance with the allocate()
@@ -110,23 +110,23 @@ template<typename T>
 class KRTL_CLASS KRef
 {
     class KRTL_CLASS KRefHolder :
-        public KALLOCATOR<T::AllocationTag, T::AllocationArena>, 
+        public KALLOCATOR<T::AllocationTag, T::AllocationArena>,
         public NdisDebugBlock<T::AllocationTag>
     {
     public:
-    
+
         template<typename... Args>
-        PAGED KRefHolder(Args&&... args) WI_NOEXCEPT : _t(wistd::forward<Args>(args)...), RefCount(1) { }
+        PAGED KRefHolder(Args&&... args) noexcept : _t(wistd::forward<Args>(args)...), RefCount(1) { }
 
         PAGED ~KRefHolder() { ASSERT_VALID(); ASSERT(RefCount == 0); }
-    
+
         PAGED void AddRef()
         {
             ASSERT_VALID();
             ASSERT(RefCount > 0);
             InterlockedIncrement((PLONG)&RefCount);
         }
-    
+
         PAGED void Release()
         {
             ASSERT_VALID();
@@ -145,7 +145,7 @@ class KRTL_CLASS KRef
             This->ASSERT_VALID();
             return This;
         }
-        
+
         friend class ::ndisTriageClass;
         friend VOID ::ndisInitGlobalTriageBlock();
 
@@ -159,18 +159,18 @@ class KRTL_CLASS KRef
 
 public:
 
-    PAGED KRef() WI_NOEXCEPT : _p(pointer()) { }
-    PAGED KRef(nullptr_t) WI_NOEXCEPT : _p(pointer()) { }
-    
-    PAGED KRef(KRef<T> const &rhs) WI_NOEXCEPT : _p(rhs._p) { ref(); }
+    PAGED KRef() noexcept : _p(pointer()) { }
+    PAGED KRef(nullptr_t) noexcept : _p(pointer()) { }
+
+    PAGED KRef(KRef<T> const &rhs) noexcept : _p(rhs._p) { ref(); }
     PAGED KRef<T> &operator=(KRef<T> &rhs)
     {
         if (this != &rhs)
             reset(rhs._p);
         return *this;
     }
-    
-    PAGED KRef(KRef<T> &&rhs) WI_NOEXCEPT : _p(rhs.steal()) { }
+
+    PAGED KRef(KRef<T> &&rhs) noexcept : _p(rhs.steal()) { }
     PAGED KRef<T> &operator=(KRef<T> &&rhs)
     {
         if (this != &rhs)
@@ -205,7 +205,7 @@ public:
     {
         reset(KRefHolder::from_pointer(t));
     }
-    
+
 private:
 
     PAGED void ref()
@@ -253,7 +253,7 @@ private:
 
         if (!p)
             return false;
-        
+
         take(p);
         return true;
     }

@@ -11,17 +11,21 @@ Abstract:
 #include "Nx.hpp"
 
 #include "NxWake.tmh"
+#include "NxWake.hpp"
+
+#include "NxAdapter.hpp"
+#include "NxDevice.hpp"
+#include "NxMacros.hpp"
+#include "version.hpp"
 
 NxWake::NxWake(
     _In_ NETPOWERSETTINGS    NetPowerSettingsWdfHandle,
-    _In_ PNxAdapter         NxAdapter) :
+    _In_ NxAdapter *         NxAdapter) :
     CFxObject(NetPowerSettingsWdfHandle),
     m_NxAdapter(NxAdapter),
     m_WakeListCount(0),
     m_ProtocolOffloadListCount(0)
 {
-    FuncEntry(FLAG_POWER);
-
     m_WakeListHead.Next = NULL;
     m_ProtocolOffloadListHead.Next = NULL;
     m_DriverObjectCallbacksEnabled = FALSE;
@@ -30,15 +34,12 @@ NxWake::NxWake(
     m_DriverCanAccessWakeSettings = FALSE;
 
     RtlZeroMemory(&m_PMParameters, sizeof(m_PMParameters));
-
-    FuncExit(FLAG_POWER);
 }
 
 NxWake::~NxWake(
     VOID
     )
 {
-    FuncEntry(FLAG_POWER);
     PNX_NET_POWER_ENTRY nxPowerEntry;
     PSINGLE_LIST_ENTRY listEntry;
 
@@ -53,8 +54,6 @@ NxWake::~NxWake(
         nxPowerEntry = CONTAINING_RECORD(listEntry, NX_NET_POWER_ENTRY, ListEntry);
         ExFreePoolWithTag(nxPowerEntry, NETADAPTERCX_TAG);
     }
-
-    FuncExit(FLAG_POWER);
 }
 
 VOID
@@ -73,7 +72,7 @@ Returns:
     VOID
 --*/
 {
-    PNxWake pNxWake = GetNxWakeFromHandle((NETPOWERSETTINGS)Object);
+    auto pNxWake = GetNxWakeFromHandle((NETPOWERSETTINGS)Object);
 
     if (pNxWake->m_DriverObjectCallbacksEnabled) {
         if (pNxWake->m_EvtCleanupCallback != NULL) {
@@ -97,7 +96,7 @@ Returns:
     VOID
 --*/
 {
-    PNxWake pNxWake = GetNxWakeFromHandle((NETPOWERSETTINGS)Object);
+    auto pNxWake = GetNxWakeFromHandle((NETPOWERSETTINGS)Object);
 
     if (pNxWake->m_DriverObjectCallbacksEnabled) {
         if (pNxWake->m_EvtDestroyCallback != NULL) {
@@ -108,9 +107,9 @@ Returns:
 
 NTSTATUS
 NxWake::_Create(
-    _In_  PNxAdapter               NetAdapter,
+    _In_  NxAdapter *              NetAdapter,
     _In_  PWDF_OBJECT_ATTRIBUTES   NetPowerSettingsObjectAttributes,
-    _Out_ PNxWake*                 NxWakeObj
+    _Out_ NxWake **                NxWakeObj
 )
 /*++
 Routine Description:
@@ -118,20 +117,16 @@ Routine Description:
 
 Arguments:
     NxAdapter - Pointer to the NxAdapter object associated with the wake object
-    PNxWake -   Out parameter to the allocated wake object if sucessful
+    NxWake ** - Out parameter to the allocated wake object if sucessful
 
 Returns:
     NTSTATUS
 
 --*/
 {
-    FuncEntry(FLAG_POWER);
-
     NTSTATUS                status;
     WDF_OBJECT_ATTRIBUTES   attributes;
-    PNxWake                 pNxWake;
     NETPOWERSETTINGS        netPowerSettingsWdfObj;
-    PVOID                   netPowerSettingsWdfObjCtx;
     PWDF_OBJECT_ATTRIBUTES  driversNetPowerObjAttributes;
 
     //
@@ -149,7 +144,6 @@ Returns:
     if (!NT_SUCCESS(status)) {
         LogError(NetAdapter->GetRecorderLog(), FLAG_POWER,
                  "WdfObjectCreate for NETPOWERSETTINGS failed %!STATUS!", status);
-        FuncExit(FLAG_POWER);
         return status;
     }
 
@@ -157,12 +151,12 @@ Returns:
     // Get the NxWake allocation, which is the ctx associated with the
     // WDF object.
     //
-    netPowerSettingsWdfObjCtx = (PVOID) GetNxWakeFromHandle(netPowerSettingsWdfObj);
+    void * netPowerSettingsWdfObjCtx = GetNxWakeFromHandle(netPowerSettingsWdfObj);
 
     //
     // Use the inplacement new and invoke the NxWake constructor
     //
-    pNxWake = new (netPowerSettingsWdfObjCtx) NxWake(netPowerSettingsWdfObj,
+    auto pNxWake = new (netPowerSettingsWdfObjCtx) NxWake(netPowerSettingsWdfObj,
                                                 NetAdapter);
     __analysis_assume(pNxWake != NULL);
     NT_ASSERT(pNxWake);
@@ -190,7 +184,6 @@ Returns:
             LogError(NetAdapter->GetRecorderLog(), FLAG_POWER,
                 "WdfObjectAllocateContext with NetPowerSettingsObjectAttributes failed %!STATUS!", status);
             WdfObjectDelete(netPowerSettingsWdfObj);
-            FuncExit(FLAG_POWER);
             return status;
         }
     }
@@ -201,20 +194,19 @@ Returns:
     //
     *NxWakeObj = pNxWake;
 
-    FuncExit(FLAG_POWER);
     return status;
 }
 
 NDIS_STATUS
-NxWake::ProcessOidProtocolOffload(
+NxWake::AddProtocolOffload(
     _In_ NETADAPTER AdapterWdfHandle,
-    _In_ _NDIS_OID_REQUEST::_REQUEST_DATA::_SET *SetInformation
+    _In_ NDIS_OID_REQUEST::_REQUEST_DATA::_SET const *SetInformation
     )
 /*++
 Routine Description:
-    Processes addition and removal of protocol offloads. In case of addition
-    presents the offload to the driver for filtering it if it has registered a
-    preview callback to process it.
+    Processes addition of protocol offloads. The added offload is provided
+    to the driver for filtering if it has registered a preview callback to
+    process it.
 
 Arguments:
     AdapterWdfHandle - NETADAPTER handle
@@ -227,87 +219,98 @@ Returns:
 
 --*/
 {
+    ASSERT(! m_DriverCanAccessWakeSettings);
+
     PNX_NET_POWER_ENTRY nxPowerEntry;
     NTSTATUS status = STATUS_SUCCESS;
     PNDIS_PM_PROTOCOL_OFFLOAD ndisProtocolOffload;
 
-    ASSERT (!m_DriverCanAccessWakeSettings);
+    ndisProtocolOffload = (PNDIS_PM_PROTOCOL_OFFLOAD)SetInformation->InformationBuffer;
 
-    switch (SetInformation->Oid) {
-    case OID_PM_ADD_PROTOCOL_OFFLOAD:
-        ASSERT(SetInformation->InformationBufferLength >= sizeof(NDIS_PM_PROTOCOL_OFFLOAD));
-
-        if (SetInformation->InformationBufferLength < sizeof(NDIS_PM_PROTOCOL_OFFLOAD)) {
-            return NDIS_STATUS_INVALID_PARAMETER;
-        }
-
-        ndisProtocolOffload = (PNDIS_PM_PROTOCOL_OFFLOAD)SetInformation->InformationBuffer;
-
-        //
-        // Allocate and make a copy before invoking the callback to avoid
-        // failure after driver accepts a pattern
-        //
-        nxPowerEntry = CreateProtocolOffloadEntry(ndisProtocolOffload,
-                                            SetInformation->InformationBufferLength);
-        if (nxPowerEntry == NULL) {
-            return NdisConvertNtStatusToNdisStatus(STATUS_INSUFFICIENT_RESOURCES);
-        }
-
-        //
-        // Change nxWakeEntry to see if it is enabled.
-        //
-        UpdateProtocolOffloadEntryEnabledField(nxPowerEntry);
-
-        //
-        // Invoke optional callback
-        //
-        if (m_EvtPreviewProtocolOffload != NULL) {
-            m_DriverCanAccessWakeSettings = TRUE;
-            status = m_EvtPreviewProtocolOffload(AdapterWdfHandle,
-                                GetFxObject(),
-                                nxPowerEntry->NdisProtocolOffload.ProtocolOffloadType,
-                                &(nxPowerEntry->NdisProtocolOffload));
-            m_DriverCanAccessWakeSettings = FALSE;
-            if (status == STATUS_NDIS_PM_PROTOCOL_OFFLOAD_LIST_FULL) {
-                //
-                // In case driver incorrectly saved a pointer to the pattern
-                // help catch it sooner.
-                //
-                RtlFillMemory(nxPowerEntry, nxPowerEntry->Size, 0xC0);
-                ExFreePoolWithTag(nxPowerEntry, NETADAPTERCX_TAG);
-                return NDIS_STATUS_PM_PROTOCOL_OFFLOAD_LIST_FULL;
-            }
-        }
-
-        //
-        // Add it to the list
-        //
-        m_ProtocolOffloadListCount++;
-        PushEntryList(&m_ProtocolOffloadListHead, &nxPowerEntry->ListEntry);
-        break;
-
-    case OID_PM_REMOVE_PROTOCOL_OFFLOAD:
-        ASSERT(SetInformation->InformationBufferLength >= sizeof(ULONG));
-        if (SetInformation->InformationBufferLength < sizeof(ULONG)) {
-            return NDIS_STATUS_INVALID_PARAMETER;
-        }
-
-        nxPowerEntry = RemovePowerEntryByID(*((PULONG)SetInformation->InformationBuffer),
-                                        NxPowerEntryTypeProtocolOffload);
-        ASSERT(nxPowerEntry != NULL);
-        if (nxPowerEntry) {
-            RtlFillMemory(nxPowerEntry, nxPowerEntry->Size, 0xC0);
-            ExFreePoolWithTag(nxPowerEntry, NETADAPTERCX_TAG);
-        }
-        break;
-
-    default:
-        NT_ASSERTMSG("Unexpected OID type", FALSE);
-        return NDIS_STATUS_INVALID_PARAMETER;
+    //
+    // Allocate and make a copy before invoking the callback to avoid
+    // failure after driver accepts a pattern
+    //
+    nxPowerEntry = CreateProtocolOffloadEntry(
+        ndisProtocolOffload,
+        SetInformation->InformationBufferLength);
+    if (nxPowerEntry == NULL)
+    {
+        return NdisConvertNtStatusToNdisStatus(STATUS_INSUFFICIENT_RESOURCES);
     }
 
-    return NDIS_STATUS_SUCCESS;
+    //
+    // Change nxWakeEntry to see if it is enabled.
+    //
+    UpdateProtocolOffloadEntryEnabledField(nxPowerEntry);
 
+    //
+    // Invoke optional callback
+    //
+    if (m_EvtPreviewProtocolOffload != NULL)
+    {
+        m_DriverCanAccessWakeSettings = TRUE;
+        status = m_EvtPreviewProtocolOffload(AdapterWdfHandle,
+            GetFxObject(),
+            nxPowerEntry->NdisProtocolOffload.ProtocolOffloadType,
+            &(nxPowerEntry->NdisProtocolOffload));
+        m_DriverCanAccessWakeSettings = FALSE;
+
+        if (status == STATUS_NDIS_PM_PROTOCOL_OFFLOAD_LIST_FULL)
+        {
+            //
+            // In case driver incorrectly saved a pointer to the pattern
+            // help catch it sooner.
+            //
+            RtlFillMemory(nxPowerEntry, nxPowerEntry->Size, 0xC0);
+            ExFreePoolWithTag(nxPowerEntry, NETADAPTERCX_TAG);
+            return NDIS_STATUS_PM_PROTOCOL_OFFLOAD_LIST_FULL;
+        }
+    }
+
+    //
+    // Add it to the list
+    //
+    m_ProtocolOffloadListCount++;
+    PushEntryList(&m_ProtocolOffloadListHead, &nxPowerEntry->ListEntry);
+
+    return NDIS_STATUS_SUCCESS;
+}
+
+NDIS_STATUS
+NxWake::RemoveProtocolOffload(
+    _In_ NDIS_OID_REQUEST::_REQUEST_DATA::_SET const *SetInformation
+    )
+/*++
+Routine Description:
+    Processes removal of protocol offloads.
+
+Arguments:
+    SetInformation - SET_INFORMATION parameter from the incoming OID
+
+Returns:
+    NDIS_STATUS
+
+--*/
+{
+    ASSERT(! m_DriverCanAccessWakeSettings);
+
+    PNX_NET_POWER_ENTRY nxPowerEntry = RemovePowerEntryByID(
+        *((PULONG)SetInformation->InformationBuffer),
+        NxPowerEntryTypeProtocolOffload);
+
+    RtlFillMemory(nxPowerEntry, nxPowerEntry->Size, 0xC0);
+    ExFreePoolWithTag(nxPowerEntry, NETADAPTERCX_TAG);
+
+    return NDIS_STATUS_SUCCESS;
+}
+
+RECORDER_LOG
+NxWake::GetRecorderLog(
+    void
+    )
+{
+    return m_NxAdapter->GetRecorderLog();
 }
 
 PNX_NET_POWER_ENTRY
@@ -434,15 +437,14 @@ Returns:
 }
 
 NDIS_STATUS
-NxWake::ProcessOidWakePattern(
+NxWake::AddWakePattern(
     _In_ NETADAPTER AdapterWdfHandle,
-    _In_ _NDIS_OID_REQUEST::_REQUEST_DATA::_SET *SetInformation
-)
+    _In_ NDIS_OID_REQUEST::_REQUEST_DATA::_SET const *SetInformation
+    )
 /*++
 Routine Description:
-    Processes addition and removal of Wake patterns. In case of addition
-    presents the pattern to the driver if it has registered a callback
-    to process it.
+    Processes addition of Wake patterns. The pattern is presented
+    to the driver if it has registered a callback to process it.
 
 Arguments:
     AdapterWdfHandle - NETADAPTER handle
@@ -455,79 +457,84 @@ Returns:
 
 --*/
 {
+    ASSERT (! m_DriverCanAccessWakeSettings);
+
     PNX_NET_POWER_ENTRY nxWakeEntry;
     NTSTATUS status = STATUS_SUCCESS;
     PNDIS_PM_WOL_PATTERN ndisWolPattern;
 
-    ASSERT (!m_DriverCanAccessWakeSettings);
+    ndisWolPattern = (PNDIS_PM_WOL_PATTERN)SetInformation->InformationBuffer;
 
-    switch (SetInformation->Oid) {
-    case OID_PM_ADD_WOL_PATTERN:
-        if (!WIN_VERIFY(SetInformation->InformationBufferLength >= sizeof(NDIS_PM_WOL_PATTERN))) {
-            return NDIS_STATUS_INVALID_PARAMETER;
-        }
+    //
+    // Allocate and make a copy before invoking the callback to avoid
+    // failure after driver accepts a pattern
+    //
+    nxWakeEntry = CreateWakePatternEntry(ndisWolPattern,
+                                SetInformation->InformationBufferLength);
+    if (nxWakeEntry == NULL)
+    {
+        return NdisConvertNtStatusToNdisStatus(STATUS_INSUFFICIENT_RESOURCES);
+    }
 
-        ndisWolPattern = (PNDIS_PM_WOL_PATTERN)SetInformation->InformationBuffer;
+    //
+    // Change nxWakeEntry to see if it is enabled..
+    //
+    UpdatePatternEntryEnabledField(nxWakeEntry);
 
-        //
-        // Allocate and make a copy before invoking the callback to avoid
-        // failure after driver accepts a pattern
-        //
-        nxWakeEntry = CreateWakePatternEntry(ndisWolPattern,
-                                    SetInformation->InformationBufferLength);
-        if (nxWakeEntry == NULL) {
-            return NdisConvertNtStatusToNdisStatus(STATUS_INSUFFICIENT_RESOURCES);
-        }
+    //
+    // Invoke optional callback
+    //
+    if (m_EvtPreviewWakePattern != NULL)
+    {
+        m_DriverCanAccessWakeSettings = TRUE;
+        status = m_EvtPreviewWakePattern(AdapterWdfHandle,
+            GetFxObject(),
+            nxWakeEntry->NdisWoLPattern.WoLPacketType,
+            &(nxWakeEntry->NdisWoLPattern));
+        m_DriverCanAccessWakeSettings = FALSE;
 
-        //
-        // Change nxWakeEntry to see if it is enabled..
-        //
-        UpdatePatternEntryEnabledField(nxWakeEntry);
-
-        //
-        // Invoke optional callback
-        //
-        if (m_EvtPreviewWakePattern != NULL) {
-            m_DriverCanAccessWakeSettings = TRUE;
-            status = m_EvtPreviewWakePattern(AdapterWdfHandle,
-                                GetFxObject(),
-                                nxWakeEntry->NdisWoLPattern.WoLPacketType,
-                                &(nxWakeEntry->NdisWoLPattern));
-            m_DriverCanAccessWakeSettings = FALSE;
-            if (status == STATUS_NDIS_PM_WOL_PATTERN_LIST_FULL) {
-                //
-                // In case driver incorrectly saved a pointer to the pattern
-                // help catch it sooner.
-                //
-                RtlFillMemory(nxWakeEntry, nxWakeEntry->Size, 0xC0);
-                ExFreePoolWithTag(nxWakeEntry, NETADAPTERCX_TAG);
-                return NDIS_STATUS_PM_WOL_PATTERN_LIST_FULL;
-            }
-        }
-
-        AddWakePatternEntryToList(nxWakeEntry);
-        break;
-
-    case OID_PM_REMOVE_WOL_PATTERN:
-        ASSERT(SetInformation->InformationBufferLength >= sizeof(ULONG));
-
-        if (SetInformation->InformationBufferLength < sizeof(ULONG)) {
-            return NDIS_STATUS_INVALID_PARAMETER;
-        }
-
-        nxWakeEntry = RemovePowerEntryByID(*((PULONG)SetInformation->InformationBuffer),
-                                            NxPowerEntryTypeWakePattern);
-        ASSERT(nxWakeEntry != NULL);
-        if (nxWakeEntry) {
+        if (status == STATUS_NDIS_PM_WOL_PATTERN_LIST_FULL)
+        {
+            //
+            // In case driver incorrectly saved a pointer to the pattern
+            // help catch it sooner.
+            //
             RtlFillMemory(nxWakeEntry, nxWakeEntry->Size, 0xC0);
             ExFreePoolWithTag(nxWakeEntry, NETADAPTERCX_TAG);
-        }
-        break;
 
-    default:
-        NT_ASSERTMSG("Unexpected OID type", FALSE);
-        return NDIS_STATUS_INVALID_PARAMETER;
+            return NDIS_STATUS_PM_WOL_PATTERN_LIST_FULL;
+        }
     }
+
+    AddWakePatternEntryToList(nxWakeEntry);
+
+    return NDIS_STATUS_SUCCESS;
+}
+
+NDIS_STATUS
+NxWake::RemoveWakePattern(
+    _In_ NDIS_OID_REQUEST::_REQUEST_DATA::_SET const *SetInformation
+    )
+/*++
+Routine Description:
+    Processes removal of Wake patterns.
+
+Arguments:
+    SetInformation - SET_INFORMATION parameter from the incoming OID
+
+Returns:
+    NDIS_STATUS
+
+--*/
+{
+    ASSERT(! m_DriverCanAccessWakeSettings);
+
+    PNX_NET_POWER_ENTRY nxWakeEntry = RemovePowerEntryByID(
+        *((PULONG)SetInformation->InformationBuffer),
+        NxPowerEntryTypeWakePattern);
+
+    RtlFillMemory(nxWakeEntry, nxWakeEntry->Size, 0xC0);
+    ExFreePoolWithTag(nxWakeEntry, NETADAPTERCX_TAG);
 
     return NDIS_STATUS_SUCCESS;
 }
@@ -608,7 +615,7 @@ Returns:
 }
 
 NDIS_STATUS
-NxWake::ProcessOidPmParameters(
+NxWake::SetParameters(
     _In_ PNDIS_PM_PARAMETERS PmParams
 )
 /*++
@@ -906,3 +913,4 @@ Returns:
 
     return countOfType;
 }
+

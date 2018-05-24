@@ -2,6 +2,8 @@
 
 #pragma once
 
+class NxAdapter;
+
 class NxAdapterCollection
 {
 public:
@@ -12,6 +14,11 @@ public:
     Initialize(
         void
         );
+
+    bool
+    Empty(
+        void
+        ) const;
 
     ULONG
     Count(

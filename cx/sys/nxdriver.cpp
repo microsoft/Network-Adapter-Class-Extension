@@ -11,10 +11,14 @@ Abstract:
 #include "Nx.hpp"
 
 #include "NxDriver.tmh"
+#include "NxDriver.hpp"
+
+#include "NxAdapter.hpp"
+#include "version.hpp"
 
 NxDriver::NxDriver(
     _In_ WDFDRIVER                Driver,
-    _In_ PNX_PRIVATE_GLOBALS      NxPrivateGlobals
+    _In_ NX_PRIVATE_GLOBALS *     NxPrivateGlobals
     ) : CFxObject(Driver),
     m_Driver(Driver),
     m_PrivateGlobals(NxPrivateGlobals)
@@ -31,8 +35,6 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_DRIVER);
-
     RECORDER_LOG_CREATE_PARAMS  recorderLogCreateParams;
     NTSTATUS                    status;
     RECORDER_LOG                recorderLog;
@@ -81,8 +83,6 @@ Arguments:
     }
 
     m_RecorderLog = recorderLog;
-    FuncExit(FLAG_DRIVER);
-
 }
 
 NxDriver::~NxDriver()
@@ -93,7 +93,6 @@ Routine Description:
 
 --*/
 {
-    FuncEntry(FLAG_DRIVER);
     if (m_RecorderLog) {
         //
         // Delete the log buffer created in the constructor.
@@ -101,24 +100,18 @@ Routine Description:
         WppRecorderLogDelete(m_RecorderLog);
         m_RecorderLog = NULL;
     }
-    FuncExit(FLAG_DRIVER);
 }
 
 NTSTATUS
 NxDriver::_CreateIfNeeded(
     _In_ WDFDRIVER           Driver,
-    _In_ PNX_PRIVATE_GLOBALS NxPrivateGlobals
+    _In_ NX_PRIVATE_GLOBALS * NxPrivateGlobals
     )
 {
-    FuncEntry(FLAG_DRIVER);
-
     WDF_OBJECT_ATTRIBUTES                   attributes;
-    PNxDriver                               nxDriver;
-    PVOID                                   nxDriverAsContext;
     NTSTATUS                                status;
 
     if (NxPrivateGlobals->NxDriver != NULL) {
-        FuncExit(FLAG_DRIVER);
         return STATUS_SUCCESS;
     }
 
@@ -136,17 +129,17 @@ NxDriver::_CreateIfNeeded(
     #pragma prefast(suppress:__WARNING_FUNCTION_CLASS_MISMATCH_NONE, "can't add class to static member function")
     attributes.EvtCleanupCallback = NxDriver::_EvtWdfCleanup;
 
+    void * nxDriverAsContext;
     status = WdfObjectAllocateContext(Driver,
                                       &attributes,
                                       &nxDriverAsContext);
 
     if (!NT_SUCCESS(status)) {
         LogInitMsg(TRACE_LEVEL_ERROR, "WdfObjectAllocateContext Failed %!STATUS!", status);
-        FuncExit(FLAG_DRIVER);
         return status;
     }
 
-    nxDriver = new (nxDriverAsContext) NxDriver(Driver, NxPrivateGlobals);
+    auto nxDriver = new (nxDriverAsContext) NxDriver(Driver, NxPrivateGlobals);
 
     __analysis_assume(nxDriver != NULL);
 
@@ -154,52 +147,44 @@ NxDriver::_CreateIfNeeded(
 
     NxPrivateGlobals->NxDriver = nxDriver;
 
-    FuncExit(FLAG_DRIVER);
     return status;
 
 }
 
 NTSTATUS
 NxDriver::_CreateAndRegisterIfNeeded(
-    _In_ WDFDRIVER                      Driver,
-    _In_ PNX_PRIVATE_GLOBALS            NxPrivateGlobals
+    _In_ NX_PRIVATE_GLOBALS *           NxPrivateGlobals
     )
 /*++
 Routine Description:
-    This routine is called when a new instance of the NxAdapter is getting
-    created.
+    This routine is called when a client driver calls NetAdapterDeviceInitConfig.
 
     In response this routine registers with Ndis.sys it it hasnt already
     registered.
 
 Arguments:
 
-    Driver - The NxDriver Object
-
     NxPrivateGlobals - The clients globals.
 
 --*/
 
 {
-    FuncEntry(FLAG_DRIVER);
+    auto wdfDriver = NxPrivateGlobals->ClientDriverGlobals->Driver;
+    auto exclusive = wil::acquire_wdf_wait_lock(g_RegistrationLock);
 
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        _CreateIfNeeded(wdfDriver, NxPrivateGlobals));
+
+    NxDriver *nxDriver = NxPrivateGlobals->NxDriver;
+
+    if (nxDriver->m_NdisMiniportDriverHandle != NULL)
     {
-        auto exclusive = wil::acquire_wdf_wait_lock(g_RegistrationLock);
-
-        CX_RETURN_IF_NOT_NT_SUCCESS(
-            _CreateIfNeeded(Driver, NxPrivateGlobals));
-
-        NxDriver *nxDriver = NxPrivateGlobals->NxDriver;
-
-        if (nxDriver->m_NdisMiniportDriverHandle != NULL) {
-            // Already registered
-            return STATUS_SUCCESS;
-        }
-
-        CX_RETURN_IF_NOT_NT_SUCCESS(nxDriver->Register());
+        // Already registered
+        return STATUS_SUCCESS;
     }
 
-    FuncExit(FLAG_DRIVER);
+    CX_RETURN_IF_NOT_NT_SUCCESS(nxDriver->Register());
+
     return STATUS_SUCCESS;
 }
 
@@ -220,8 +205,6 @@ Arguments:
 --*/
 
 {
-    FuncEntry(FLAG_DRIVER);
-
     UNREFERENCED_PARAMETER(DriverType);
 
     NTSTATUS                                status;
@@ -242,7 +225,6 @@ Arguments:
     status = RtlUnicodeStringInit(&registryPath, WdfDriverGetRegistryPath(GetFxObject()));
 
     if(!WIN_VERIFY(NT_SUCCESS(status))) {
-        FuncExit(FLAG_DRIVER);
         return status;
     }
 
@@ -300,7 +282,6 @@ Arguments:
 
     if (!NT_SUCCESS(status)) {
         LogError(GetRecorderLog(), FLAG_DRIVER, "NdisWdfRegisterMiniportDriver Failed %!STATUS!", status);
-        FuncExit(FLAG_DRIVER);
         return status;
     }
 
@@ -311,7 +292,6 @@ Arguments:
     NT_ASSERT(m_NdisMiniportDriverHandle == NULL);
     m_NdisMiniportDriverHandle = ndisMiniportDriverHandle;
 
-    FuncExit(FLAG_DRIVER);
     return status;
 
 }
@@ -342,17 +322,14 @@ Return Value:
 
 --*/
 {
-    FuncEntry(FLAG_DRIVER);
-    NDIS_STATUS Status = NDIS_STATUS_SUCCESS;
-    PNxDriver nxDriver = (PNxDriver)NxDriverAsContext;
-
     UNREFERENCED_PARAMETER(NdisDriverHandle);
 
-    LogVerbose(nxDriver->GetRecorderLog(), FLAG_DRIVER, "Called NxDriver::_SetOptions");
+    LogVerbose(
+        static_cast<NxDriver *>(NxDriverAsContext)->GetRecorderLog(),
+        FLAG_DRIVER,
+        "Called NxDriver::_SetOptions");
 
-    FuncExit(FLAG_DRIVER);
-    return Status;
-
+    return NDIS_STATUS_SUCCESS;
 }
 
 VOID
@@ -371,9 +348,7 @@ Routine Description:
 
 --*/
 {
-    FuncEntry(FLAG_DRIVER);
-
-    PNxDriver nxDriver = GetNxDriverFromWdfDriver((WDFDRIVER)Driver);
+    auto nxDriver = GetNxDriverFromWdfDriver((WDFDRIVER)Driver);
 
     if (nxDriver->m_NdisMiniportDriverHandle) {
         LogVerbose(nxDriver->GetRecorderLog(), FLAG_DRIVER, "Calling NdisMDeregisterMiniportDriver");
@@ -383,7 +358,6 @@ Routine Description:
         LogVerbose(nxDriver->GetRecorderLog(), FLAG_DRIVER, "Did not call NdisMDeregisterMiniportDriver since m_NdisMiniportDriverHandle was NULL\n");
     }
 
-    FuncExit(FLAG_DRIVER);
     return;
 }
 
@@ -394,3 +368,4 @@ NxDriver::GetPrivateGlobals(
 {
     return m_PrivateGlobals;
 }
+

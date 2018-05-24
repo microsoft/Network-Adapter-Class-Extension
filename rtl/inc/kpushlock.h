@@ -47,7 +47,7 @@ class KPushLock : public KPushLockBase
 {
 public:
 
-    PAGED KPushLock() WI_NOEXCEPT;
+    PAGED KPushLock() noexcept;
 
     PAGED ~KPushLock();
 };

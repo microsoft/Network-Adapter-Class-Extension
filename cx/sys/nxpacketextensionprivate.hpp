@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <KPtr.h>
 #include <NetPacketExtensionPrivate.h>
 
 class NxPacketExtensionPrivate

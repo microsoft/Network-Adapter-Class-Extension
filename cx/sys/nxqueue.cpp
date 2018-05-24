@@ -2,18 +2,28 @@
 
 #include "Nx.hpp"
 
-#include "NxQueue.hpp"
-#include "NxQueue.tmh"
-
 #include <NetRingBuffer.h>
 #include <NetPacket.h>
 
-ULONG
-NetClientQueueGetQueueId(
+#include "NxQueue.tmh"
+#include "NxQueue.hpp"
+
+#include "NxAdapter.hpp"
+
+void
+NetClientQueueStart(
     NET_CLIENT_QUEUE Queue
     )
 {
-    return reinterpret_cast<NxQueue *>(Queue)->m_queueId;
+    reinterpret_cast<NxQueue *>(Queue)->Start();
+}
+
+void
+NetClientQueueStop(
+    NET_CLIENT_QUEUE Queue
+    )
+{
+    reinterpret_cast<NxQueue *>(Queue)->Stop();
 }
 
 void
@@ -69,7 +79,8 @@ NetClientQueueGetDatapathDescriptor(
 static const NET_CLIENT_QUEUE_DISPATCH QueueDispatch
 {
     { sizeof(NET_CLIENT_QUEUE_DISPATCH) },
-    &NetClientQueueGetQueueId,
+    &NetClientQueueStart,
+    &NetClientQueueStop,
     &NetClientQueueAdvance,
     &NetClientQueueCancel,
     &NetClientQueueSetArmed,
@@ -127,39 +138,68 @@ _Use_decl_annotations_
 NxQueue::NxQueue(
     QUEUE_CREATION_CONTEXT const & InitContext,
     ULONG QueueId,
+    NET_PACKET_QUEUE_CONFIG const & QueueConfig,
     NxQueue::Type QueueType
     ) :
     m_queueId(QueueId),
     m_queueType(QueueType),
     m_adapter(InitContext.Adapter),
-    m_clientQueue(InitContext.QueueContexts[InitContext.QueueContextIndex].ClientQueue),
-    m_clientDispatch(InitContext.ClientDispatch)
+    m_clientQueue(InitContext.ClientQueue),
+    m_clientDispatch(InitContext.ClientDispatch),
+    m_packetQueueConfig(QueueConfig)
 {
     NOTHING;
 }
 
 void
+NxQueue::Start(
+    void
+    )
+{
+    m_packetRingBuffer->BeginIndex = 0;
+    m_packetRingBuffer->NextIndex = 0;
+    m_packetRingBuffer->EndIndex = 0;
+    m_packetRingBuffer->OSReserved2[0] = static_cast<void *>(0);
+
+    if (m_packetQueueConfig.EvtStart)
+    {
+        m_packetQueueConfig.EvtStart(m_queue);
+    }
+}
+
+void
+NxQueue::Stop(
+    void
+    )
+{
+    if (m_packetQueueConfig.EvtStop)
+    {
+        m_packetQueueConfig.EvtStop(m_queue);
+    }
+}
+
+void
 NxQueue::Advance(
     void
-)
+    )
 {
-    m_evtAdvance(m_queue);
+    m_packetQueueConfig.EvtAdvance(m_queue);
 }
 
 void
 NxQueue::Cancel(
     void
-)
+    )
 {
-    m_evtCancel(m_queue);
+    m_packetQueueConfig.EvtCancel(m_queue);
 }
 
 void
 NxQueue::SetArmed(
     bool IsArmed
-)
+    )
 {
-    m_evtArmNotification(m_queue, IsArmed);
+    m_packetQueueConfig.EvtSetNotificationEnabled(m_queue, IsArmed);
 }
 
 WDFOBJECT
@@ -255,7 +295,7 @@ NxQueue::Initialize(
     packetRingBuffer->ElementIndexMask = static_cast<ULONG>(InitContext.ClientQueueConfig->NumberOfPackets - 1);
 
     m_packetRingBuffer.reset(packetRingBuffer);
-    
+
     NET_DATAPATH_DESCRIPTOR_GET_PACKET_RING_BUFFER(&m_descriptor) = m_packetRingBuffer.get();
 
     // If we have contexts on the NET_PACKETs, initialize their
@@ -303,7 +343,6 @@ NxQueue::Initialize(
 
     *InitContext.AdapterDispatch = &QueueDispatch;
 
-    FuncExit(FLAG_ADAPTER);
     return STATUS_SUCCESS;
 }
 
@@ -374,16 +413,12 @@ NxTxQueue::NxTxQueue(
     WDFOBJECT Object,
     QUEUE_CREATION_CONTEXT const & InitContext,
     ULONG QueueId,
-    NET_TXQUEUE_CONFIG const & QueueConfig
+    NET_PACKET_QUEUE_CONFIG const & QueueConfig
     ) :
-    CFxObject(static_cast<NETTXQUEUE>(Object)),
-    NxQueue(InitContext, QueueId, NxQueue::Type::Tx)
+    CFxObject(static_cast<NETPACKETQUEUE>(Object)),
+    NxQueue(InitContext, QueueId, QueueConfig, NxQueue::Type::Tx)
 {
-    m_queue = static_cast<NETTXQUEUE>(Object);
-
-    m_evtAdvance = QueueConfig.EvtTxQueueAdvance;
-    m_evtCancel = QueueConfig.EvtTxQueueCancel;
-    m_evtArmNotification = QueueConfig.EvtTxQueueSetNotificationEnabled;
+    m_queue = static_cast<NETPACKETQUEUE>(Object);
 }
 
 _Use_decl_annotations_
@@ -392,8 +427,6 @@ NxTxQueue::Initialize(
     QUEUE_CREATION_CONTEXT & InitContext
     )
 {
-    FuncEntry(FLAG_ADAPTER);
-
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         PrepareAndStorePacketExtensions(InitContext),
         "Failed to consolidate extensions");
@@ -402,7 +435,6 @@ NxTxQueue::Initialize(
         NxQueue::Initialize(InitContext),
         "Failed to create Tx queue.");
 
-    FuncExit(FLAG_ADAPTER);
     return STATUS_SUCCESS;
 }
 
@@ -411,20 +443,12 @@ NxRxQueue::NxRxQueue(
     WDFOBJECT Object,
     QUEUE_CREATION_CONTEXT const & InitContext,
     ULONG QueueId,
-    NET_RXQUEUE_CONFIG const & QueueConfig
+    NET_PACKET_QUEUE_CONFIG const & QueueConfig
     ) :
-    CFxObject(static_cast<NETRXQUEUE>(Object)),
-    NxQueue(InitContext, QueueId, NxQueue::Type::Rx)
+    CFxObject(static_cast<NETPACKETQUEUE>(Object)),
+    NxQueue(InitContext, QueueId, QueueConfig, NxQueue::Type::Rx)
 {
-    m_queue = reinterpret_cast<NETTXQUEUE>(Object);
-
-#pragma prefast(suppress:__WARNING_FUNCTION_CLASS_MISMATCH, "annotation from different declaration")
-    m_evtAdvance = reinterpret_cast<PFN_TXQUEUE_ADVANCE>(QueueConfig.EvtRxQueueAdvance);
-#pragma prefast(suppress:__WARNING_FUNCTION_CLASS_MISMATCH, "annotation from different declaration")
-    m_evtCancel = reinterpret_cast<PFN_TXQUEUE_CANCEL>(QueueConfig.EvtRxQueueCancel);
-#pragma prefast(suppress:__WARNING_FUNCTION_CLASS_MISMATCH, "annotation from different declaration")
-    m_evtArmNotification =
-        reinterpret_cast<PFN_TXQUEUE_SET_NOTIFICATION_ENABLED>(QueueConfig.EvtRxQueueSetNotificationEnabled);
+    m_queue = reinterpret_cast<NETPACKETQUEUE>(Object);
 }
 
 _Use_decl_annotations_
@@ -433,8 +457,6 @@ NxRxQueue::Initialize(
     QUEUE_CREATION_CONTEXT & InitContext
     )
 {
-    FuncEntry(FLAG_ADAPTER);
-
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         PrepareAndStorePacketExtensions(InitContext),
         "Failed to consolidate extensions");
@@ -443,7 +465,6 @@ NxRxQueue::Initialize(
         NxQueue::Initialize(InitContext),
         "Failed to create Rx queue.");
 
-    FuncExit(FLAG_ADAPTER);
     return STATUS_SUCCESS;
 }
 
@@ -458,7 +479,7 @@ NxQueue::NetQueueInitAddPacketExtension(
     // Right now, don't allow unregistered extensions to be added to
     // QUEUE_CREATION_CONTEXT
     //
-    NET_PACKET_EXTENSION_PRIVATE* storedExtension = 
+    NET_PACKET_EXTENSION_PRIVATE* storedExtension =
         CreationContext->Adapter->QueryAndGetNetPacketExtensionWithLock(PacketExtension);
 
     CX_RETURN_NTSTATUS_IF(
@@ -508,7 +529,7 @@ NxQueue::PrepareAndStorePacketExtensions(
 }
 
 _Use_decl_annotations_
-NTSTATUS 
+NTSTATUS
 NxQueue::PrepareFragmentRingBuffer(QUEUE_CREATION_CONTEXT & InitContext)
 {
     auto const numberOfFragments = InitContext.ClientQueueConfig->NumberOfFragments;
@@ -518,7 +539,7 @@ NxQueue::PrepareFragmentRingBuffer(QUEUE_CREATION_CONTEXT & InitContext)
 
     auto fragmentRingBuffer = reinterpret_cast<NET_RING_BUFFER*>(
         ExAllocatePoolWithTag(NonPagedPoolNxCacheAligned, allocationSize, 'BRxN'));
-    
+
     CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !fragmentRingBuffer);
 
     RtlZeroMemory(fragmentRingBuffer, allocationSize);

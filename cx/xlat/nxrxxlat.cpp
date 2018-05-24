@@ -4,7 +4,7 @@
 
 Abstract:
 
-    Contains the per-queue logic for NBL-to-NET_PACKET translation on the 
+    Contains the per-queue logic for NBL-to-NET_PACKET translation on the
     receive path.
 
 --*/
@@ -30,7 +30,7 @@ struct RX_NBL_CONTEXT
 RX_NBL_CONTEXT*
 GetRxContextFromNbl(PNET_BUFFER_LIST Nbl)
 {
-    return 
+    return
         reinterpret_cast<RX_NBL_CONTEXT*>(&NET_BUFFER_LIST_MINIPORT_RESERVED(Nbl)[0]);
 }
 
@@ -153,11 +153,14 @@ NxNblRx::ReturnNetBufferLists(
     return ret;
 }
 
+_Use_decl_annotations_
 NxRxXlat::NxRxXlat(
+    size_t QueueId,
     NET_CLIENT_DISPATCH const * Dispatch,
     NET_CLIENT_ADAPTER Adapter,
     NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
     ) noexcept :
+    m_queueId(QueueId),
     m_dispatch(Dispatch),
     m_adapter(Adapter),
     m_adapterDispatch(AdapterDispatch),
@@ -166,14 +169,37 @@ NxRxXlat::NxRxXlat(
     m_adapterDispatch->GetProperties(m_adapter, &m_adapterProperties);
     m_nblDispatcher = static_cast<INxNblDispatcher *>(m_adapterProperties.NblDispatcher);
     ndisInitializeNblQueue(&m_discardedNbl);
+
+    m_shouldReportCounters = m_dispatch->NetClientQueryDriverConfigurationBoolean(RX_REPORT_PERF_COUNTERS);
+    m_counterReportInterval = m_dispatch->NetClientQueryDriverConfigurationUlong(RX_PERF_COUNTERS_ITERATION_INTERVAL);
+    m_shouldUpdateEcCounters = m_dispatch->NetClientQueryDriverConfigurationBoolean(EC_UPDATE_PERF_COUNTERS);
+
+    if (m_shouldReportCounters)
+    {
+#ifdef _KERNEL_MODE
+        LARGE_INTEGER timerDelay = {};
+        KeInitializeTimer(&m_CounterReportTimer);
+        KeInitializeDpc(&m_CounterReportDpc, NxRxXlat::CounterReportDpcRoutine, this);
+
+        // in 100ns
+        timerDelay.QuadPart = (-1 * MS_TO_100NS_CONVERSION * m_counterReportInterval);
+
+        KeSetTimerEx(&
+            m_CounterReportTimer,
+            timerDelay,
+            m_counterReportInterval,
+            &m_CounterReportDpc);
+#endif
+    }
 }
 
-ULONG
+_Use_decl_annotations_
+size_t
 NxRxXlat::GetQueueId(
     void
     ) const
 {
-    return m_queueDispatch->GetQueueId(m_queue);
+    return m_queueId;
 }
 
 NET_CLIENT_QUEUE
@@ -184,12 +210,23 @@ NxRxXlat::GetQueue(
     return m_queue;
 }
 
-NTSTATUS
+_Use_decl_annotations_
+bool
+NxRxXlat::IsGroupAffinitized(
+    void
+    ) const
+{
+    return m_groupAffinity.Mask;
+}
+
+_Use_decl_annotations_
+void
 NxRxXlat::SetGroupAffinity(
-    GROUP_AFFINITY & GroupAffinity
+    GROUP_AFFINITY const & GroupAffinity
     )
 {
-    return m_executionContext.SetGroupAffinity(GroupAffinity);
+    m_groupAffinity = GroupAffinity;
+    (void)InterlockedExchange(&m_groupAffinityChanged, 1);
 }
 
 NxRxXlat::ArmedNotifications
@@ -275,6 +312,10 @@ NxRxXlat::EcReturnBuffers()
         ++m_returnedPackets;
         currNbl = FreeReceivedDataBuffer(currNbl);
     }
+
+    NxRingBufferCounters delta = {};
+    delta.NumberOfNetPacketsConsumed = m_returnedPackets;
+    m_ringBuffer.UpdateRingbufferPacketCounters(delta);
 }
 
 void
@@ -298,6 +339,20 @@ NxRxXlat::EcPrepareBuffersForNetAdapter()
         --m_outstandingPackets;
 
         m_ringBuffer.GiveNextPacketToNic();
+    }
+}
+
+void
+NxRxXlat::EcUpdateAffinity()
+{
+    if (m_groupAffinityChanged)
+    {
+        while (InterlockedExchange(&m_groupAffinityChanged, 0))
+        {
+#ifdef _KERNEL_MODE
+            KeSetSystemGroupAffinityThread(&m_groupAffinity, NULL);
+#endif
+        }
     }
 }
 
@@ -401,6 +456,10 @@ NxRxXlat::EcIndicateNblsToNdis()
     if (!nblsToIndicate)
         return;
 
+    NxRingBufferCounters delta = {};
+    delta.NumberOfNetPacketsProduced = m_postedPackets;
+    m_ringBuffer.UpdateRingbufferPacketCounters(delta);
+
     m_outstandingPackets += nblsToIndicate.GetCount();
 
     if (!m_nblDispatcher->IndicateReceiveNetBufferLists(
@@ -419,7 +478,7 @@ NxRxXlat::EcIndicateNblsToNdis()
 }
 
 void
-NxRxXlat::EcWaitForMoreWork()
+NxRxXlat::WaitForWork()
 {
     auto notificationsToArm = GetNotificationsToArm();
 
@@ -429,7 +488,7 @@ NxRxXlat::EcWaitForMoreWork()
     // and loop again.
     if (notificationsToArm.Value != 0 && notificationsToArm.Value == m_lastArmedNotifications.Value)
     {
-        m_executionContext.WaitForSignal();
+        m_executionContext.WaitForWork();
 
         // after halting, don't arm any notifications
         notificationsToArm.Value = 0;
@@ -442,7 +501,6 @@ NxRxXlat::EcWaitForMoreWork()
 
 static EC_START_ROUTINE NetAdapterReceiveThread;
 
-_Use_decl_annotations_
 static
 EC_RETURN
 NetAdapterReceiveThread(
@@ -477,7 +535,7 @@ NxRxXlat::SetupRxThreadProperties()
         KeGetProcessorNumberFromIndex(threadAffinity, &CpuNum);
         Affinity.Group = CpuNum.Group;
         Affinity.Mask =
-            (threadAffinity != THREAD_AFFINITY_NO_MASK) ? 
+            (threadAffinity != THREAD_AFFINITY_NO_MASK) ?
                 AFFINITY_MASK(CpuNum.Number) : ((ULONG_PTR)-1);
         KeSetSystemGroupAffinityThread(&Affinity, &old);
     }
@@ -488,44 +546,64 @@ void
 NxRxXlat::ReceiveThread()
 {
     SetupRxThreadProperties();
-    m_executionContext.WaitForStart();
 
-    auto cancelIssued = false;
-
-    while (true)
+    while (! m_executionContext.IsTerminated())
     {
-        EcReturnBuffers();
+        m_queueDispatch->Start(m_queue);
 
-        if (!m_stopRequested)
-            EcPrepareBuffersForNetAdapter();
+        auto cancelIssued = false;
 
-        EcYieldToNetAdapter();
-
-        EcIndicateNblsToNdis();
-
-        EcWaitForMoreWork();
-
-        // This represents the wind down of Rx
-        if (m_stopRequested)
+        while (true)
         {
-            if (!cancelIssued)
+            EcReturnBuffers();
+
+            // provide buffers to NetAdapter only if running
+            if (! m_executionContext.IsStopping())
             {
-                // Indicate cancellation to the adapter
-                // and drop all outstanding NBLs.
-                //
-                // One NBL may remain that has been partially programmed into the NIC.
-                // So that NBL is kept around until the end.
-
-                m_queueDispatch->Cancel(m_queue);
-
-                cancelIssued = true;
+                EcPrepareBuffersForNetAdapter();
             }
 
-            // The termination condition is that all packets have been returned from the NIC.
-            if (m_executionContext.IsStopRequested() &&
-                !m_ringBuffer.AnyNicPackets())
+            EcUpdateAffinity();
+            EcYieldToNetAdapter();
+
+            // update ringbuffer counters;
+            m_ringBuffer.UpdateRingbufferDepthCounters();
+
+            EcIndicateNblsToNdis();
+
+            if (m_shouldUpdateEcCounters)
             {
-                break;
+                // end of iteration, update execution context counters;
+                m_executionContext.UpdateCounters(
+                    m_postedPackets == 0 && m_returnedPackets == 0);
+            }
+
+            WaitForWork();
+
+            // This represents the wind down of Rx
+            if (m_executionContext.IsStopping())
+            {
+                if (!cancelIssued)
+                {
+                    // Indicate cancellation to the adapter
+                    // and drop all outstanding NBLs.
+                    //
+                    // One NBL may remain that has been partially programmed into the NIC.
+                    // So that NBL is kept around until the end.
+
+                    m_queueDispatch->Cancel(m_queue);
+
+                    cancelIssued = true;
+                }
+
+                // The termination condition is that all packets have been returned from the NIC.
+                if (! m_ringBuffer.AnyNicPackets())
+                {
+                    EcRecoverBuffers();
+                    m_queueDispatch->Stop(m_queue);
+                    m_executionContext.SignalStopped();
+                    break;
+                }
             }
         }
     }
@@ -536,8 +614,46 @@ NxRxXlat::Initialize(
     void
     )
 {
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(CreateVariousPools(),
+                                    "Failed to create pools");
+
+    NET_CLIENT_QUEUE_CONFIG config;
+    NET_CLIENT_QUEUE_CONFIG_INIT(
+        &config,
+        m_rxNumPackets,
+        m_rxNumFragments);
+
+    Rtl::KArray<NET_CLIENT_PACKET_EXTENSION> addedPacketExtensions;
+
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        PreparePacketExtensions(addedPacketExtensions),
+        "Failed to add packet extensions to the RxQueue");
+
+    if (addedPacketExtensions.count() != 0)
+    {
+        config.PacketExtensions = &addedPacketExtensions[0];
+        config.NumberOfPacketExtensions = addedPacketExtensions.count();
+    }
+
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        m_adapterDispatch->CreateRxQueue(
+            m_adapter,
+            this,
+            &QueueDispatch,
+            &config,
+            &m_queue,
+            &m_queueDispatch),
+        "Failed to create Rx queue. NxRxXlat=%p", this);
+
+    // now we use the app to store offsets, however, this should be a in per-queue context
+    // once NET_CLIENT has it's own queue context.
+
+    // checksum offset
+    m_checksumOffset = GetPacketExtensionOffsets(
+        NET_PACKET_EXTENSION_CHECKSUM_NAME, NET_PACKET_EXTENSION_CHECKSUM_VERSION_1);
+
     m_descriptor = m_queueDispatch->GetNetDatapathDescriptor(m_queue);
-    
+
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         m_ringBuffer.Initialize(NET_DATAPATH_DESCRIPTOR_GET_PACKET_RING_BUFFER(m_descriptor)),
         "Failed to initialize packet ring buffer.");
@@ -546,7 +662,40 @@ NxRxXlat::Initialize(
         m_contextBuffer.Initialize(sizeof(PacketContext)),
         "Failed to initialize private context.");
 
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        m_executionContext.Initialize(this, NetAdapterReceiveThread),
+        "Failed to start Rx execution context. NxRxXlat=%p", this);
+
+    m_executionContext.SetDebugNameHint(L"Receive", GetQueueId(), m_adapterProperties.NetLuid);
+
     return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+void
+NxRxXlat::Start(
+    void
+    )
+{
+    m_executionContext.Start();
+}
+
+_Use_decl_annotations_
+void
+NxRxXlat::Cancel(
+    void
+    )
+{
+    m_executionContext.Cancel();
+}
+
+_Use_decl_annotations_
+void
+NxRxXlat::Stop(
+    void
+    )
+{
+    m_executionContext.Stop();
 }
 
 //
@@ -579,7 +728,7 @@ NxRxXlat::CreateVariousPools()
 
     m_backfillSize = 0;
     m_rxDataBufferSize = datapathCapabilities.MaximumRxFragmentSize + m_backfillSize;
-    m_rxBufferAllocationMode = datapathCapabilities.MemoryManagementMode;
+    m_rxBufferAllocationMode = datapathCapabilities.RxMemoryManagementMode;
 
     NET_BUFFER_LIST_POOL_PARAMETERS poolParameters = {};
 
@@ -601,7 +750,7 @@ NxRxXlat::CreateVariousPools()
     size_t totalSize = 0;
     size_t mdlSize = ALIGN_UP(MmSizeOfMdl(DUMMY_VA, m_rxDataBufferSize), PVOID);
     CX_RETURN_IF_NOT_NT_SUCCESS(RtlSizeTMult(mdlSize, m_rxNumDataBuffers, &totalSize));
-    
+
     m_MdlPool = MakeSizedPoolPtrNP<MDL>('prxc', totalSize);
     CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !m_MdlPool);
     RtlZeroMemory(m_MdlPool.get(), totalSize);
@@ -610,7 +759,7 @@ NxRxXlat::CreateVariousPools()
     {
         // create buffer pool if the driver wants the OS to allocate Rx buffer
         NET_CLIENT_BUFFER_POOL_CONFIG bufferPoolConfig = {
-            &datapathCapabilities.MemoryConstraints,
+            &datapathCapabilities.RxMemoryConstraints,
             m_rxNumDataBuffers,
             m_rxDataBufferSize,
             m_backfillSize,
@@ -680,7 +829,7 @@ NxRxXlat::CreateVariousPools()
 void
 NxRxXlat::Notify()
 {
-    m_executionContext.Signal();
+    m_executionContext.SignalWork();
 }
 
 size_t
@@ -721,108 +870,49 @@ NxRxXlat::PreparePacketExtensions(
     return STATUS_SUCCESS;
 }
 
-NTSTATUS
-NxRxXlat::StartQueue(
-    void
-    )
+void
+NxRxXlat::EcRecoverBuffers()
 {
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(CreateVariousPools(),
-                                    "Failed to create pools");
+    // Return any packets come back from upper layer after the EC stops
+    EcReturnBuffers();
 
-    NET_CLIENT_QUEUE_CONFIG config;
-    NET_CLIENT_QUEUE_CONFIG_INIT(
-        &config,
-        m_rxNumPackets,
-        m_rxNumFragments);
-
-    Rtl::KArray<NET_CLIENT_PACKET_EXTENSION> addedPacketExtensions;
-
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        PreparePacketExtensions(addedPacketExtensions),
-        "Failed to add packet extensions to the RxQueue");
-
-    if (addedPacketExtensions.count() != 0)
+    while (auto completed = m_ringBuffer.TakeNextPacketFromNic())
     {
-        config.PacketExtensions = &addedPacketExtensions[0];
-        config.NumberOfPacketExtensions = addedPacketExtensions.count();
+        if (!completed->IgnoreThisPacket &&
+             m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_DRIVER)
+        {
+            for (UINT32 i = 0; NOTHING; i++)
+            {
+                auto fragment = NET_PACKET_GET_FRAGMENT(completed, m_descriptor, i);
+                m_adapterDispatch->ReturnRxBuffer(m_adapter, fragment->VirtualAddress, fragment->RxBufferReturnContext);
+                fragment->RxBufferReturnContext = nullptr;
+                if (fragment->LastFragmentOfFrame)
+                    break;
+            }
+        }
+
+        auto & packetContext = m_contextBuffer.GetPacketContext<PacketContext>(*completed);
+        ReturnNblToPool(packetContext.NetBufferList);
+        packetContext.NetBufferList = nullptr;
+        ReinitializePacket(completed);
     }
 
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        m_adapterDispatch->CreateRxQueue(
-            m_adapter,
-            this,
-            &QueueDispatch,
-            &config,
-            &m_queue,
-            &m_queueDispatch),
-        "Failed to create Rx queue. NxRxXlat=%p", this);
-
-    // now we use the app to store offsets, however, this should be a in per-queue context
-    // once NET_CLIENT has it's own queue context.
-
-    // checksum offset
-    m_checksumOffset = GetPacketExtensionOffsets(
-        NET_PACKET_EXTENSION_CHECKSUM_NAME, NET_PACKET_EXTENSION_CHECKSUM_VERSION_1);
-
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        Initialize(),
-        "Failed to initialize the Rx ring buffer.");
-
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        m_executionContext.Initialize(this, NetAdapterReceiveThread),
-        "Failed to start Rx execution context. NxRxXlat=%p", this);
-
-    m_executionContext.SetDebugNameHint(L"Receive", GetQueueId(), m_adapterProperties.NetLuid);
-
-    m_executionContext.Start();
-
-    return STATUS_SUCCESS;
+    NT_ASSERT(!m_ringBuffer.AnyNicPackets());
+    NT_ASSERT(m_NumOfNblsInUse == 0);
 }
 
 NxRxXlat::~NxRxXlat()
 {
-    // The hard gate that prevent new NBLs from being indicated to NDIS should have been
-    // closed by NxTranslationApp before destorying Rx queue objects
-
-    // Give a soft hint to the RX thread that it stop its NBL indications to NDIS, and stop
-    // posting new buffers to the netadapter.
-    WIN_ASSERT(m_stopRequested == false);
-    m_stopRequested = true;
-
-    // Signal the EC to begin winding down
-    m_executionContext.RequestStop();
-
-    // Waits for the EC to completely exit.
-    m_executionContext.CompleteStop();
-
-    // Return any packets come back from upper layer after the EC stops
-    EcReturnBuffers();
-
-    if (m_ringBuffer.Get())
+#ifdef _KERNEL_MODE
+    if (m_shouldReportCounters)
     {
-        while (auto completed = m_ringBuffer.TakeNextPacketFromNic())
-        {
-            if (!completed->IgnoreThisPacket &&
-                 m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_DRIVER)
-            {
-                for (UINT32 i = 0; NOTHING; i++)
-                {
-                    auto fragment = NET_PACKET_GET_FRAGMENT(completed, m_descriptor, i);
-                    m_adapterDispatch->ReturnRxBuffer(m_adapter, fragment->VirtualAddress, fragment->RxBufferReturnContext);
-                    fragment->RxBufferReturnContext = nullptr;
-                    if (fragment->LastFragmentOfFrame)
-                        break;
-                }
-            }
-
-            auto & packetContext = m_contextBuffer.GetPacketContext<PacketContext>(*completed);
-            ReturnNblToPool(packetContext.NetBufferList);
-        }
-
-        NT_ASSERT(!m_ringBuffer.AnyNicPackets());
+        KeCancelTimer(&m_CounterReportTimer);
+        KeFlushQueuedDpcs();
     }
+#endif
 
-    NT_ASSERT(m_NumOfNblsInUse == 0);
+    // stop the EC and wait for wind down.
+    m_executionContext.Terminate();
 
     for (size_t i = 0; i < m_NblLookupTable.count(); i++)
     {
@@ -856,11 +946,15 @@ NxRxXlat::QueueReturnedNetBufferLists(
     _In_ NBL_QUEUE* NblChain
     )
 {
-    m_returnedNblQueue.Enqueue(NblChain);
+    NBL_COUNTED_QUEUE countedQueue;
+    countedQueue.Queue.First = NblChain->First;
+    countedQueue.Queue.Last = NblChain->Last;
+    countedQueue.NblCount = 0; // don't care about count here.
+    m_returnedNblQueue.Enqueue(&countedQueue);
 
     if (m_returnedNblNotification.TestAndClear())
     {
-        m_executionContext.Signal();
+        m_executionContext.SignalWork();
     }
 }
 
@@ -987,9 +1081,9 @@ NxRxXlat::TransferDataBufferFromNetPacketToNbl(
     const auto firstFragment = NET_PACKET_GET_FRAGMENT(Packet, m_descriptor, 0);
     PrefetchPacketPayloadForReceiveIndication(firstFragment);
 
-    //
-    //1. packet metadata
-    //
+
+
+
 
 
 
@@ -1053,7 +1147,7 @@ NxRxXlat::TransferDataBufferFromNetPacketToNbl(
 
 
 
-        NT_ASSERT(false);
+
 
         currMdl = NDIS_MDL_LINKAGE(currMdl);
 
@@ -1122,8 +1216,8 @@ NxRxXlat::ReInitializeMdlForDataBuffer(
                 //if the packet received is larger than the driver claimed to be able to support,
                 //mark this packet to be dropped
                 mdlBuilt = false;
-                
-                //we still need to return the rx data buffer of the dropped packet back to the NIC 
+
+                //we still need to return the rx data buffer of the dropped packet back to the NIC
                 GetRxContextFromNb(nb)->RxBufferReturnContext = fragment->RxBufferReturnContext;
             }
         }
@@ -1210,5 +1304,62 @@ bool
 NxRxXlat::IsPacketChecksumEnabled() const
 {
     return m_checksumOffset != NET_PACKET_EXTENSION_INVALID_OFFSET;
+}
+
+#ifdef _KERNEL_MODE
+_Use_decl_annotations_
+VOID
+NxRxXlat::CounterReportDpcRoutine(
+    _In_     struct _KDPC *Dpc,
+    _In_opt_ PVOID        DeferredContext,
+    _In_opt_ PVOID        SystemArgument1,
+    _In_opt_ PVOID        SystemArgument2
+    )
+{
+    UNREFERENCED_PARAMETER((Dpc, SystemArgument1, SystemArgument2));
+    NxRxXlat* rx = static_cast<NxRxXlat*>(DeferredContext);
+    rx->ReportCounters();
+}
+#endif
+
+void
+NxRxXlat::ReportCounters()
+{
+    NxRingBufferCounters localRBCounters;
+    NxExecutionContextCounters localECCounters;
+
+    localECCounters = m_executionContext.GetExecutionContextCounters();
+    localRBCounters = m_ringBuffer.GetRingbufferCounters();
+    m_ringBuffer.ResetRingbufferCounters();
+
+    ULONG64 totalRingbufferStateSamples =
+        localRBCounters.RingbufferEmptyCount +
+        localRBCounters.RingbufferFullyOccupiedCount +
+        localRBCounters.RingbufferPartiallyOccupiedCount;
+
+    ULONG64 usefulIterationCount =
+        localECCounters.IterationCount - localECCounters.BusyWaitIterationCount;
+
+    TraceLoggingWrite(
+        g_hNetAdapterCxXlatProvider,
+        "RxTranslationCounterUpdates",
+        TraceLoggingDescription("RX ETW performance counter event"),
+        TraceLoggingUInt32(m_executionContext.GetExecutionContextIdentifier(), "threadID"),
+        TraceLoggingUInt64(localRBCounters.IterationCountInLastInterval, "ringbufferUpdateIterationCount"),
+        TraceLoggingUInt64(localRBCounters.CumulativeRingBufferDepthInLastInterval, "cumulativeRingBufferDepth"),
+        TraceLoggingUInt64(totalRingbufferStateSamples, "totalNumberOfRingbufferStateSamples"),
+        TraceLoggingUInt64(localRBCounters.RingbufferEmptyCount, "numberOfRingbufferEmptySamples"),
+        TraceLoggingUInt64(localRBCounters.RingbufferFullyOccupiedCount, "numberOfRingbufferFullSamples"),
+        TraceLoggingUInt64(localRBCounters.RingbufferPartiallyOccupiedCount, "numberOfRingbufferPartiallyUsedSamples"),
+        TraceLoggingUInt64(localRBCounters.NumberOfNetPacketsProduced, "totalNumberOfNetpacketsProducedForReceive"),
+        TraceLoggingUInt64(localRBCounters.NumberOfNetPacketsConsumed, "totalNumberOfNetpacketsCompletedReceiving"),
+        TraceLoggingUInt64(localECCounters.IterationCount, "ecUpdateIterationCount"),
+        TraceLoggingUInt64(localECCounters.BusyWaitIterationCount, "numberOfIterationsPolledWithNoPackets"),
+        TraceLoggingUInt64(usefulIterationCount, "numberOfIterationsPolledWithPackets"),
+        TraceLoggingUInt64(localECCounters.TotalCpuCycleTime, "totalNumberOfCpuCyclesRecord"),
+        TraceLoggingUInt64(localECCounters.BusyWaitCycles, "numberOfCpuCyclesPolledWithNoPackets"),
+        TraceLoggingUInt64(localECCounters.ProcessingCycles, "numberOfCpuCyclesSpentProcessingPackets"),
+        TraceLoggingUInt64(localECCounters.IdleCycles, "numberOfCpuCyclesSleeping")
+    );
 }
 

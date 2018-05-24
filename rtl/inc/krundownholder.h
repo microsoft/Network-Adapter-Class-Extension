@@ -9,9 +9,9 @@ class KRTL_CLASS KRundownHolder
 public:
 
     PAGED KRundownHolder(_In_ KRundown &rundown) :
-        m_rundown(rundown) 
+        m_rundown(rundown)
     {
-        PAGED_CODE(); 
+        PAGED_CODE();
     }
 
     PAGED ~KRundownHolder()
@@ -36,7 +36,7 @@ public:
     PAGED bool TryAcquire()
     {
         PAGED_CODE();
-        
+
         if (!m_rundown.TryAcquire())
             return false;
 
@@ -47,7 +47,7 @@ public:
     PAGED bool TryAcquire(ULONG count)
     {
         PAGED_CODE();
-        
+
         if (!m_rundown.TryAcquire(count))
             return false;
 
@@ -58,7 +58,7 @@ public:
     PAGED void Release()
     {
         PAGED_CODE();
-        
+
         WIN_ASSERT(m_count > 0);
         m_count--;
         m_rundown.Release();
@@ -67,7 +67,7 @@ public:
     PAGED void Release(ULONG count)
     {
         PAGED_CODE();
-        
+
         WIN_ASSERT(m_count >= count);
         m_count -= count;
         m_rundown.Release(count);
@@ -134,7 +134,7 @@ public:
         }
         return *this;
     }
-    
+
 private:
 
     T *_p;

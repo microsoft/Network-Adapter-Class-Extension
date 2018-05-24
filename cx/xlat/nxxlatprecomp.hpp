@@ -17,11 +17,11 @@ Abstract:
 #if _KERNEL_MODE
 #  include <Ntddk.h>
 #  include <wdm.h>
-#  define NDIS680 1
+#  define NDIS682 1
 #  include <ndis.h>
 #else
 #  include "umwdm.h"
-#  define UM_NDIS680 1
+#  define UM_NDIS682 1
 #  include <ntddndis.h>
 
 #  define NDIS_STATUS_SUCCESS                     ((NDIS_STATUS)STATUS_SUCCESS)
@@ -65,7 +65,7 @@ NdisMIndicateReceiveNetBufferLists(
 #include <nblutil.h>
 #include <netiodef.h>
 
-#define NET_ADAPTER_CX_1_2 1
+#define NET_ADAPTER_CX_1_3 1
 #include <NetRingBuffer.h>
 #include <NetPacket.h>
 #include <NetDatapathDescriptor.h>

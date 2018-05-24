@@ -8,11 +8,11 @@ class KWorkItemBase
 {
 protected:
 
-    typedef 
-    _IRQL_requires_(PASSIVE_LEVEL) 
+    typedef
+    _IRQL_requires_(PASSIVE_LEVEL)
     void (TCONTEXT::*CallbackFunctionPtr)();
 
-    PAGED KWorkItemBase(_In_ TCONTEXT *context, _In_ CallbackFunctionPtr callback) WI_NOEXCEPT :
+    PAGED KWorkItemBase(_In_ TCONTEXT *context, _In_ CallbackFunctionPtr callback) noexcept :
         m_context(context),
         m_callback(callback)
     {
@@ -47,7 +47,7 @@ protected:
         (m_context->*m_callback)();
     }
 
-private:    
+private:
 
 #if _KERNEL_MODE
 
@@ -69,7 +69,7 @@ private:
         auto *This = reinterpret_cast<TBASE*>(Context);
         This->Invoke();
     }
-    
+
 #endif
 
 #if _KERNEL_MODE
@@ -92,7 +92,7 @@ class KWorkItem : public KWorkItemBase<TCONTEXT, KWorkItem<TCONTEXT>>
 {
 public:
 
-    PAGED KWorkItem(_In_ TCONTEXT *context, _In_ CallbackFunctionPtr callback) WI_NOEXCEPT :
+    PAGED KWorkItem(_In_ TCONTEXT *context, _In_ CallbackFunctionPtr callback) noexcept :
         KWorkItemBase<TCONTEXT, KWorkItem<TCONTEXT>>(context, callback)
     {
 
@@ -132,7 +132,7 @@ public:
     {
         if (InterlockedCompareExchange(&m_queued, true, false))
             return false;
-        
+
         QueueInner();
         return true;
     }

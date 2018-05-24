@@ -7,11 +7,15 @@
 
 #include <netadaptercxfuncenum.h>
 
+#include <NxXlat.hpp>
+
 extern WDFWAITLOCK g_RegistrationLock;
 
 #define NX_PRIVATE_GLOBALS_SIG          'IxNG'
 
-typedef struct _NX_PRIVATE_GLOBALS {
+class NxDriver;
+
+struct NX_PRIVATE_GLOBALS {
     //
     // Equal to GLOBALS_SIG
     //
@@ -30,10 +34,13 @@ typedef struct _NX_PRIVATE_GLOBALS {
     //
     // Pointer to the NxDriver
     //
-    PNxDriver NxDriver;
+    NxDriver * NxDriver;
 
-} NX_PRIVATE_GLOBALS, *PNX_PRIVATE_GLOBALS;
-
+    //
+    // Pointer to the client driver's WDF globals
+    //
+    WDF_DRIVER_GLOBALS *ClientDriverGlobals;
+};
 
 class CxDriverContext
 {
@@ -51,23 +58,20 @@ public:
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(CxDriverContext, GetCxDriverContextFromHandle);
 
 
-VOID
 FORCEINLINE
+VOID
 NxDbgBreak(
-    PNX_PRIVATE_GLOBALS PrivateGlobals
+    NX_PRIVATE_GLOBALS * PrivateGlobals
     )
 {
-    if (PrivateGlobals->CxVerifierOn) {
-        //
-        // Not checking if KD is connected. If verifier is enabled and KD is not
-        // connected a bugcheck is reasonable to draw attention to the failure.
-        //
+    if (PrivateGlobals->CxVerifierOn && ! KdRefreshDebuggerNotPresent())
+    {
         DbgBreakPoint();
     }
 }
 
-PNX_PRIVATE_GLOBALS
 FORCEINLINE
+NX_PRIVATE_GLOBALS *
 GetPrivateGlobals(
     PNET_DRIVER_GLOBALS PublicGlobals
     )
@@ -77,45 +81,5 @@ GetPrivateGlobals(
                              Public);
 }
 
-extern "C"
-DRIVER_INITIALIZE DriverEntry;
-extern "C"
-EVT_WDF_DRIVER_UNLOAD EvtDriverUnload;
-
-extern "C"
-NTSTATUS
-NetAdapterCxInitialize(
-    VOID
-    );
-
-extern "C"
-VOID
-NetAdapterCxDeinitialize(
-    VOID
-    );
-
-extern "C"
-NTSTATUS
-NetAdapterCxBindClient(
-    PWDF_CLASS_BIND_INFO ClassInfo,
-    PWDF_COMPONENT_GLOBALS ClientGlobals
-    );
-
-extern "C"
-VOID
-NetAdapterCxUnbindClient(
-    PWDF_CLASS_BIND_INFO ClassInfo,
-    PWDF_COMPONENT_GLOBALS ClientGlobals
-    );
-
-NTSTATUS
-CreateControlDevice(
-    _Inout_ PUNICODE_STRING Name
-    );
-
-VOID
-DeleteControlDevice(
-    VOID
-    );
-
 extern NDIS_WDF_CX_DRIVER NetAdapterCxDriverHandle;
+

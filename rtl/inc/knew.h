@@ -99,14 +99,14 @@ struct KRTL_CLASS KALLOCATOR : public KALLOCATION_TAG<TAG, ARENA>
     }
 
     // Placement new & delete
-    
+
     PAGED void *operator new(size_t n, void * p)
     {
         PAGED_CODE();
         UNREFERENCED_PARAMETER((n));
         return p;
     }
-    
+
     PAGED void operator delete(void *p1, void *p2)
     {
         PAGED_CODE();
@@ -161,13 +161,13 @@ struct KRTL_CLASS_DPC_ALLOC KALLOCATOR_NONPAGED : public KALLOCATION_TAG_DPC_ALL
     }
 
     // Placement new & delete
-    
+
     NONPAGED void *operator new(size_t n, void * p)
     {
         UNREFERENCED_PARAMETER((n));
         return p;
     }
-    
+
     NONPAGED void operator delete(void *p1, void *p2)
     {
         UNREFERENCED_PARAMETER((p1, p2));
@@ -176,7 +176,7 @@ struct KRTL_CLASS_DPC_ALLOC KALLOCATOR_NONPAGED : public KALLOCATION_TAG_DPC_ALL
 
 template <ULONG TAG>
 struct KRTL_CLASS PAGED_OBJECT :
-    public KALLOCATOR<TAG, PagedPool>, 
+    public KALLOCATOR<TAG, PagedPool>,
     public NdisDebugBlock<TAG>
 {
 
@@ -184,7 +184,7 @@ struct KRTL_CLASS PAGED_OBJECT :
 
 template <ULONG TAG>
 struct KRTL_CLASS NONPAGED_OBJECT :
-    public KALLOCATOR<TAG, NonPagedPoolNx>, 
+    public KALLOCATOR<TAG, NonPagedPoolNx>,
     public NdisDebugBlock<TAG>
 {
 

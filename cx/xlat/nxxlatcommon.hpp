@@ -12,10 +12,12 @@ Abstract:
 
 #define NTSTRSAFE_NO_UNICODE_STRING_FUNCTIONS
 #include <NxTrace.hpp>
-#include <NxTraceLogging.hpp>
+#include <NxXlatTraceLogging.hpp>
 
 #include "NetClientApi.h"
 #include "NxApp.hpp"
+
+#define MS_TO_100NS_CONVERSION 10000
 
 #ifndef RTL_IS_POWER_OF_TWO
 #  define RTL_IS_POWER_OF_TWO(Value) \
@@ -64,6 +66,12 @@ DetachFragmentsFromPacket(
     _In_ NET_DATAPATH_DESCRIPTOR const &Descriptor
 )
 {
+    if (Packet.IgnoreThisPacket)
+    {
+        NT_ASSERT(Packet.FragmentValid == FALSE);
+        return;
+    }
+
     auto fragmentRing = NET_DATAPATH_DESCRIPTOR_GET_FRAGMENT_RING_BUFFER(&Descriptor);
     UINT32 fragmentCount = NetPacketGetFragmentCount(&Descriptor, &Packet);
 

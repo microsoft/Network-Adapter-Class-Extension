@@ -4,7 +4,7 @@
 
 Abstract:
 
-    Contains the per-queue logic for NBL-to-NET_PACKET translation on the 
+    Contains the per-queue logic for NBL-to-NET_PACKET translation on the
     transmit path.
 
 --*/
@@ -19,6 +19,9 @@ Abstract:
 #include "NxContextBuffer.hpp"
 #include "NxNblQueue.hpp"
 #include "NxNbl.hpp"
+#include "NxNblTranslation.hpp"
+#include "NxDma.hpp"
+#include "NxPerfTuner.hpp"
 
 class NxTxXlat :
     public INxNblTx,
@@ -26,7 +29,9 @@ class NxTxXlat :
 {
 public:
 
+    _IRQL_requires_(PASSIVE_LEVEL)
     NxTxXlat(
+        _In_ size_t QueueId,
         _In_ NET_CLIENT_DISPATCH const * Dispatch,
         _In_ NET_CLIENT_ADAPTER Adapter,
         _In_ NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
@@ -37,11 +42,38 @@ public:
         void
         );
 
-    void
-    TransmitThread();
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    size_t
+    GetQueueId(
+        void
+        ) const;
 
+    _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
-    StartQueue(
+    Initialize(
+        void
+        );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    Start(
+        void
+        );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    Cancel(
+        void
+        );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    Stop(
+        void
+        );
+
+    void
+    TransmitThread(
         void
         );
 
@@ -63,7 +95,12 @@ public:
         _In_ ULONG SendFlags
         );
 
+    void
+    ReportCounters();
+
 private:
+
+    size_t m_queueId = ~0U;
 
     NxExecutionContext m_executionContext;
 
@@ -71,12 +108,13 @@ private:
     NET_CLIENT_ADAPTER m_adapter = nullptr;
     NET_CLIENT_ADAPTER_DISPATCH const * m_adapterDispatch = nullptr;
     NET_CLIENT_ADAPTER_PROPERTIES m_adapterProperties = {};
+    NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES m_datapathCapabilities = {};
     NDIS_MEDIUM m_mediaType;
     INxNblDispatcher *m_nblDispatcher = nullptr;
     NxInterlockedFlag m_queueNotification;
     NxNblQueue m_synchronizedNblQueue;
+    NxNblTranslationStats m_nblTranslationStats;
 
-    // Initialized in StartQueue
     NET_CLIENT_QUEUE m_queue = nullptr;
     NET_CLIENT_QUEUE_DISPATCH const * m_queueDispatch = nullptr;
     size_t m_checksumOffset = NET_PACKET_EXTENSION_INVALID_OFFSET;
@@ -86,6 +124,8 @@ private:
     NET_DATAPATH_DESCRIPTOR const * m_descriptor;
     NxRingBuffer m_ringBuffer;
     NxContextBuffer m_contextBuffer;
+    NxBounceBufferPool m_bounceBufferPool;
+    wistd::unique_ptr<NxDmaAdapter> m_dmaAdapter;
 
     //
     // Datapath variables
@@ -98,7 +138,18 @@ private:
     // and halt queue operation
     bool m_producedPackets = false;
     bool m_completedPackets = false;
-    
+
+    // Tx translation specific counters
+    ULONG64 m_CumulativeNBLQueueDepthInLastInterval = 0;
+    ULONG64 m_IterationCountInLastInterval = 0;
+    ULONG64 m_NBLQueueEmptyCount = 0;
+    ULONG64 m_NBLQueueOccupiedCount = 0;
+
+#ifdef _KERNEL_MODE
+    KTIMER m_CounterReportTimer;
+    KDPC m_CounterReportDpc;
+#endif
+
     struct ArmedNotifications
     {
         union
@@ -137,7 +188,7 @@ private:
     YieldToNetAdapter();
 
     void
-    WaitForMoreWork();
+    WaitForWork();
 
     // These operations are used exclusively while
     // winding down the Tx path
@@ -158,11 +209,6 @@ private:
         );
 
     NTSTATUS
-    Initialize(
-        void
-        );
-
-    NTSTATUS
     PreparePacketExtensions(
         _Inout_ Rtl::KArray<NET_CLIENT_PACKET_EXTENSION>& addedPacketExtensions
         );
@@ -175,4 +221,17 @@ private:
 
     void
     SetupTxThreadProperties();
+
+    void
+    UpdateTxTranslationSpecificCounters();
+
+    bool m_shouldReportCounters = false;
+    ULONG m_counterReportInterval = 0;
+    bool m_shouldUpdateEcCounters = false;
+
+#ifdef  _KERNEL_MODE
+    static
+    KDEFERRED_ROUTINE CounterReportDpcRoutine;
+#endif //  _KERNEL_MODE
 };
+

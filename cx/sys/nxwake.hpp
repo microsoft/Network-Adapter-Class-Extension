@@ -10,6 +10,8 @@ Abstract:
 
 #pragma once
 
+#include <FxObjectBase.hpp>
+
 typedef enum _NX_POWER_ENTRY_TYPE {
     NxPowerEntryTypeWakePattern,
     NxPowerEntryTypeProtocolOffload,
@@ -33,13 +35,15 @@ typedef struct _NX_NET_POWER_ENTRY {
     //
 } NX_NET_POWER_ENTRY, *PNX_NET_POWER_ENTRY;
 
-PNxWake
+class NxAdapter;
+class NxWake;
+
 FORCEINLINE
+NxWake *
 GetNxWakeFromHandle(
     _In_ NETPOWERSETTINGS WakeListWdfHandle
     );
 
-typedef class NxWake *PNxWake;
 class NxWake : public CFxObject<NETPOWERSETTINGS,
                                     NxWake,
                                     GetNxWakeFromHandle,
@@ -49,7 +53,7 @@ private:
     //
     // Pointer to the corresponding NxAdapter object
     //
-    PNxAdapter                   m_NxAdapter;
+    NxAdapter *                  m_NxAdapter;
 
     //
     // Head of the Wake patterns list
@@ -101,7 +105,7 @@ private:
 
     NxWake(
         _In_ NETPOWERSETTINGS         NetPowerSettings,
-        _In_ PNxAdapter               NxAdapter
+        _In_ NxAdapter *              NxAdapter
     );
 
     PNX_NET_POWER_ENTRY
@@ -163,9 +167,9 @@ public:
     static
     NTSTATUS
     _Create(
-        _In_   PNxAdapter               NxAdapter,
+        _In_   NxAdapter *              NxAdapter,
         _In_   PWDF_OBJECT_ATTRIBUTES   NetPowerSettingsObjectAttributes,
-        _Out_  PNxWake*                 NxWakeObject
+        _Out_  NxWake **                NxWakeObject
         );
 
     PNX_NET_POWER_ENTRY
@@ -174,7 +178,7 @@ public:
         _In_ UINT InformationBufferLength);
 
     NDIS_STATUS
-    ProcessOidPmParameters(
+    SetParameters(
         _In_ PNDIS_PM_PARAMETERS PmParams
         );
 
@@ -183,21 +187,31 @@ public:
         );
 
     NDIS_STATUS
-    ProcessOidWakePattern(
+    AddWakePattern(
         _In_ NETADAPTER AdapterWdfHandle,
-        _In_ _NDIS_OID_REQUEST::_REQUEST_DATA::_SET *Set
+        _In_ NDIS_OID_REQUEST::_REQUEST_DATA::_SET const *Set
         );
 
     NDIS_STATUS
-    ProcessOidProtocolOffload(
+    RemoveWakePattern(
+        _In_ NDIS_OID_REQUEST::_REQUEST_DATA::_SET const *Set
+        );
+
+    NDIS_STATUS
+    AddProtocolOffload(
         _In_ NETADAPTER AdapterWdfHandle,
-        _In_ _NDIS_OID_REQUEST::_REQUEST_DATA::_SET *Set
+        _In_ NDIS_OID_REQUEST::_REQUEST_DATA::_SET const *Set
+        );
+
+    NDIS_STATUS
+    RemoveProtocolOffload(
+        _In_ NDIS_OID_REQUEST::_REQUEST_DATA::_SET const *Set
         );
 
     RECORDER_LOG
-    GetRecorderLog() {
-        return m_NxAdapter->GetRecorderLog();
-    }
+    GetRecorderLog(
+        void
+        );
 
     VOID
     AdapterInitComplete(
@@ -286,8 +300,8 @@ public:
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxWake, _GetNxWakeFromHandle);
 
-PNxWake
 FORCEINLINE
+NxWake *
 GetNxWakeFromHandle(
     _In_ NETPOWERSETTINGS     NetPowerSettingsWdfHandle
     )
@@ -303,3 +317,4 @@ Routine Description:
 {
     return _GetNxWakeFromHandle(NetPowerSettingsWdfHandle);
 }
+

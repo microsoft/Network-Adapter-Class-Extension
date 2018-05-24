@@ -10,12 +10,13 @@ Abstract:
 
 #include "Nx.hpp"
 
+#include <NxApi.hpp>
+
 #include "NxBufferApi.tmh"
 
-//
-// extern the whole file
-//
-extern "C" {
+#include "NxBuffer.hpp"
+#include "verifier.hpp"
+#include "version.hpp"
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
@@ -27,7 +28,7 @@ NETEXPORT(NetPacketGetTypedContext)(
     _In_ PCNET_CONTEXT_TYPE_INFO TypeInfo
     )
 {
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
@@ -45,7 +46,7 @@ NETEXPORT(NetPacketGetContextFromToken)(
     _In_ PNET_PACKET_CONTEXT_TOKEN Token
     )
 {
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
@@ -54,4 +55,3 @@ NETEXPORT(NetPacketGetContextFromToken)(
     return NxBuffer::_GetClientContextFromToken(Descriptor, NetPacket, Token);
 }
 
-} // extern "C"
