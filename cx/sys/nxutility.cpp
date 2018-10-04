@@ -9,8 +9,33 @@ Abstract:
 --*/
 
 #include "Nx.hpp"
+#include <NxApi.hpp>
 
 #include "NxUtility.tmh"
+#include "NxUtility.hpp"
+#include "NxAdapter.hpp"
+#include "NxQueue.hpp"
+#include "version.hpp"
+
+_Use_decl_annotations_
+void
+AsyncResult::Set(
+    NTSTATUS Status
+    )
+{
+    m_status = Status;
+    m_signal.Set();
+}
+
+NTSTATUS
+AsyncResult::Wait(
+    void
+    )
+{
+    m_signal.Wait();
+    return m_status;
+}
+
 
 _Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -33,8 +58,6 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_UTILITY);
-
     NTSTATUS status;
     UNICODE_STRING str;
     PWCHAR pCur;
@@ -49,14 +72,12 @@ Arguments:
     if ((BufferLength % sizeof(WCHAR)) != 0) {
         LogError(RecorderLog, FLAG_UTILITY,
                  "Length %d is not a multiple of 2, STATUS_OBJECT_TYPE_MISMATCH", BufferLength);
-        FuncExit(FLAG_UTILITY);
         return STATUS_OBJECT_TYPE_MISMATCH;
     }
 
     if (BufferLength >= USHORT_MAX) {
         LogError(RecorderLog, FLAG_UTILITY,
                  "BufferLength %d is greater than USHORT_MAX", BufferLength);
-        FuncExit(FLAG_UTILITY);
         return STATUS_OBJECT_TYPE_MISMATCH;
     }
 
@@ -68,7 +89,6 @@ Arguments:
 
         LogError(RecorderLog, FLAG_UTILITY,
             "Buffer does not have double NULL terminal chars, STATUS_OBJECT_TYPE_MISMATCH");
-        FuncExit(FLAG_UTILITY);
         return STATUS_OBJECT_TYPE_MISMATCH;
     }
 
@@ -156,8 +176,148 @@ Exit:
         }
     }
 
-    FuncExit(FLAG_UTILITY);
     return status;
 }
 
+//
+// Default datapath queue implementation used in case client driver does not
+// provide an implementation
+//
 
+static EVT_NET_ADAPTER_CREATE_TXQUEUE DefaultCreateTxQueue;
+static EVT_NET_ADAPTER_CREATE_RXQUEUE DefaultCreateRxQueue;
+
+static EVT_PACKET_QUEUE_ADVANCE DefaultTxPacketQueueAdvance;
+static EVT_PACKET_QUEUE_ADVANCE DefaultRxPacketQueueAdvance;
+static EVT_PACKET_QUEUE_SET_NOTIFICATION_ENABLED DefaultPacketQueueSetNotificationEnabled;
+static EVT_PACKET_QUEUE_CANCEL DefaultTxPacketQueueCancel;
+static EVT_PACKET_QUEUE_CANCEL DefaultRxPacketQueueCancel;
+
+NET_ADAPTER_DATAPATH_CALLBACKS
+GetDefaultDatapathCallbacks(
+    void
+    )
+{
+    NET_ADAPTER_DATAPATH_CALLBACKS datapathCallbacks;
+    NET_ADAPTER_DATAPATH_CALLBACKS_INIT(
+        &datapathCallbacks,
+        DefaultCreateTxQueue,
+        DefaultCreateRxQueue);
+
+    return datapathCallbacks;
+}
+
+_Use_decl_annotations_
+NTSTATUS
+DefaultCreateTxQueue(
+    NETADAPTER Adapter,
+    PNETTXQUEUE_INIT QueueInit
+    )
+{
+    NET_PACKET_QUEUE_CONFIG queueConfig;
+    NET_PACKET_QUEUE_CONFIG_INIT(
+        &queueConfig,
+        DefaultTxPacketQueueAdvance,
+        DefaultPacketQueueSetNotificationEnabled,
+        DefaultTxPacketQueueCancel);
+
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+
+    NETPACKETQUEUE txQueue;
+    return NETEXPORT(NetTxQueueCreate)(
+        nxAdapter->GetPublicGlobals(),
+        QueueInit,
+        WDF_NO_OBJECT_ATTRIBUTES,
+        &queueConfig,
+        &txQueue);
+}
+
+_Use_decl_annotations_
+NTSTATUS
+DefaultCreateRxQueue(
+    NETADAPTER Adapter,
+    PNETRXQUEUE_INIT QueueInit
+    )
+{
+    NET_PACKET_QUEUE_CONFIG queueConfig;
+    NET_PACKET_QUEUE_CONFIG_INIT(
+        &queueConfig,
+        DefaultRxPacketQueueAdvance,
+        DefaultPacketQueueSetNotificationEnabled,
+        DefaultRxPacketQueueCancel);
+
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+
+    NETPACKETQUEUE rxQueue;
+    return NETEXPORT(NetRxQueueCreate)(
+        nxAdapter->GetPublicGlobals(),
+        QueueInit,
+        WDF_NO_OBJECT_ATTRIBUTES,
+        &queueConfig,
+        &rxQueue);
+}
+
+_Use_decl_annotations_
+void
+DefaultTxPacketQueueAdvance(
+    NETPACKETQUEUE Queue
+    )
+{
+    auto txQueue = GetTxQueueFromHandle(Queue);
+    auto nxAdapter = txQueue->GetAdapter();
+
+    auto datapathDescriptor = NETEXPORT(NetTxQueueGetDatapathDescriptor)(
+        nxAdapter->GetPublicGlobals(),
+        Queue);
+
+    // Complete any new transmit packets to avoid NDIS NBL leaking watchdog firing
+    auto packetRing = NET_DATAPATH_DESCRIPTOR_GET_PACKET_RING_BUFFER(datapathDescriptor);
+    packetRing->BeginIndex = packetRing->EndIndex;
+}
+
+_Use_decl_annotations_
+void
+DefaultRxPacketQueueAdvance(
+    NETPACKETQUEUE Queue
+    )
+{
+    // In the receive case the packets are owned by the client driver, no need to complete
+    // them in the advance callback
+    UNREFERENCED_PARAMETER(Queue);
+}
+
+_Use_decl_annotations_
+void
+DefaultPacketQueueSetNotificationEnabled(
+    NETPACKETQUEUE Queue,
+    BOOLEAN NotificationEnabled
+    )
+{
+    UNREFERENCED_PARAMETER((Queue, NotificationEnabled));
+}
+
+_Use_decl_annotations_
+void
+DefaultTxPacketQueueCancel(
+    NETPACKETQUEUE Queue
+    )
+{
+    UNREFERENCED_PARAMETER(Queue);
+}
+
+_Use_decl_annotations_
+void
+DefaultRxPacketQueueCancel(
+    NETPACKETQUEUE Queue
+    )
+{
+    auto rxQueue = GetRxQueueFromHandle(Queue);
+    auto nxAdapter = rxQueue->GetAdapter();
+
+    auto datapathDescriptor = NETEXPORT(NetRxQueueGetDatapathDescriptor)(
+        nxAdapter->GetPublicGlobals(),
+        Queue);
+
+    auto packetRing = NET_DATAPATH_DESCRIPTOR_GET_PACKET_RING_BUFFER(datapathDescriptor);
+    packetRing->BeginIndex = packetRing->EndIndex;
+}

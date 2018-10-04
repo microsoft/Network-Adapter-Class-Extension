@@ -10,17 +10,24 @@ Abstract:
 
 #pragma once
 
+#include <FxObjectBase.hpp>
+
 //
 // The NxConfiguration is an object that represents a Net Configuration
 //
 
-PNxConfiguration
+struct NX_PRIVATE_GLOBALS;
+
+class NxDevice;
+class NxAdapter;
+class NxConfiguration;
+
 FORCEINLINE
+NxConfiguration *
 GetNxConfigurationFromHandle(
     _In_ NETCONFIGURATION Configuration
     );
 
-typedef class NxConfiguration *PNxConfiguration;
 class NxConfiguration : public CFxObject<NETCONFIGURATION,
                                    NxConfiguration,
                                    GetNxConfigurationFromHandle,
@@ -28,11 +35,13 @@ class NxConfiguration : public CFxObject<NETCONFIGURATION,
 {
 
 private:
-    PNxConfiguration             m_ParentNxConfiguration;
+    NxConfiguration *             m_ParentNxConfiguration;
 
 public:
-
-    PNxAdapter                   m_NxAdapter;
+    const bool                    m_IsDeviceConfig;
+    NxDevice *                    m_NxDevice;
+    NxAdapter *                   m_NxAdapter;
+    WDFKEY                        m_Key;
 
     //
     // Opaque handle returned by ndis.sys for this adapter.
@@ -41,10 +50,17 @@ public:
 
 private:
     NxConfiguration(
-        _In_ PNX_PRIVATE_GLOBALS      NxPrivateGlobals,
+        _In_ NX_PRIVATE_GLOBALS *     NxPrivateGlobals,
         _In_ NETCONFIGURATION         Configuration,
-        _In_ PNxConfiguration         ParentNxConfiguration,
-        _In_ PNxAdapter               NxAdapter
+        _In_ NxConfiguration *        ParentNxConfiguration,
+        _In_ NxDevice *               NxDevice
+        );
+
+    NxConfiguration(
+        _In_ NX_PRIVATE_GLOBALS *     NxPrivateGlobals,
+        _In_ NETCONFIGURATION         Configuration,
+        _In_ NxConfiguration *        ParentNxConfiguration,
+        _In_ NxAdapter *              NxAdapter
         );
 
     PAGED
@@ -61,10 +77,20 @@ public:
     static
     NTSTATUS
     _Create(
-        _In_     PNX_PRIVATE_GLOBALS      PrivateGlobals,
-        _In_     PNxAdapter               NxAdapter,
-        _In_opt_ PNxConfiguration         ParentNxConfiguration,
-        _Out_    PNxConfiguration*        NxConfiguration
+        _In_     NX_PRIVATE_GLOBALS *     PrivateGlobals,
+        _In_     NxDevice *               NxDevice,
+        _In_opt_ PWDF_OBJECT_ATTRIBUTES   ConfigurationAttributes,
+        _In_opt_ NxConfiguration *        ParentNxConfiguration,
+        _Out_    NxConfiguration **       NxConfiguration
+    );
+
+    static
+    NTSTATUS
+    _Create(
+        _In_     NX_PRIVATE_GLOBALS *     PrivateGlobals,
+        _In_     NxAdapter *              NxAdapter,
+        _In_opt_ NxConfiguration *        ParentNxConfiguration,
+        _Out_    NxConfiguration **       NxConfiguration
         );
 
     static
@@ -185,8 +211,8 @@ public:
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxConfiguration, _GetNxConfigurationFromHandle);
 
-PNxConfiguration
 FORCEINLINE
+NxConfiguration *
 GetNxConfigurationFromHandle(
     _In_ NETCONFIGURATION           Configuration
     )
@@ -203,3 +229,4 @@ Routine Description:
 {
     return _GetNxConfigurationFromHandle(Configuration);
 }
+

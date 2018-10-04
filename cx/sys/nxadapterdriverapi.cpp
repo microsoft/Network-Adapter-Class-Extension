@@ -10,12 +10,13 @@ Abstract:
 
 #include "Nx.hpp"
 
+#include <NxApi.hpp>
+
 #include "NxAdapterDriverApi.tmh"
 
-//
-// extern the whole file
-//
-extern "C" {
+#include "NxDriver.hpp"
+#include "verifier.hpp"
+#include "version.hpp"
 
 _Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -43,8 +44,6 @@ Return Value:
 
 --*/
 {
-    FuncEntry(FLAG_ADAPTER);
-
     NX_PRIVATE_GLOBALS *NxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(NxPrivateGlobals);
@@ -69,7 +68,6 @@ Return Value:
         CX_RETURN_IF_NOT_NT_SUCCESS(nxDriver->Register());
     }
 
-    FuncExit(FLAG_ADAPTER);
     return STATUS_SUCCESS;
 }
 
@@ -102,19 +100,13 @@ Return Value:
     NDIS_HANDLE
 --*/
 {
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals;
-    PNxDriver           nxDriver;
-
     UNREFERENCED_PARAMETER(Driver);
 
-    pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
 
-    nxDriver = pNxPrivateGlobals->NxDriver;
-
-    return nxDriver->GetNdisMiniportDriverHandle();
+    return pNxPrivateGlobals->NxDriver->GetNdisMiniportDriverHandle();
 }
 
-} // extern "C"

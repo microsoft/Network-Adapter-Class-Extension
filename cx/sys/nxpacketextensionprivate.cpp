@@ -4,8 +4,10 @@
 
 #include "Nx.hpp"
 
-#include "NxPacketExtensionPrivate.hpp"
 #include "NxPacketExtensionPrivate.tmh"
+#include "NxPacketExtensionPrivate.hpp"
+
+#include "NxMacros.hpp"
 
 _Use_decl_annotations_
 NTSTATUS

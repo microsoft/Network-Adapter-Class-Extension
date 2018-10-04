@@ -14,26 +14,8 @@ Abstract:
 #include "NxApp.hpp"
 #include "NxTxXlat.hpp"
 #include "NxRxXlat.hpp"
-
-struct ReceiveScaleMapping
-{
-
-    PROCESSOR_NUMBER
-        Number;
-
-    Rtl::KArray<UINT16>
-        HashIndexes;
-
-    size_t
-        QueueIndex = ~0U;
-
-    ULONG
-        QueueId = ~0U;
-
-    bool
-        QueueCreated = false;
-
-};
+#include "NxReceiveScaling.hpp"
+#include "NxOffload.hpp"
 
 class NxTranslationApp :
     public INxApp
@@ -41,15 +23,58 @@ class NxTranslationApp :
 
 public:
 
+    _IRQL_requires_(PASSIVE_LEVEL)
     NxTranslationApp(
         _In_ NET_CLIENT_DISPATCH const * Dispatch,
         _In_ NET_CLIENT_ADAPTER Adapter,
         _In_ NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
         ) noexcept;
 
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    NET_CLIENT_ADAPTER
+    GetAdapter(
+        void
+        ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    SetDeviceFailed(
+        _In_ NTSTATUS Status
+        ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NET_CLIENT_ADAPTER_PROPERTIES
+    GetProperties(
+        void
+        ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES
+    GetDatapathCapabilities(
+        void
+        ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NET_CLIENT_ADAPTER_RECEIVE_SCALING_CAPABILITIES
+    GetReceiveScalingCapabilities(
+        void
+        ) const;
+
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
     CreateDatapath(
+        void
+        );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    StartDatapath(
+        void
+        );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    StopDatapath(
         void
         );
 
@@ -61,56 +86,68 @@ public:
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
-    ReceiveScalingParametersSet(
-        _In_ NDIS_OID_REQUEST & Request
+    ReceiveScalingInitialize(
+        void
         );
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
-    ReceiveScalingIndirectionTableEntriesSet(
-        _In_ NDIS_OID_REQUEST & Request
+    ReceiveScalingSetParameters(
+        _In_ NDIS_OID_REQUEST const & Request
+        );
+
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    NTSTATUS
+    ReceiveScalingSetIndirectionEntries(
+        _In_ NDIS_OID_REQUEST const & Request
+        );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    OffloadInitialize(
+        void
+        );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    OffloadSetActiveCapabilities(
+        _In_ NDIS_OID_REQUEST const & Request
         );
 
 private:
 
-    PAGED
+    _IRQL_requires_(PASSIVE_LEVEL)
+    PAGEDX
     NTSTATUS
-    StartTx(
+    CreateDefaultQueues(
         void
         );
 
-    PAGED
-    NTSTATUS
-    StartRx(
+    _IRQL_requires_(PASSIVE_LEVEL)
+    PAGEDX
+    void
+    StartDefaultQueues(
         void
         );
 
-    bool
-    ReceiveScalingEvaluateDisable(
-        _In_ NDIS_RECEIVE_SCALE_PARAMETERS const & Parameters
-        );
-
+    _IRQL_requires_(PASSIVE_LEVEL)
+    PAGEDX
     NTSTATUS
-    ReceiveScalingEvaluateEnable(
-        _In_ NDIS_RECEIVE_SCALE_PARAMETERS const & Parameters
+    CreateReceiveScalingQueues(
+        void
         );
 
-    NTSTATUS
-    NxTranslationApp::ReceiveScalingEvaluateIndirectionEntries(
-        _In_ PROCESSOR_NUMBER const * ProcessorNumbers,
-        _In_ size_t Count
+    _IRQL_requires_(PASSIVE_LEVEL)
+    PAGEDX
+    void
+    StartReceiveScalingQueues(
+        void
         );
-
-    KSpinLock
-        m_translatorLock;
-
-    Rtl::KArray<ReceiveScaleMapping>
-        m_receiveScaleMappings;
 
     wistd::unique_ptr<NxTxXlat>
         m_txQueue;
 
-    Rtl::KArray<wistd::unique_ptr<NxRxXlat>>
+    Rtl::KArray<wistd::unique_ptr<NxRxXlat>, NonPagedPoolNx>
         m_rxQueues;
 
     NET_CLIENT_DISPATCH const *
@@ -127,6 +164,21 @@ private:
 
     NxNblRx
         m_rxBufferReturn;
+
+    wistd::unique_ptr<NxReceiveScaling>
+        m_receiveScaling;
+
+    bool
+        m_receiveScalingDatapath = false;
+
+    bool
+        m_datapathCreated = false;
+
+    bool
+        m_datapathStarted = false;
+
+    NxTaskOffload
+        m_offload;
 
 };
 

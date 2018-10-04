@@ -23,20 +23,22 @@ Abstract:
 
 #endif // _KERNEL_MODE
 
-#include "FxObjectBase.hpp"
-#include "NxForward.hpp"
+#include <FxObjectBase.hpp>
 
 //
 // The NxDriver is an object that represents a NetAdapterCx Client Driver
 //
 
-PNxDriver
+struct NX_PRIVATE_GLOBALS;
+
+class NxDriver;
+
 FORCEINLINE
+NxDriver *
 GetNxDriverFromWdfDriver(
     _In_ WDFDRIVER Driver
     );
 
-typedef class NxDriver *PNxDriver;
 class NxDriver : public CFxObject<WDFDRIVER,
                                   NxDriver,
                                   GetNxDriverFromWdfDriver,
@@ -52,22 +54,21 @@ private:
 
     NxDriver(
         _In_ WDFDRIVER                Driver,
-        _In_ PNX_PRIVATE_GLOBALS      NxPrivateGlobals
+        _In_ NX_PRIVATE_GLOBALS *     NxPrivateGlobals
         );
 
 public:
     static
     NTSTATUS
     _CreateAndRegisterIfNeeded(
-        _In_ WDFDRIVER                      Driver,
-        _In_ PNX_PRIVATE_GLOBALS            NxPrivateGlobals
+        _In_ NX_PRIVATE_GLOBALS *           NxPrivateGlobals
         );
 
     static
     NTSTATUS
     _CreateIfNeeded(
         _In_ WDFDRIVER           Driver,
-        _In_ PNX_PRIVATE_GLOBALS NxPrivateGlobals
+        _In_ NX_PRIVATE_GLOBALS * NxPrivateGlobals
         );
 
     NTSTATUS
@@ -107,8 +108,8 @@ public:
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxDriver, _GetNxDriverFromWdfDriver);
 
-PNxDriver
 FORCEINLINE
+NxDriver *
 GetNxDriverFromWdfDriver(
     _In_ WDFDRIVER Driver
     )
@@ -125,3 +126,4 @@ Routine Description:
 {
     return _GetNxDriverFromWdfDriver(Driver);
 }
+

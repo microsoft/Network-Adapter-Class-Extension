@@ -10,12 +10,14 @@ Abstract:
 
 #include "Nx.hpp"
 
+#include <NxApi.hpp>
+
 #include "NxRequestQueueApi.tmh"
 
-//
-// extern the whole file
-//
-extern "C" {
+#include "NxAdapter.hpp"
+#include "NxRequestQueue.hpp"
+#include "verifier.hpp"
+#include "version.hpp"
 
 _Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -59,19 +61,14 @@ Return Value:
 
 --*/
 {
-    FuncEntry(FLAG_REQUEST_QUEUE);
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals;
     NTSTATUS            status;
-    PNxRequestQueue     nxRequestQueue;
-    PNxAdapter          nxAdapter;
 
     if (Queue) { *Queue = NULL; }
 
     //
     // Parameter Validation.
     //
-    pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
@@ -83,13 +80,12 @@ Return Value:
         goto Exit;
     }
 
-    nxAdapter = GetNxAdapterFromHandle(Configuration->Adapter);
-
     //
     // Create the NxRequestQueue
     //
+    NxRequestQueue * nxRequestQueue;
     status = NxRequestQueue::_Create(pNxPrivateGlobals,
-                                 nxAdapter,
+                                 GetNxAdapterFromHandle(Configuration->Adapter),
                                  QueueAttributes,
                                  Configuration,
                                  &nxRequestQueue);
@@ -114,7 +110,6 @@ Exit:
         NxRequestQueue::_FreeHandlers(Configuration);
     }
 
-    FuncExit(FLAG_REQUEST_QUEUE);
     return status;
 }
 
@@ -140,20 +135,10 @@ Returns:
 
 --*/
 {
-    FuncEntry(FLAG_REQUEST_QUEUE);
-
-    PNxRequestQueue              nxRequestQueue;
-    NETADAPTER               adapter;
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
 
-    nxRequestQueue = GetNxRequestQueueFromHandle(NetRequestQueue);
-    adapter = nxRequestQueue->m_NxAdapter->GetFxObject();
-
-    FuncExit(FLAG_REQUEST_QUEUE);
-    return adapter;
+    return GetNxRequestQueueFromHandle(NetRequestQueue)->m_NxAdapter->GetFxObject();
 }
 
-}

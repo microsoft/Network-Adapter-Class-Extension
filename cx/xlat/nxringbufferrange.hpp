@@ -30,7 +30,7 @@ class NetRingBufferIterator
 
     NET_RING_BUFFER const & m_rb;
     UINT32 m_index;
-    
+
     static NET_RING_BUFFER * Handle(NET_RING_BUFFER const & rb) { return const_cast<NET_RING_BUFFER*>(&rb); }
 
 public:
@@ -161,7 +161,7 @@ public:
     {
         return m_begin != m_end;
     }
-    
+
     T *At(UINT32 n)
     {
         NT_ASSERT(n < Count());

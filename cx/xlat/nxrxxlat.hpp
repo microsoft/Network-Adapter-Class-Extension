@@ -4,7 +4,7 @@
 
 Abstract:
 
-    Contains the per-queue logic for NBL-to-NET_PACKET translation on the 
+    Contains the per-queue logic for NBL-to-NET_PACKET translation on the
     receive path.
 
 --*/
@@ -40,7 +40,9 @@ class NxRxXlat :
 {
 public:
 
+    _IRQL_requires_(PASSIVE_LEVEL)
     NxRxXlat(
+        _In_ size_t QueueId,
         _In_ NET_CLIENT_DISPATCH const * Dispatch,
         _In_ NET_CLIENT_ADAPTER Adapter,
         _In_ NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
@@ -51,28 +53,57 @@ public:
         void
         );
 
-    // the EC thread function
-    void
-    ReceiveThread();
-
-    ULONG
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    size_t
     GetQueueId(
         void
         ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    Initialize(
+        void
+        );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    Start(
+        void
+        );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    Cancel(
+        void
+        );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    Stop(
+        void
+        );
+
+    // the EC thread function
+    void
+    ReceiveThread(
+        void
+        );
 
     NET_CLIENT_QUEUE
     GetQueue(
         void
         ) const;
 
-    NTSTATUS
-    SetGroupAffinity(
-        GROUP_AFFINITY & GroupAffinity
-        );
-
-    NTSTATUS
-    StartQueue(
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    bool
+    IsGroupAffinitized(
         void
+        ) const;
+
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    void
+    SetGroupAffinity(
+        GROUP_AFFINITY const & GroupAffinity
         );
 
     void
@@ -85,7 +116,18 @@ public:
         _In_ NBL_QUEUE* NblChain
         );
 
+    void
+    ReportCounters(
+        void
+        );
+
 private:
+
+    size_t m_queueId = ~0U;
+
+    volatile LONG m_groupAffinityChanged = false;
+
+    GROUP_AFFINITY m_groupAffinity = {};
 
     struct PAGED PacketContext
     {
@@ -93,7 +135,7 @@ private:
         // this NBL's NET_BUFFER_MINIPORT_RESERVED(NET_BUFFER_LIST_FIRST_NB)[0]
         // field is used for the following purpose:
         //
-        // if Rx buffer allocation mode is none, it's storing the rx buffer 
+        // if Rx buffer allocation mode is none, it's storing the rx buffer
         // return context supplied by the NIC driver
         //
         // if Rx buffer allocation mode is automatic, it's storing the
@@ -161,6 +203,11 @@ private:
     ULONG m_postedPackets = 0;
     ULONG m_returnedPackets = 0;
 
+#ifdef _KERNEL_MODE
+    KTIMER m_CounterReportTimer;
+    KDPC m_CounterReportDpc;
+#endif
+
     // notification signals
     NxInterlockedFlag m_returnedNblNotification;
 
@@ -179,7 +226,6 @@ private:
     ArmAdapterRxNotification();
 
     bool m_memoryPreallocated = false;
-    bool m_stopRequested = false;
 
     NTSTATUS
     AttachEmptyDataBufferToNetPacket(
@@ -203,7 +249,7 @@ private:
 
     void
     ReturnNblToPool(_In_ PNET_BUFFER_LIST);
-    
+
     PNET_BUFFER_LIST
     FreeReceivedDataBuffer(_In_ PNET_BUFFER_LIST nbl);
 
@@ -222,7 +268,13 @@ private:
     EcReturnBuffers();
 
     void
+    EcRecoverBuffers();
+
+    void
     EcPrepareBuffersForNetAdapter();
+
+    void
+    EcUpdateAffinity();
 
     void
     EcYieldToNetAdapter();
@@ -231,12 +283,7 @@ private:
     EcIndicateNblsToNdis();
 
     void
-    EcWaitForMoreWork();
-
-    NTSTATUS
-    Initialize(
-        void
-        );
+    WaitForWork();
 
     NTSTATUS
     CreateVariousPools();
@@ -257,5 +304,14 @@ private:
 
     void
     SetupRxThreadProperties();
+
+    bool m_shouldReportCounters = false;
+    ULONG m_counterReportInterval = 0;
+    bool m_shouldUpdateEcCounters = false;
+
+#ifdef  _KERNEL_MODE
+    static
+    KDEFERRED_ROUTINE CounterReportDpcRoutine;
+#endif //  _KERNEL_MODE
 };
 

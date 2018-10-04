@@ -2,11 +2,15 @@
 
 #pragma once
 
+#include <FxObject.hpp>
+#include <KArray.h>
 #include <KPtr.h>
 #include <NetClientQueue.h>
 #include <NetPacketExtensionPrivate.h>
 
-struct NET_PACKET_EXTENSION_PRIVATE;
+#include "NxBuffer.hpp"
+
+class NxAdapter;
 
 #define QUEUE_CREATION_CONTEXT_SIGNATURE 0x7840dd95
 
@@ -39,25 +43,15 @@ struct QUEUE_CREATION_CONTEXT
     Rtl::KArray<NET_PACKET_EXTENSION_PRIVATE>
         NetClientAddedPacketExtensions;
 
-    struct QueueContext
-    {
+    ULONG
+        QueueId = 0;
 
-        ULONG
-            QueueId = 0;
+    void *
+        ClientQueue = nullptr;
 
-        void *
-            ClientQueue = nullptr;
+    wil::unique_wdf_object
+        CreatedQueueObject;
 
-        wil::unique_wdf_object
-            CreatedQueueObject;
-
-    };
-
-    size_t
-        QueueContextIndex = 0;
-
-    Rtl::KArray<QueueContext>
-        QueueContexts;
 };
 
 class NxQueue
@@ -73,6 +67,7 @@ public:
     NxQueue(
         _In_ QUEUE_CREATION_CONTEXT const & InitContext,
         _In_ ULONG QueueId,
+        _In_ NET_PACKET_QUEUE_CONFIG const & QueueConfig,
         _In_ NxQueue::Type QueueType
         );
 
@@ -118,6 +113,16 @@ public:
 
     KPoolPtr<NET_RING_BUFFER>
         m_fragmentRingBuffer;
+
+    void
+    Start(
+        void
+        );
+
+    void
+    Stop(
+        void
+        );
 
     void
     Advance(
@@ -203,17 +208,12 @@ private:
     NET_CLIENT_QUEUE_NOTIFY_DISPATCH const *
         m_clientDispatch = nullptr;
 
+    NET_PACKET_QUEUE_CONFIG const
+        m_packetQueueConfig;
+
 protected:
-    PFN_TXQUEUE_ADVANCE
-        m_evtAdvance = nullptr;
 
-    PFN_TXQUEUE_CANCEL
-        m_evtCancel = nullptr;
-
-    PFN_TXQUEUE_SET_NOTIFICATION_ENABLED
-        m_evtArmNotification = nullptr;
-
-    NETTXQUEUE
+    NETPACKETQUEUE
         m_queue = nullptr;
 };
 
@@ -222,12 +222,12 @@ class NxTxQueue;
 FORCEINLINE
 NxTxQueue *
 GetTxQueueFromHandle(
-    _In_ NETTXQUEUE TxQueue
+    _In_ NETPACKETQUEUE TxQueue
     );
 
 class NxTxQueue :
     public NxQueue,
-    public CFxObject<NETTXQUEUE, NxTxQueue, GetTxQueueFromHandle, true>
+    public CFxObject<NETPACKETQUEUE, NxTxQueue, GetTxQueueFromHandle, true>
 {
 public:
 
@@ -235,7 +235,7 @@ public:
         _In_ WDFOBJECT Object,
         _In_ QUEUE_CREATION_CONTEXT const & InitContext,
         _In_ ULONG QueueId,
-        _In_ NET_TXQUEUE_CONFIG const & QueueConfig
+        _In_ NET_PACKET_QUEUE_CONFIG const & QueueConfig
         );
 
     virtual
@@ -254,7 +254,7 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxTxQueue, _GetTxQueueFromHandle);
 FORCEINLINE
 NxTxQueue *
 GetTxQueueFromHandle(
-    NETTXQUEUE TxQueue
+    NETPACKETQUEUE TxQueue
     )
 {
     return _GetTxQueueFromHandle(TxQueue);
@@ -265,12 +265,12 @@ class NxRxQueue;
 FORCEINLINE
 NxRxQueue *
 GetRxQueueFromHandle(
-    _In_ NETRXQUEUE RxQueue
+    _In_ NETPACKETQUEUE RxQueue
 );
 
 class NxRxQueue :
     public NxQueue,
-    public CFxObject<NETRXQUEUE, NxRxQueue, GetRxQueueFromHandle, true>
+    public CFxObject<NETPACKETQUEUE, NxRxQueue, GetRxQueueFromHandle, true>
 {
 
 public:
@@ -279,7 +279,7 @@ public:
         _In_ WDFOBJECT Object,
         _In_ QUEUE_CREATION_CONTEXT const & InitContext,
         _In_ ULONG QueueId,
-        _In_ NET_RXQUEUE_CONFIG const & QueueConfig
+        _In_ NET_PACKET_QUEUE_CONFIG const & QueueConfig
         );
 
     virtual
@@ -298,7 +298,7 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxRxQueue, _GetRxQueueFromHandle);
 FORCEINLINE
 NxRxQueue *
 GetRxQueueFromHandle(
-    NETRXQUEUE RxQueue
+    NETPACKETQUEUE RxQueue
     )
 {
     return _GetRxQueueFromHandle(RxQueue);

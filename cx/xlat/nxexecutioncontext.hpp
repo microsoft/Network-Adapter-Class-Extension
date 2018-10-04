@@ -13,9 +13,9 @@ Usage:
 
             void MyEcRoutine()
             {
-                ec->WaitForStart();
+                ec->WaitForSignal();
 
-                while (!ec->IsStopRequested())
+                while (!ec->IsStoppping())
                 {
                     if (no work to do)
                         ec->WaitForSignal();
@@ -60,70 +60,141 @@ using EC_START_ROUTINE = wistd::remove_pointer<PTHREAD_START_ROUTINE>::type;
 using EC_RETURN = DWORD;
 #endif
 
+struct NxExecutionContextCounters
+{
+    ULONG64 IterationCount = 0; // # of times polling loop runs
+    ULONG64 BusyWaitIterationCount = 0; // # of times polling loop didn't do anything
+
+    ULONG64 CpuCycleTime = 0;
+    ULONG64 ThreadCycleTime = 0;
+    ULONG64 TotalCpuCycleTime = 0;
+    ULONG64 ProcessingCycles = 0;
+    ULONG64 BusyWaitCycles = 0;
+    ULONG64 IdleCycles = 0;
+};
+
 /// Encapsulates single-threaded execution of a task that can be suspended and
 /// resumed
 class NxExecutionContext
 {
 public:
 
-    NTSTATUS Initialize(PVOID context, EC_START_ROUTINE *callback);
+    NTSTATUS
+    Initialize(
+        void * context,
+        EC_START_ROUTINE * callback
+        );
 
-    /// Called from outside the EC once the EC should start running from its 
-    /// initial state.
-    void Start();
+    void
+    Start(
+        void
+        );
 
-    /// Called from outside the EC to signal the task to clean up.
-    /// Must be followed with a call to CompleteStop().
-    void RequestStop();
+    void
+    Cancel(
+        void
+        );
 
-    /// Called from outside the EC to complete the stop operation by
-    /// waiting for the EC to exit and putting the EC into a stopped state.
-    void CompleteStop();
+    void
+    Stop(
+        void
+        );
 
-    /// Called from outside the EC to prod the EC into taking action.  If the
-    /// EC is already executing, then this is a no-op.
-    void Signal();
+    void
+    Terminate(
+        void
+        );
 
-    /// Called only by code running in the EC.  Suspends execution until the
-    /// EC is started by a call to Start().
-    void WaitForStart();
+    void
+    SignalWork(
+        void
+        );
 
-    /// Called only by code running in the EC.  Suspends execution until the
-    /// EC is signalled by a call to Signal().
-    void WaitForSignal();
+    void
+    WaitForWork(
+        void
+        );
 
-    /// Called only by code running in the EC.  Returns true if the code should
-    /// clean up and exit the EC thread.
-    bool IsStopRequested();
+    void
+    SignalStopped(
+        void
+        );
 
-    NTSTATUS SetGroupAffinity(GROUP_AFFINITY & GroupAffinity);
+    void
+    WaitForStopped(
+        void
+        );
 
-    void SetDebugNameHint(
+
+    /// Called only by code running in the EC. Returns true if stopping and
+    /// false otherwise.
+    bool
+    IsStopping(
+        void
+        ) const;
+
+    bool
+    IsTerminated(
+        void
+        );
+
+    void
+    SetDebugNameHint(
         _In_ PCWSTR usage,
-        _In_ ULONG index,
-        _In_ NET_LUID networkInterface);
+        _In_ size_t index,
+        _In_ NET_LUID networkInterface
+        );
+
+    void
+    UpdateCounters(
+        _In_ bool IsIdleIteration
+        );
+
+    NxExecutionContextCounters
+    GetExecutionContextCounters() const;
+
+    ULONG
+    GetExecutionContextIdentifier() const;
 
 private:
 
     enum EcState : LONG
     {
         Stopped,
-        Initialized,
         Started,
         Stopping,
+        Terminated,
     };
 
-    _Interlocked_ volatile 
-    EcState m_ecState = EcState::Stopped;
+    _Interlocked_ volatile
+    EcState
+        m_ecState = EcState::Stopped;
 
-    EcState SetState(EcState newState)
-    {
-        return (EcState)InterlockedExchange((LONG*)&m_ecState, (LONG)newState);
-    }
+    EcState
+    SetState(
+        EcState newState
+        );
 
+    void
+    SetStopping(
+        void
+        );
 
-    KAutoEvent m_signal;
+    void
+    SetStarted(
+        void
+        );
 
+    void
+    SetTerminated(
+        void
+        );
+
+    KAutoEvent m_work;
+    KAutoEvent m_stopped;
+    KAutoEvent m_changed;
+
+    NxExecutionContextCounters m_ecCounters;
 
 #if _KERNEL_MODE
     unique_zw_handle m_threadHandle;
@@ -131,4 +202,6 @@ private:
 #else
     wil::unique_handle m_workerThreadObject;
 #endif
+
+    ULONG m_ecIdentifier = 0;
 };

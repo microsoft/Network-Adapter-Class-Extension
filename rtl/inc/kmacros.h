@@ -18,7 +18,7 @@
 #ifdef _KERNEL_MODE
 #define CODE_SEG(segment) __declspec(code_seg(segment))
 #else
-#define CODE_SEG(segment) 
+#define CODE_SEG(segment)
 #endif
 
 #ifndef KRTL_PAGE_SEGMENT
@@ -55,10 +55,10 @@
 /// will default to the NONPAGED segment.  You can override any member function with `PAGED`.
 #define KRTL_CLASS_DPC_ALLOC __declspec(empty_bases)
 
-enum CallRunMode 
-{ 
+enum CallRunMode
+{
     // This call should complete synchronously on the current thread
-    RunSynchronous, 
+    RunSynchronous,
     // This call should return immediately, and complete the operation in a background thread
     RunAsynchronous,
     // This call can return immediately, OR complete synchronously

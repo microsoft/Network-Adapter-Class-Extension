@@ -9,28 +9,23 @@ Abstract:
 --*/
 
 #include "Nx.hpp"
-#include "NetPacketExtensionPrivate.h"
+
+#include <NxApi.hpp>
 
 #include "NxAdapterApi.tmh"
 
-//
-// extern the whole file
-//
-extern "C" {
+#include "NxAdapter.hpp"
+#include "NetPacketExtensionPrivate.h"
+#include "NxConfiguration.hpp"
+#include "NxDevice.hpp"
+#include "NxDriver.hpp"
+#include "NxWake.hpp"
+#include "verifier.hpp"
+#include "version.hpp"
 
 NTSTATUS
 AssignFdoName(
     _Inout_ PWDFDEVICE_INIT DeviceInit
-    );
-
-NTSTATUS
-SetPreprocessorRoutines(
-    _Inout_ PWDFCXDEVICE_INIT CxDeviceInit
-    );
-
-VOID
-SetCxPnpPowerCallbacks(
-    _Inout_ PWDFCXDEVICE_INIT CxDeviceInit
     );
 
 _Must_inspect_result_
@@ -58,10 +53,7 @@ Return Value:
 
 --*/
 {
-    FuncEntry(FLAG_ADAPTER);
-
     NTSTATUS status;
-    PNX_PRIVATE_GLOBALS      pNxPrivateGlobals;
     WDF_REMOVE_LOCK_OPTIONS  removeLockOptions;
     PWDFCXDEVICE_INIT cxDeviceInit;
 
@@ -69,10 +61,20 @@ Return Value:
     // Validate Parameters
     //
 
-    pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+
+    //
+    // Register the client driver with NDIS if needed
+    //
+    status = NxDriver::_CreateAndRegisterIfNeeded(pNxPrivateGlobals);
+
+    if (!NT_SUCCESS(status))
+    {
+        goto Exit;
+    }
 
     cxDeviceInit = WdfCxDeviceInitAllocate(DeviceInit);
 
@@ -103,7 +105,7 @@ Return Value:
         goto Exit;
     }
 
-    status = SetPreprocessorRoutines(cxDeviceInit);
+    status = WdfCxDeviceInitAssignPreprocessorRoutines(cxDeviceInit);
 
     if (!NT_SUCCESS(status))
     {
@@ -144,8 +146,260 @@ Return Value:
 
 Exit:
 
-    FuncExit(FLAG_ADAPTER);
     return status;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+PNETADAPTER_INIT
+NETEXPORT(NetAdapterInitAllocate)(
+    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ WDFDEVICE Device
+    )
+/*++
+Routine Description:
+
+    WDF client driver calls this API to allocate an opaque init object for adapters
+    layered on top of a PnP device.
+
+Arguments:
+
+    Globals - Client driver's globals
+    Device - Device to which an adapter will be layered on top off
+
+Return Value:
+
+    An pointer to an init object.
+
+Remarks
+
+    The init object's lifetime is owned by the WDF client driver. After using it to create
+    an adapter it has to call NetAdapterInitFree.
+
+--*/
+{
+    auto privateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(privateGlobals);
+    Verifier_VerifyIrqlPassive(privateGlobals);
+    Verifier_VerifyNotNull(privateGlobals, Device);
+
+    auto adapterInit = wil::make_unique_nothrow<AdapterInit>();
+
+    if (!adapterInit)
+    {
+        return nullptr;
+    }
+
+    adapterInit->Device = Device;
+
+    return reinterpret_cast<PNETADAPTER_INIT>(adapterInit.release());
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+PNETADAPTER_INIT
+NETEXPORT(NetDefaultAdapterInitAllocate)(
+    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ WDFDEVICE Device
+    )
+/*++
+Routine Description:
+
+    WDF client driver may call this API only from EvtDeviceAdd to allocate
+    an opaque init object for default adapters layered on top of a PnP device.
+
+Arguments:
+
+    Globals - Client driver's globals
+    Device - Device to which an adapter will be layered on top off
+
+Return Value:
+
+    An pointer to an init object.
+
+Remarks
+
+    The init object's lifetime is owned by the WDF client driver. After using it to create
+    an adapter it has to call NetAdapterInitFree.
+
+--*/
+{
+    auto privateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(privateGlobals);
+    Verifier_VerifyIrqlPassive(privateGlobals);
+    Verifier_VerifyNotNull(privateGlobals, Device);
+
+    auto adapterInit = wil::make_unique_nothrow<AdapterInit>();
+
+    if (!adapterInit)
+    {
+        return nullptr;
+    }
+
+    adapterInit->Device = Device;
+    adapterInit->Default = true;
+
+    return reinterpret_cast<PNETADAPTER_INIT>(adapterInit.release());
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+VOID
+NETEXPORT(NetAdapterInitFree)(
+    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ PNETADAPTER_INIT AdapterInit
+    )
+/*++
+Routine Description:
+
+    Frees the AdapterInit object.
+
+Arguments:
+
+    Globals - Client driver's globals
+    AdapterInit - Opaque adapter init object
+
+Return Value:
+
+    None
+
+--*/
+{
+    auto privateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(privateGlobals);
+    Verifier_VerifyIrqlPassive(privateGlobals);
+    Verifier_VerifyNotNull(privateGlobals, AdapterInit);
+
+    auto adapterInit = GetAdapterInitFromHandle(privateGlobals, AdapterInit);
+
+    adapterInit->~AdapterInit();
+    ExFreePool(adapterInit);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+VOID
+NETEXPORT(NetAdapterInitSetDatapathCallbacks)(
+    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _Inout_ PNETADAPTER_INIT AdapterInit,
+    _In_ PNET_ADAPTER_DATAPATH_CALLBACKS DatapathCallbacks
+    )
+/*++
+Routine Description:
+
+    Sets the datapath callbacks for the adapter that will be created with this AdapterInit.
+
+Arguments:
+
+    Globals - Client driver's globals
+    AdapterInit - Adapter init object
+    DatapathCallbacks - An initialize structure containing the adapter's datapath callbacks
+
+Return Value:
+
+    None
+
+--*/
+{
+    auto privateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(privateGlobals);
+    Verifier_VerifyIrqlPassive(privateGlobals);
+    Verifier_VerifyNotNull(privateGlobals, DatapathCallbacks);
+
+    auto adapterInit = GetAdapterInitFromHandle(privateGlobals, AdapterInit);
+
+    RtlCopyMemory(
+        &adapterInit->DatapathCallbacks,
+        DatapathCallbacks,
+        DatapathCallbacks->Size);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+VOID
+NETEXPORT(NetAdapterInitSetNetRequestAttributes)(
+    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _Inout_ PNETADAPTER_INIT AdapterInit,
+    _In_ PWDF_OBJECT_ATTRIBUTES NetRequestAttributes
+    )
+/*++
+Routine Description:
+
+    Sets the attributes of NETREQUEST objects created by NetAdapterCx.
+
+Arguments:
+
+    Globals - Client driver's globals
+    AdapterInit - Adapter init object
+    NetRequestAttributes - Initialized WDF object attributes
+
+Return Value:
+
+    None
+
+--*/
+{
+    auto privateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(privateGlobals);
+    Verifier_VerifyIrqlPassive(privateGlobals);
+    Verifier_VerifyNotNull(privateGlobals, AdapterInit);
+    Verifier_VerifyNotNull(privateGlobals, NetRequestAttributes);
+
+    auto adapterInit = GetAdapterInitFromHandle(privateGlobals, AdapterInit);
+
+    Verifier_VerifyAdapterInitNotUsed(privateGlobals, adapterInit);
+
+    RtlCopyMemory(
+        &adapterInit->NetRequestAttributes,
+        NetRequestAttributes,
+        NetRequestAttributes->Size);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+VOID
+NETEXPORT(NetAdapterInitSetNetPowerSettingsAttributes)(
+    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _Inout_ PNETADAPTER_INIT AdapterInit,
+    _In_ PWDF_OBJECT_ATTRIBUTES NetPowerSettingsAttributes
+    )
+/*++
+Routine Description:
+
+    Sets the attributes of the NETPOWERSETTINGS object created by NetAdapterCx
+
+Arguments:
+
+    Globals - Client driver's globals
+    AdapterInit - Adapter init object
+    NetPowerSettingsAttributes - Initialized WDF object attributes
+
+Return Value:
+
+    None
+
+--*/
+{
+    auto privateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(privateGlobals);
+    Verifier_VerifyIrqlPassive(privateGlobals);
+    Verifier_VerifyNotNull(privateGlobals, AdapterInit);
+    Verifier_VerifyNotNull(privateGlobals, NetPowerSettingsAttributes);
+
+    auto adapterInit = GetAdapterInitFromHandle(privateGlobals, AdapterInit);
+
+    Verifier_VerifyAdapterInitNotUsed(privateGlobals, adapterInit);
+
+    RtlCopyMemory(
+        &adapterInit->NetPowerSettingsAttributes,
+        NetPowerSettingsAttributes,
+        NetPowerSettingsAttributes->Size);
 }
 
 _Must_inspect_result_
@@ -153,21 +407,20 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetAdapterCreate)(
-    _In_     PNET_DRIVER_GLOBALS         Globals,
-    _In_     WDFDEVICE                   Device,
-    _In_opt_ PWDF_OBJECT_ATTRIBUTES      AdapterAttributes,
-    _In_     PNET_ADAPTER_CONFIG         Configuration,
-    _Out_    NETADAPTER*                 Adapter
+    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ PNETADAPTER_INIT AdapterInit,
+    _In_opt_ PWDF_OBJECT_ATTRIBUTES AdapterAttributes,
+    _Out_ NETADAPTER* Adapter
     )
-    /*++
-    Routine Description:
+/*++
+Routine Description:
     The client driver calls this method to create an NETADAPTER
     object
 
     The client driver must call this from its EvtDriverDeviceAdd routine after
     the client has successfully create a WDFDEVICE object.
 
-    Arguments:
+Arguments:
 
     Device : A handle to a WDFDEVICE object that represents the device.
     This Device would be the parent of the new NETADAPTER object
@@ -189,47 +442,38 @@ NETEXPORT(NetAdapterCreate)(
 
     Adapter : ouptut NETADAPTER object
 
-    Return Value:
+Return Value:
 
     STATUS_SUCCESS upon success.
     Returns other NTSTATUS values.
 
-    --*/
+--*/
 {
-    FuncEntry(FLAG_ADAPTER);
-    PNX_PRIVATE_GLOBALS      pNxPrivateGlobals;
     NTSTATUS                 status;
-    PNxAdapter               nxAdapter;
-    PNxDevice                nxDevice;
 
     *Adapter = NULL;
 
-    pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    Verifier_VerifyTypeSize(pNxPrivateGlobals, Configuration);
+    auto adapterInit = GetAdapterInitFromHandle(pNxPrivateGlobals, AdapterInit);
+
+    Verifier_VerifyAdapterInitNotUsed(pNxPrivateGlobals, adapterInit);
+
+    // We don't yet support software network interfaces
+    NT_ASSERT(adapterInit->Device != nullptr);
+
     // Client is not allowed to specify a parent for a NETADAPTER object
     Verifier_VerifyObjectAttributesParentIsNull(pNxPrivateGlobals, AdapterAttributes);
-    Verifier_VerifyNetAdapterConfig(pNxPrivateGlobals, Configuration);
-
-    //
-    // First see if we need to register with NDIS
-    //
-    status = NxDriver::_CreateAndRegisterIfNeeded(WdfDeviceGetDriver(Device),
-        pNxPrivateGlobals);
-    if (!NT_SUCCESS(status)) {
-        goto Exit;
-    }
 
     // Create a NxDevice context only if needed
-    nxDevice = GetNxDeviceFromHandle(Device);
-
+    auto nxDevice = GetNxDeviceFromHandle(adapterInit->Device);
     if (nxDevice == nullptr)
     {
         status = NxDevice::_Create(pNxPrivateGlobals,
-            Device,
+            adapterInit->Device,
             &nxDevice);
 
         if (!NT_SUCCESS(status)) {
@@ -237,10 +481,10 @@ NETEXPORT(NetAdapterCreate)(
         }
     }
 
-    status = NxAdapter::_Create(pNxPrivateGlobals,
-                                Device,
+    NxAdapter * nxAdapter;
+    status = NxAdapter::_Create(*pNxPrivateGlobals,
+                                *adapterInit,
                                 AdapterAttributes,
-                                Configuration,
                                 &nxAdapter);
     if (!NT_SUCCESS(status)) {
         goto Exit;
@@ -253,9 +497,10 @@ NETEXPORT(NetAdapterCreate)(
 
     *Adapter = nxAdapter->GetFxObject();
 
+    adapterInit->CreatedAdapter = *Adapter;
+
 Exit:
 
-    FuncExit(FLAG_ADAPTER);
     return status;
 }
 
@@ -268,17 +513,16 @@ NETEXPORT(NetAdapterStart)(
     _In_ NETADAPTER Adapter
     )
 {
-    FuncEntry(FLAG_ADAPTER);
     NX_PRIVATE_GLOBALS *privateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(privateGlobals);
     Verifier_VerifyIrqlPassive(privateGlobals);
 
     NxAdapter *adapter = GetNxAdapterFromHandle(Adapter);
-    NTSTATUS status = adapter->ApiStart();
 
-    FuncExit(FLAG_ADAPTER);
-    return status;
+    Verifier_VerifyAdapterNotStarted(privateGlobals, adapter);
+
+    return adapter->ClientStart();
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -289,16 +533,13 @@ NETEXPORT(NetAdapterStop)(
     _In_ NETADAPTER Adapter
     )
 {
-    FuncEntry(FLAG_ADAPTER);
     NX_PRIVATE_GLOBALS *privateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(privateGlobals);
     Verifier_VerifyIrqlPassive(privateGlobals);
 
     NxAdapter *adapter = GetNxAdapterFromHandle(Adapter);
-    adapter->Stop();
-
-    FuncExit(FLAG_ADAPTER);
+    adapter->ClientStop();
 }
 
 WDFAPI
@@ -318,23 +559,12 @@ Return Value:
 
 --*/
 {
-    FuncEntry(FLAG_ADAPTER);
-
-    NDIS_HANDLE              ndisAdapterHandle;
-    PNxAdapter               nxAdapter;
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
 
-    nxAdapter = GetNxAdapterFromHandle(Adapter);
-
-    ndisAdapterHandle = nxAdapter->m_NdisAdapterHandle;
-
-    FuncExit(FLAG_ADAPTER);
-
-    return ndisAdapterHandle;
+    return GetNxAdapterFromHandle(Adapter)->m_NdisAdapterHandle;
 }
 
 WDFAPI
@@ -357,21 +587,12 @@ Returns:
 
 --*/
 {
-    FuncEntry(FLAG_ADAPTER);
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    PNxAdapter nxAdapter = GetNxAdapterFromHandle(Adapter);
-    NET_LUID   netLuid;
-
-    netLuid = nxAdapter->GetNetLuid();
-
-    FuncExit(FLAG_ADAPTER);
-
-    return netLuid;
+    return GetNxAdapterFromHandle(Adapter)->GetNetLuid();
 }
 
 WDFAPI
@@ -407,28 +628,21 @@ Returns:
 
 --*/
 {
-    FuncEntry(FLAG_ADAPTER);
+    NTSTATUS status;
 
-    PNxAdapter               nxAdapter;
-    PNxConfiguration         nxConfiguration;
-    NTSTATUS                 status;
-    PNX_PRIVATE_GLOBALS      pNxPrivateGlobals;
-
-    pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
     *Configuration = NULL;
 
-    nxAdapter = GetNxAdapterFromHandle(Adapter);
-
+    NxConfiguration * nxConfiguration;
     status = NxConfiguration::_Create(pNxPrivateGlobals,
-                                      nxAdapter,
+                                      GetNxAdapterFromHandle(Adapter),
                                       NULL,
                                       &nxConfiguration);
     if (!NT_SUCCESS(status)){
-        FuncExit(FLAG_ADAPTER);
         return status;
     }
 
@@ -437,7 +651,7 @@ Returns:
     if (!NT_SUCCESS(status)){
 
         nxConfiguration->DeleteFromFailedOpen();
-        FuncExit(FLAG_ADAPTER);
+
         return status;
     }
 
@@ -450,7 +664,7 @@ Returns:
 
         if (!NT_SUCCESS(status)){
             nxConfiguration->Close();
-            FuncExit(FLAG_ADAPTER);
+
             return status;
         }
     }
@@ -461,7 +675,6 @@ Returns:
     // to be called unless this call succeeds.
     //
     *Configuration = nxConfiguration->GetFxObject();
-    FuncExit(FLAG_ADAPTER);
 
     return status;
 }
@@ -476,9 +689,7 @@ NETEXPORT(NetAdapterSetDataPathCapabilities)(
     _In_ PNET_ADAPTER_RX_CAPABILITIES RxCapabilities
     )
 {
-    FuncEntry(FLAG_ADAPTER);
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
@@ -499,16 +710,13 @@ NETEXPORT(NetAdapterSetDataPathCapabilities)(
         Verifier_VerifyTypeSize(pNxPrivateGlobals, RxCapabilities->DmaCapabilities);
     }
 
-    PNxAdapter nxAdapter;
-    nxAdapter = GetNxAdapterFromHandle(Adapter);
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
 
-    Verifier_VerifyEvtAdapterSetCapabilitiesInProgress(pNxPrivateGlobals, nxAdapter);
+    Verifier_VerifyAdapterNotStarted(pNxPrivateGlobals, nxAdapter);
 
     nxAdapter->SetDatapathCapabilities(
         TxCapabilities,
         RxCapabilities);
-
-    FuncExit(FLAG_ADAPTER);
 }
 
 WDFAPI
@@ -520,8 +728,6 @@ NETEXPORT(NetAdapterSetReceiveScalingCapabilities)(
     _In_ NET_ADAPTER_RECEIVE_SCALING_CAPABILITIES const * Capabilities
     )
 {
-    FuncEntry(FLAG_ADAPTER);
-
     auto const pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
@@ -530,77 +736,9 @@ NETEXPORT(NetAdapterSetReceiveScalingCapabilities)(
     Verifier_VerifyReceiveScalingCapabilities(pNxPrivateGlobals, Capabilities);
 
     auto const nxAdapter = GetNxAdapterFromHandle(Adapter);
-    Verifier_VerifyEvtAdapterSetCapabilitiesInProgress(pNxPrivateGlobals, nxAdapter);
+    Verifier_VerifyAdapterNotStarted(pNxPrivateGlobals, nxAdapter);
 
     nxAdapter->SetReceiveScalingCapabilities(*Capabilities);
-
-    FuncExit(FLAG_ADAPTER);
-}
-
-WDFAPI
-_IRQL_requires_(PASSIVE_LEVEL)
-PNET_ADAPTER_RECEIVE_SCALING_HASH_SECRET_KEY
-NETEXPORT(NetAdapterGetReceiveScalingHashSecretKey)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _In_ NETADAPTER Adapter
-    )
-{
-    UNREFERENCED_PARAMETER(Adapter);
-
-    FuncEntry(FLAG_ADAPTER);
-
-    auto const pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
-
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-
-    FuncExit(FLAG_ADAPTER);
-
-    return nullptr;
-}
-
-WDFAPI
-_IRQL_requires_(PASSIVE_LEVEL)
-NET_ADAPTER_RECEIVE_SCALING_PROTOCOL_TYPE
-NETEXPORT(NetAdapterGetReceiveScalingProtocolTypes)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _In_ NETADAPTER Adapter
-    )
-{
-    UNREFERENCED_PARAMETER(Adapter);
-
-    FuncEntry(FLAG_ADAPTER);
-
-    auto const pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
-
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-
-    FuncExit(FLAG_ADAPTER);
-
-    return GetNxAdapterFromHandle(Adapter)->m_ReceiveScaling.ProtocolType;
-}
-
-WDFAPI
-_IRQL_requires_(PASSIVE_LEVEL)
-NET_ADAPTER_RECEIVE_SCALING_HASH_TYPE
-NETEXPORT(NetAdapterGetReceiveScalingHashType)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _In_ NETADAPTER Adapter
-    )
-{
-    UNREFERENCED_PARAMETER(Adapter);
-
-    FuncEntry(FLAG_ADAPTER);
-
-    auto const pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
-
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-
-    FuncExit(FLAG_ADAPTER);
-
-    return GetNxAdapterFromHandle(Adapter)->m_ReceiveScaling.HashType;
 }
 
 WDFAPI
@@ -635,8 +773,6 @@ Remarks:
 
 --*/
 {
-    FuncEntry(FLAG_ADAPTER);
-
     auto const pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
@@ -646,8 +782,6 @@ Remarks:
     auto const nxAdapter = GetNxAdapterFromHandle(Adapter);
 
     nxAdapter->SetMtuSize(MtuSize);
-
-    FuncExit(FLAG_ADAPTER);
 }
 
 WDFAPI
@@ -689,27 +823,18 @@ Remarks:
 
 --*/
 {
-    FuncEntry(FLAG_ADAPTER);
-
-    PNxAdapter               nxAdapter;
-    PNX_PRIVATE_GLOBALS      pNxPrivateGlobals;
-
-    pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
     Verifier_VerifyTypeSize(pNxPrivateGlobals, LinkLayerCapabilities);
     Verifier_VerifyLinkLayerCapabilities(pNxPrivateGlobals, LinkLayerCapabilities);
 
-    nxAdapter = GetNxAdapterFromHandle(Adapter);
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
 
-    Verifier_VerifyEvtAdapterSetCapabilitiesInProgress(pNxPrivateGlobals, nxAdapter);
+    Verifier_VerifyAdapterNotStarted(pNxPrivateGlobals, nxAdapter);
 
-    RtlCopyMemory(&nxAdapter->m_LinkLayerCapabilities,
-                  LinkLayerCapabilities,
-                  sizeof(NET_ADAPTER_LINK_LAYER_CAPABILITIES));
-
-    FuncExit(FLAG_ADAPTER);
+    nxAdapter->SetLinkLayerCapabilities(*LinkLayerCapabilities);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -752,21 +877,17 @@ Remarks:
 
 --*/
 {
-    FuncEntry(FLAG_ADAPTER);
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    PNxAdapter nxAdapter = GetNxAdapterFromHandle(Adapter);
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
 
-    Verifier_VerifyEvtAdapterSetCapabilitiesInProgress(pNxPrivateGlobals, nxAdapter);
+    Verifier_VerifyAdapterNotStarted(pNxPrivateGlobals, nxAdapter);
     Verifier_VerifyLinkLayerAddress(pNxPrivateGlobals, LinkLayerAddress);
 
     nxAdapter->SetPermanentLinkLayerAddress(LinkLayerAddress);
-
-    FuncExit(FLAG_ADAPTER);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -813,34 +934,15 @@ Remarks:
 
 --*/
 {
-    FuncEntry(FLAG_ADAPTER);
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-
-    PNxAdapter nxAdapter = GetNxAdapterFromHandle(Adapter);
-
     Verifier_VerifyLinkLayerAddress(pNxPrivateGlobals, LinkLayerAddress);
 
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+
     nxAdapter->SetCurrentLinkLayerAddress(LinkLayerAddress);
-
-    if (nxAdapter->m_Flags.SetGeneralAttributesInProgress)
-    {
-        //
-        // SetGeneralAttributes is in progress, nothing additional needs to be
-        // done
-        //
-
-        goto Exit;
-    }
-
-    nxAdapter->IndicateCurrentLinkLayerAddressToNdis();
-
-Exit:
-
-    FuncExit(FLAG_ADAPTER);
 }
 
 WDFAPI
@@ -877,53 +979,18 @@ Remarks:
 
 --*/
 {
-    FuncEntry(FLAG_ADAPTER);
-
-    PNxAdapter               nxAdapter;
-    PNX_PRIVATE_GLOBALS      pNxPrivateGlobals;
-    BOOLEAN setAttributesInProgress;
-
-    pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyTypeSize<NET_ADAPTER_POWER_CAPABILITIES>(pNxPrivateGlobals, PowerCapabilities);
+    Verifier_VerifyTypeSize(pNxPrivateGlobals, PowerCapabilities);
 
-    nxAdapter = GetNxAdapterFromHandle(Adapter);
-    setAttributesInProgress = nxAdapter->m_Flags.SetGeneralAttributesInProgress;
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
     Verifier_VerifyPowerCapabilities(pNxPrivateGlobals,
-                    PowerCapabilities,                 // New capabilities
-                    setAttributesInProgress,
-                    &nxAdapter->m_PowerCapabilities);  // Existing capabilities
+        *nxAdapter,
+        *PowerCapabilities);
 
-    RtlCopyMemory(&nxAdapter->m_PowerCapabilities,
-                  PowerCapabilities,
-                  sizeof(NET_ADAPTER_POWER_CAPABILITIES));
-
-    if (setAttributesInProgress) {
-        nxAdapter->m_NxWake->SetPowerPreviewEvtCallbacks(
-                                PowerCapabilities->EvtAdapterPreviewWakePattern,
-                                PowerCapabilities->EvtAdapterPreviewProtocolOffload);
-
-        //
-        // SetGeneralAttributes is in progress, nothing additional needs to be
-        // done
-        //
-
-        goto Exit;
-
-    }
-
-    //
-    // If driver calls this API outside of EvtAdapterSetCapabilities it must not
-    // change the WoL packet filter callback.
-    //
-
-    nxAdapter->IndicatePowerCapabilitiesToNdis();
-
-Exit:
-
-    FuncExit(FLAG_ADAPTER);
+    nxAdapter->SetPowerCapabilities(*PowerCapabilities);
 }
 
 WDFAPI
@@ -957,48 +1024,16 @@ Remarks:
 
 --*/
 {
-    FuncEntry(FLAG_ADAPTER);
-
-    PNxAdapter               nxAdapter;
-
-    PNX_PRIVATE_GLOBALS      pNxPrivateGlobals;
-
-    pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
     Verifier_VerifyTypeSize<NET_ADAPTER_LINK_STATE>(pNxPrivateGlobals, CurrentLinkState);
     Verifier_VerifyCurrentLinkState(pNxPrivateGlobals, CurrentLinkState);
 
-    nxAdapter = GetNxAdapterFromHandle(Adapter);
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
 
-    auto const linkStateChanged =
-        nxAdapter->m_CurrentLinkState.TxLinkSpeed != CurrentLinkState->TxLinkSpeed ||
-        nxAdapter->m_CurrentLinkState.RxLinkSpeed != CurrentLinkState->RxLinkSpeed ||
-        nxAdapter->m_CurrentLinkState.MediaConnectState != CurrentLinkState->MediaConnectState ||
-        nxAdapter->m_CurrentLinkState.MediaDuplexState != CurrentLinkState->MediaDuplexState ||
-        nxAdapter->m_CurrentLinkState.SupportedPauseFunctions != CurrentLinkState->SupportedPauseFunctions ||
-        nxAdapter->m_CurrentLinkState.AutoNegotiationFlags != CurrentLinkState->AutoNegotiationFlags;
-
-    if (linkStateChanged) {
-        nxAdapter->m_CurrentLinkState = *CurrentLinkState;
-
-        if (nxAdapter->m_Flags.SetGeneralAttributesInProgress) {
-
-            //
-            // SetGeneralAttributes is in progress, nothing additional needs to be
-            // done
-            //
-
-            goto Exit;
-
-        }
-
-        nxAdapter->IndicateCurrentLinkStateToNdis();
-    }
-Exit:
-
-    FuncExit(FLAG_ADAPTER);
+    nxAdapter->SetCurrentLinkState(*CurrentLinkState);
 }
 
 NDIS_STRING ndisFdoDeviceStr = NDIS_STRING_CONST("\\Device\\NDMP");
@@ -1018,8 +1053,6 @@ Routine Description:
 
 --*/
 {
-    FuncEntry(FLAG_ADAPTER);
-
     ULONG          uFdoIndex;
     UNICODE_STRING fdoIndex;
     WCHAR          fdoIndexBuffer[20] = { 0 };
@@ -1077,160 +1110,7 @@ Routine Description:
 
 Exit:
 
-    FuncExit(FLAG_ADAPTER);
     return status;
-}
-
-NTSTATUS
-SetPreprocessorRoutines(
-    _Inout_ PWDFCXDEVICE_INIT CxDeviceInit
-    )
-/*++
-Routine Description:
-
-    This routine sets the preprocessor routine for the IRPs that NetAdapterCx
-    needs to directly forward to NDIS.
-
---*/
-{
-    FuncEntry(FLAG_ADAPTER);
-    NTSTATUS       status;
-    ULONG          i;
-
-    // IRP_MJ codes for which we're going to register EvtWdmIrpPreprocessRoutine
-    // as a preprocessor routine
-    UCHAR irpCodes[] =
-    {
-        IRP_MJ_CREATE,
-        IRP_MJ_CLOSE,
-        IRP_MJ_DEVICE_CONTROL,
-        IRP_MJ_INTERNAL_DEVICE_CONTROL,
-        IRP_MJ_WRITE,
-        IRP_MJ_READ,
-        IRP_MJ_CLEANUP,
-        IRP_MJ_SYSTEM_CONTROL
-    };
-
-    //
-    // Set WDM irp preprocess callbacks
-    //
-
-    for (i = 0;i < ARRAYSIZE(irpCodes);i++)
-    {
-        status = WdfCxDeviceInitAssignWdmIrpPreprocessCallback(
-                                                    CxDeviceInit,
-                                                    EvtWdmIrpPreprocessRoutine,
-                                                    irpCodes[i],
-                                                    NULL, // Pointer to the minor function table
-                                                    0 // Number of entries in the table
-                                                    );
-
-        if (!NT_SUCCESS(status))
-        {
-            LogError(NULL, FLAG_ADAPTER,
-                "WdfDeviceInitAssignWdmIrpPreprocessCallback failed for 0x%x, %!STATUS!", irpCodes[i], status);
-
-            goto Exit;
-        }
-    }
-
-    status = WdfCxDeviceInitAssignWdmIrpPreprocessCallback(
-                                                CxDeviceInit,
-                                                EvtWdmPnpPowerIrpPreprocessRoutine,
-                                                IRP_MJ_PNP,
-                                                NULL, // Pointer to the minor function table
-                                                0 // Number of entries in the table
-                                                );
-    if (!NT_SUCCESS(status)) {
-        LogError(NULL, FLAG_ADAPTER,
-            "WdfDeviceInitAssignWdmIrpPreprocessCallback failed for IRP_MJ_PNP %!STATUS!", status);
-
-        goto Exit;
-    }
-
-    status = WdfCxDeviceInitAssignWdmIrpPreprocessCallback(
-                                                CxDeviceInit,
-                                                EvtWdmPnpPowerIrpPreprocessRoutine,
-                                                IRP_MJ_POWER,
-                                                NULL, // Pointer to the minor function table
-                                                0 // Number of entries in the table
-                                                );
-
-    if (!NT_SUCCESS(status)) {
-        LogError(NULL, FLAG_ADAPTER,
-            "WdfDeviceInitAssignWdmIrpPreprocessCallback failed for IRP_MJ_POWER %!STATUS!", status);
-
-        goto Exit;
-    }
-
-Exit:
-
-    FuncExit(FLAG_ADAPTER);
-    return status;
-}
-
-VOID
-SetCxPnpPowerCallbacks(
-    _Inout_ PWDFCXDEVICE_INIT CxDeviceInit
-    )
-/*++
-Routine Description:
-
-    Register pre and post PnP and Power callbacks.
-
---*/
-{
-    FuncEntry(FLAG_ADAPTER);
-
-    WDFCX_PNPPOWER_EVENT_CALLBACKS pnpCallbacks;
-    WDFCX_PNPPOWER_EVENT_CALLBACKS_INIT(&pnpCallbacks);
-
-    //
-    // EvtDevicePrepareHardware:
-    //
-    pnpCallbacks.EvtCxDevicePrePrepareHardware = NxDevice::_EvtCxDevicePrePrepareHardware;
-    pnpCallbacks.EvtCxDevicePostPrepareHardware = NxDevice::_EvtCxDevicePostPrepareHardware;
-    pnpCallbacks.EvtCxDevicePrePrepareHardwareFailedCleanup = NxDevice::_EvtCxDevicePrePrepareHardwareFailedCleanup;
-
-    //
-    // EvtDeviceD0Entry:
-    //
-    pnpCallbacks.EvtCxDevicePostD0Entry = NxDevice::_EvtCxDevicePostD0Entry;
-
-    //
-    // EvtDeviceD0Exit:
-    //
-    pnpCallbacks.EvtCxDevicePreD0Exit = NxDevice::_EvtCxDevicePreD0Exit;
-
-    //
-    // EvtDeviceReleaseHardware:
-    //
-    pnpCallbacks.EvtCxDevicePreReleaseHardware = NxDevice::_EvtCxDevicePreReleaseHardware;
-    pnpCallbacks.EvtCxDevicePostReleaseHardware = NxDevice::_EvtCxDevicePostReleaseHardware;
-
-    //
-    // EvtDeviceSurpriseRemoval:
-    //
-    pnpCallbacks.EvtCxDevicePreSurpriseRemoval = NxDevice::_EvtCxDevicePreSurpriseRemoval;
-
-    //
-    // EvtDeviceSelfManagedIoInit:
-    //
-    pnpCallbacks.EvtCxDevicePostSelfManagedIoInit = NxDevice::_EvtCxDevicePostSelfManagedIoInit;
-
-    //
-    // EvtDeviceSelfManagedIoRestart:
-    //
-    pnpCallbacks.EvtCxDevicePostSelfManagedIoRestart = NxDevice::_EvtCxDevicePostSelfManagedIoRestart;
-
-    //
-    // EvtDeviceSelfManagedIoSuspend:
-    //
-    pnpCallbacks.EvtCxDevicePreSelfManagedIoSuspend = NxDevice::_EvtCxDevicePreSelfManagedIoSuspend;
-
-    WdfCxDeviceInitSetPnpPowerEventCallbacks(CxDeviceInit, &pnpCallbacks);
-
-    FuncExit(FLAG_ADAPTER);
 }
 
 WDFAPI
@@ -1254,18 +1134,10 @@ Return Value:
     NETPOWERSETTINGS
 --*/
 {
-    FuncEntry(FLAG_ADAPTER);
-
-    PNxAdapter               nxAdapter;
-    PNX_PRIVATE_GLOBALS      pNxPrivateGlobals;
-
-    pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
 
-    nxAdapter = GetNxAdapterFromHandle(Adapter);
-
-    FuncExit(FLAG_ADAPTER);
-    return nxAdapter->m_NxWake->GetFxObject();
+    return GetNxAdapterFromHandle(Adapter)->m_NxWake->GetFxObject();
 }
 
 _Must_inspect_result_
@@ -1278,19 +1150,14 @@ NETEXPORT(NetAdapterRegisterPacketExtension)(
     _In_ const PNET_PACKET_EXTENSION ExtensionToRegister
     )
 {
-    FuncEntry(FLAG_ADAPTER);
-
-    PNxAdapter               nxAdapter;
-    PNX_PRIVATE_GLOBALS      pNxPrivateGlobals;
-
-    pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
     Verifier_VerifyTypeSize(pNxPrivateGlobals, ExtensionToRegister);
     Verifier_VerifyNetPacketExtension(pNxPrivateGlobals, ExtensionToRegister);
 
-    nxAdapter = GetNxAdapterFromHandle(Adapter);
-    Verifier_VerifyEvtAdapterSetCapabilitiesInProgress(pNxPrivateGlobals, nxAdapter);
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+    Verifier_VerifyAdapterNotStarted(pNxPrivateGlobals, nxAdapter);
 
     NET_PACKET_EXTENSION_PRIVATE extensionPrivate = {};
     extensionPrivate.Name = ExtensionToRegister->Name;
@@ -1307,7 +1174,6 @@ NETEXPORT(NetAdapterRegisterPacketExtension)(
     // and as for now, free them during adapter halting. Caller
     // can free/repurpose the memory used for NET_PACKET_EXTENSION
     //
-    FuncExit(FLAG_ADAPTER);
 
     return nxAdapter->RegisterPacketExtension(&extensionPrivate);
 }
@@ -1322,26 +1188,123 @@ NETEXPORT(NetAdapterQueryRegisteredPacketExtension)(
     _In_ const PNET_PACKET_EXTENSION_QUERY ExtensionToQuery
     )
 {
-    FuncEntry(FLAG_ADAPTER);
-
-    PNxAdapter               nxAdapter;
-    PNX_PRIVATE_GLOBALS      pNxPrivateGlobals;
-
-    pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
     Verifier_VerifyTypeSize(pNxPrivateGlobals, ExtensionToQuery);
     Verifier_VerifyNetPacketExtensionQuery(pNxPrivateGlobals, ExtensionToQuery);
 
-    nxAdapter = GetNxAdapterFromHandle(Adapter);
-
     NET_PACKET_EXTENSION_PRIVATE extensionPrivate = {};
     extensionPrivate.Name = ExtensionToQuery->Name;
     extensionPrivate.Version = ExtensionToQuery->Version;
 
-    FuncExit(FLAG_ADAPTER);
-
-    return nxAdapter->QueryRegisteredPacketExtension(&extensionPrivate);
+    return GetNxAdapterFromHandle(Adapter)->QueryRegisteredPacketExtension(&extensionPrivate);
 }
 
-} // extern "C"
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+VOID
+NETEXPORT(NetDeviceSetResetCallback)(
+    _In_
+    PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_
+    WDFDEVICE WdfDevice,
+    _In_
+    PFN_NET_DEVICE_RESET NetDeviceReset
+    )
+{
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+
+    auto nxDevice = GetNxDeviceFromHandle(WdfDevice);
+    nxDevice->SetEvtDeviceResetCallback(NetDeviceReset);
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+VOID
+NETEXPORT(NetAdapterOffloadSetChecksumCapabilities)(
+    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ NETADAPTER Adapter,
+    _In_ PNET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES HardwareCapabilities,
+    _In_ PFN_NET_ADAPTER_OFFLOAD_SET_CHECKSUM EvtAdapterOffloadSetChecksum
+    )
+/*++
+Routine Description:
+
+    This routine sets the Checksum hardware capabilities of the Network Adapter and provides 
+    a callback to notify active checksum capabilities to the client driver.
+
+    The client driver must call this method before calling NetAdapterStart
+
+Arguments:
+
+    Adapter - Pointer to the Adapter created in a prior call to NetAdapterCreate
+
+    HardwareCapabilities - Pointer to a initialized NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES
+    structure representing the hardware capabilities of network adapter
+
+    EvtAdapterOffloadSetChecksum - A pointer to a client driver's implementation of 
+    EVT_NET_ADAPTER_OFFLOAD_SET_CHECKSUM callback to notify active capabilities
+
+Returns:
+    VOID
+--*/
+{
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyTypeSize(pNxPrivateGlobals, HardwareCapabilities);
+
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+    Verifier_VerifyAdapterNotStarted(pNxPrivateGlobals, nxAdapter);
+
+    nxAdapter->m_NxOffloadManager->SetChecksumHardwareCapabilities(HardwareCapabilities, EvtAdapterOffloadSetChecksum);
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+VOID
+NETEXPORT(NetAdapterOffloadSetLsoCapabilities)(
+    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ NETADAPTER Adapter,
+    _In_ PNET_ADAPTER_OFFLOAD_LSO_CAPABILITIES HardwareCapabilities,
+    _In_ PFN_NET_ADAPTER_OFFLOAD_SET_LSO EvtAdapterOffloadSetLso
+    )
+/*++
+Routine Description:
+
+    This routine sets the LSO hardware capabilities of the Network Adapter and provides 
+    a callback to notify active LSO capabilities to the client driver.
+
+    The client driver must call this method before calling NetAdapterStart
+
+Arguments:
+
+    Adapter - Pointer to the Adapter created in a prior call to NetAdapterCreate
+
+    HardwareCapabilities - Pointer to a initialized NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES
+    structure representing the hardware capabilities of network adapter
+
+    EvtAdapterOffloadSetLso - A pointer to a client driver's implementation of 
+    EVT_NET_ADAPTER_OFFLOAD_SET_LSO callback to notify active capabilities
+
+Returns:
+    VOID
+--*/
+{
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyTypeSize(pNxPrivateGlobals, HardwareCapabilities);
+    Verifier_VerifyLsoCapabilities(pNxPrivateGlobals, HardwareCapabilities);
+
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+    Verifier_VerifyAdapterNotStarted(pNxPrivateGlobals, nxAdapter);
+
+    nxAdapter->m_NxOffloadManager->SetLsoHardwareCapabilities(HardwareCapabilities, EvtAdapterOffloadSetLso);
+}

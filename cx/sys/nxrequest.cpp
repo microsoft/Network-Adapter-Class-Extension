@@ -11,18 +11,23 @@ Abstract:
 #include "Nx.hpp"
 
 #include "NxRequest.tmh"
+#include "NxRequest.hpp"
+
+#include "NxAdapter.hpp"
+#include "NxMacros.hpp"
+#include "NxRequestQueue.hpp"
 
 NxRequest::NxRequest(
-    _In_ PNX_PRIVATE_GLOBALS      NxPrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS *     NxPrivateGlobals,
     _In_ NETREQUEST               NetRequest,
-    _In_ PNxAdapter               NxAdapter,
+    _In_ NxAdapter *              NxAdapter,
     _In_ PNDIS_OID_REQUEST        NdisOidRequest,
     _In_ NDIS_OID                 Oid,
     _In_ UINT                     InputBufferLength,
     _In_ UINT                     OutputBufferLength,
     _In_ PVOID                    InputOutputBuffer
     ) :
-    CFxCancelableObject(NetRequest),
+    CFxObject(NetRequest),
     m_NdisOidRequest(NdisOidRequest),
     m_NxAdapter(NxAdapter),
     m_Oid(Oid),
@@ -36,14 +41,10 @@ Routine Description:
     thus it derives from the CFxCancelableObject class.
 --*/
 {
-    FuncEntry(FLAG_REQUEST);
-
     UNREFERENCED_PARAMETER(NxPrivateGlobals);
 
     InitializeListEntry(&m_CancelTempListEntry);
     InitializeListEntry(&m_QueueListEntry);
-
-    FuncExit(FLAG_REQUEST);
 }
 
 NxRequest::~NxRequest(
@@ -54,22 +55,18 @@ Routine Description:
     D'tor for the NxRequest object.
 --*/
 {
-    FuncEntry(FLAG_REQUEST);
 
 
 
 
-
-
-    FuncExit(FLAG_REQUEST);
 }
 
 NTSTATUS
 NxRequest::_Create(
-    _In_     PNX_PRIVATE_GLOBALS      PrivateGlobals,
-    _In_     PNxAdapter               NxAdapter,
-    _In_     PNDIS_OID_REQUEST        NdisOidRequest,
-    _Out_    PNxRequest*              Request
+    _In_     NX_PRIVATE_GLOBALS *     PrivateGlobals,
+    _In_     NxAdapter *              NxAdapter,
+    _In_     NDIS_OID_REQUEST *       NdisOidRequest,
+    _Out_    NxRequest **             Request
 )
 /*++
 Routine Description:
@@ -95,13 +92,9 @@ Remarks:
     Other types are not supported.
 --*/
 {
-    FuncEntry(FLAG_REQUEST);
-
     NTSTATUS              status;
     WDF_OBJECT_ATTRIBUTES attributes;
     NETREQUEST            netRequest;
-    PNxRequest            nxRequest;
-    PVOID                 nxRequestMemory;
     NDIS_OID              oid;
     UINT                  inputBufferLength;
     UINT                  outputBufferLength;
@@ -151,7 +144,6 @@ Remarks:
         LogError(NxAdapter->GetRecorderLog(), FLAG_REQUEST_QUEUE,
                  "Type %!NDIS_REQUEST_TYPE!, STATUS_NOT_SUPPORTED",
                  NdisOidRequest->RequestType);
-        FuncExit(FLAG_REQUEST);
         return STATUS_NOT_SUPPORTED;
     }
 
@@ -171,7 +163,6 @@ Remarks:
     if (!NT_SUCCESS(status)) {
         LogError(NxAdapter->GetRecorderLog(), FLAG_REQUEST,
                  "WdfObjectCreate for NetRequest failed %!STATUS!", status);
-        FuncExit(FLAG_REQUEST);
         return status;
     }
 
@@ -179,13 +170,13 @@ Remarks:
     // Since we just created the netRequest, the NxRequest object has
     // yet not been constructed. Get the NxRequest's memory.
     //
-    nxRequestMemory = (PVOID) GetNxRequestFromHandle(netRequest);
+    void * nxRequestMemory = GetNxRequestFromHandle(netRequest);
 
     //
     // Use the inplacement new and invoke the constructor on the
     // NxRequest's memory
     //
-    nxRequest = new (nxRequestMemory) NxRequest(PrivateGlobals,
+    auto nxRequest = new (nxRequestMemory) NxRequest(PrivateGlobals,
                                                 netRequest,
                                                 NxAdapter,
                                                 NdisOidRequest,
@@ -204,7 +195,6 @@ Remarks:
             LogError(nxRequest->GetRecorderLog(), FLAG_REQUEST,
                      "WdfObjectAllocateContext for client's NetRequest attributes failed %!STATUS!", status);
             WdfObjectDelete(netRequest);
-            FuncExit(FLAG_REQUEST);
             return status;
         }
     }
@@ -215,8 +205,23 @@ Remarks:
     //
     *Request = nxRequest;
 
-    FuncExit(FLAG_REQUEST);
     return status;
+}
+
+DispatchContext *
+NxRequest::GetDispatchContext(
+    void
+    )
+{
+    return &m_dispatchContext;
+}
+
+RECORDER_LOG
+NxRequest::GetRecorderLog(
+    void
+    )
+{
+    return m_NxAdapter->GetRecorderLog();
 }
 
 VOID
@@ -231,8 +236,6 @@ Arguments:
     CompletionStatus - The status that to be used to complete the OID request.
 --*/
 {
-    FuncEntry(FLAG_REQUEST);
-
     NDIS_STATUS oidCompletionStatus;
 
     if (CompletionStatus == STATUS_CANCELLED)
@@ -244,19 +247,23 @@ Arguments:
         oidCompletionStatus = NdisConvertNtStatusToNdisStatus(CompletionStatus);
     }
 
-    m_NxQueue->DisconnectRequest(this);
+    // If this request is being completed from a NetAdapter
+    // extension it is not attached to a request queue
+    if (m_NxQueue != nullptr)
+    {
+        m_NxQueue->DisconnectRequest(this);
+    }
 
     NdisMOidRequestComplete(m_NxAdapter->m_NdisAdapterHandle,
                             m_NdisOidRequest,
                             oidCompletionStatus);
 
     WdfObjectDelete(GetFxObject());
-
-    FuncExit(FLAG_REQUEST);
 }
 
-PNxAdapter
+NxAdapter *
 NxRequest::GetNxAdapter() const
 {
     return m_NxAdapter;
 }
+

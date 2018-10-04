@@ -10,12 +10,14 @@ Abstract:
 
 #include "Nx.hpp"
 
+#include <NxApi.hpp>
+
 #include "NxRequestApi.tmh"
 
-//
-// extern the whole file
-//
-extern "C" {
+#include "NxAdapter.hpp"
+#include "NxRequest.hpp"
+#include "verifier.hpp"
+#include "version.hpp"
 
 
 
@@ -51,19 +53,14 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_REQUEST);
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
     Verifier_VerifyNetRequestCompletionStatusNotPending(pNxPrivateGlobals, Request, CompletionStatus);
 
-    PNxRequest nxRequest = GetNxRequestFromHandle(Request);
+    GetNxRequestFromHandle(Request)->Complete(CompletionStatus);
 
-    nxRequest->Complete(CompletionStatus);
-
-    FuncExit(FLAG_REQUEST);
     return;
 }
 
@@ -92,22 +89,19 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_REQUEST);
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
     Verifier_VerifyNetRequestCompletionStatusNotPending(pNxPrivateGlobals, Request, CompletionStatus);
 
-    PNxRequest nxRequest = GetNxRequestFromHandle(Request);
+    auto nxRequest = GetNxRequestFromHandle(Request);
 
     Verifier_VerifyNetRequestType(pNxPrivateGlobals, nxRequest, NdisRequestSetInformation);
 
     nxRequest->m_NdisOidRequest->DATA.SET_INFORMATION.BytesRead = BytesRead;
     nxRequest->Complete(CompletionStatus);
 
-    FuncExit(FLAG_REQUEST);
     return;
 }
 
@@ -136,22 +130,19 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_REQUEST);
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
     Verifier_VerifyNetRequestCompletionStatusNotPending(pNxPrivateGlobals, Request, CompletionStatus);
 
-    PNxRequest nxRequest = GetNxRequestFromHandle(Request);
+    auto nxRequest = GetNxRequestFromHandle(Request);
 
     Verifier_VerifyNetRequestIsQuery(pNxPrivateGlobals, nxRequest);
 
     nxRequest->m_NdisOidRequest->DATA.QUERY_INFORMATION.BytesWritten = BytesWritten;
     nxRequest->Complete(CompletionStatus);
 
-    FuncExit(FLAG_REQUEST);
     return;
 }
 
@@ -183,15 +174,13 @@ Arguments:
         InputOutputBuffer
 --*/
 {
-    FuncEntry(FLAG_REQUEST);
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
     Verifier_VerifyNetRequestCompletionStatusNotPending(pNxPrivateGlobals, Request, CompletionStatus);
 
-    PNxRequest nxRequest = GetNxRequestFromHandle(Request);
+    auto nxRequest = GetNxRequestFromHandle(Request);
 
     Verifier_VerifyNetRequestType(pNxPrivateGlobals, nxRequest, NdisRequestMethod);
 
@@ -200,7 +189,6 @@ Arguments:
 
     nxRequest->Complete(CompletionStatus);
 
-    FuncExit(FLAG_REQUEST);
     return;
 }
 
@@ -232,14 +220,12 @@ Arguments:
 
 --*/
 {
-    FuncEntry(FLAG_REQUEST);
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
 
-    PNxRequest nxRequest = GetNxRequestFromHandle(Request);
+    auto nxRequest = GetNxRequestFromHandle(Request);
 
     Verifier_VerifyNetRequest(pNxPrivateGlobals, nxRequest);
 
@@ -258,7 +244,6 @@ Arguments:
         break;
     }
 
-    FuncExit(FLAG_REQUEST);
     return;
 }
 
@@ -284,18 +269,12 @@ Returns:
     The NDIS_OID Id of the NETREQUEST.
 --*/
 {
-    FuncEntry(FLAG_REQUEST);
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
 
-    PNxRequest nxRequest = GetNxRequestFromHandle(Request);
-
-    FuncExit(FLAG_REQUEST);
-
-    return nxRequest->m_Oid;
+    return GetNxRequestFromHandle(Request)->m_Oid;
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -341,29 +320,33 @@ Arguments:
         length of the InputOutputBuffer
 --*/
 {
-    FuncEntry(FLAG_REQUEST);
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
 
-    PNxRequest nxRequest = GetNxRequestFromHandle(Request);
+    auto nxRequest = GetNxRequestFromHandle(Request);
 
-	if (InputBufferLength  != NULL) { *InputBufferLength  = 0; }
-	if (OutputBufferLength != NULL) { *OutputBufferLength = 0; }
+    if (InputBufferLength  != NULL)
+    {
+        *InputBufferLength  = 0;
+    }
+
+    if (OutputBufferLength != NULL)
+    {
+        *OutputBufferLength = 0;
+    }
 
     *InputOutputBuffer = NULL;
 
     if (nxRequest->m_NdisOidRequest == NULL) {
 
-        // The request may have already been comleted.
+
 
 
 
         LogError(nxRequest->GetRecorderLog(), FLAG_REQUEST,
                  "The Request probably has already been completed / deferred completed, STATUS_INVALID_DEVICE_STATE");
-        FuncExit(FLAG_REQUEST);
         return STATUS_INVALID_DEVICE_STATE;
     }
 
@@ -371,7 +354,6 @@ Arguments:
         LogError(nxRequest->GetRecorderLog(), FLAG_REQUEST,
                  "Required Input Length %d, Actual %d, STATUS_BUFFER_TOO_SMALL",
                  MininumInputLengthRequired, nxRequest->m_InputBufferLength);
-        FuncExit(FLAG_REQUEST);
         return STATUS_BUFFER_TOO_SMALL;
     }
 
@@ -379,7 +361,6 @@ Arguments:
         LogError(nxRequest->GetRecorderLog(), FLAG_REQUEST,
                  "Required Output Length %d, Actual %d, STATUS_BUFFER_TOO_SMALL",
                  MininumOutputLengthRequired, nxRequest->m_OutputBufferLength);
-        FuncExit(FLAG_REQUEST);
         return STATUS_BUFFER_TOO_SMALL;
     }
 
@@ -393,7 +374,6 @@ Arguments:
 
     *InputOutputBuffer = nxRequest->m_InputOutputBuffer;
 
-    FuncExit(FLAG_REQUEST);
     return STATUS_SUCCESS;
 }
 
@@ -419,21 +399,12 @@ Returns:
 
 --*/
 {
-    FuncEntry(FLAG_REQUEST);
-    PNDIS_OID_REQUEST ndisOidRequest;
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
 
-    PNxRequest nxRequest = GetNxRequestFromHandle(Request);
-
-    ndisOidRequest = nxRequest->m_NdisOidRequest;
-
-    FuncExit(FLAG_REQUEST);
-
-    return ndisOidRequest;
+    return GetNxRequestFromHandle(Request)->m_NdisOidRequest;
 }
 
 
@@ -458,21 +429,12 @@ Returns:
 
 --*/
 {
-    FuncEntry(FLAG_REQUEST);
-    NDIS_PORT_NUMBER portNumber;
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
 
-    PNxRequest nxRequest = GetNxRequestFromHandle(Request);
-
-    portNumber = nxRequest->m_NdisOidRequest->PortNumber;
-
-    FuncExit(FLAG_REQUEST);
-
-    return portNumber;
+    return GetNxRequestFromHandle(Request)->m_NdisOidRequest->PortNumber;
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -496,21 +458,12 @@ Returns:
 
 --*/
 {
-    FuncEntry(FLAG_REQUEST);
-    NDIS_NIC_SWITCH_ID switchId;
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
 
-    PNxRequest nxRequest = GetNxRequestFromHandle(Request);
-
-    switchId = nxRequest->m_NdisOidRequest->SwitchId;
-
-    FuncExit(FLAG_REQUEST);
-
-    return switchId;
+    return GetNxRequestFromHandle(Request)->m_NdisOidRequest->SwitchId;
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -534,21 +487,12 @@ Returns:
 
 --*/
 {
-    FuncEntry(FLAG_REQUEST);
-    NDIS_NIC_SWITCH_VPORT_ID vPortId;
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
 
-    PNxRequest nxRequest = GetNxRequestFromHandle(Request);
-
-    vPortId = nxRequest->m_NdisOidRequest->VPortId;
-
-    FuncExit(FLAG_REQUEST);
-
-    return vPortId;
+    return GetNxRequestFromHandle(Request)->m_NdisOidRequest->VPortId;
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -572,21 +516,12 @@ Returns:
 
 --*/
 {
-    FuncEntry(FLAG_REQUEST);
-    NDIS_REQUEST_TYPE type;
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
 
-    PNxRequest nxRequest = GetNxRequestFromHandle(Request);
-
-    type = nxRequest->m_NdisOidRequest->RequestType;
-
-    FuncExit(FLAG_REQUEST);
-
-    return type;
+    return GetNxRequestFromHandle(Request)->m_NdisOidRequest->RequestType;
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -609,24 +544,11 @@ Returns:
 
 --*/
 {
-    FuncEntry(FLAG_REQUEST);
-
-    NETADAPTER adapter;
-
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
 
-    PNxRequest nxRequest = GetNxRequestFromHandle(Request);
-
-    adapter = nxRequest->GetNxAdapter()->GetFxObject();
-
-    FuncExit(FLAG_REQUEST);
-    return adapter;
+    return GetNxRequestFromHandle(Request)->GetNxAdapter()->GetFxObject();
 }
-
-
-}
-
 

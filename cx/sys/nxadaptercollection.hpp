@@ -2,6 +2,10 @@
 
 #pragma once
 
+#include "netadaptercx_triage.h"
+
+class NxAdapter;
+
 class NxAdapterCollection
 {
 public:
@@ -12,6 +16,11 @@ public:
     Initialize(
         void
         );
+
+    bool
+    Empty(
+        void
+        ) const;
 
     ULONG
     Count(
@@ -39,7 +48,7 @@ public:
         );
 
     template <typename lambda>
-    NTSTATUS
+    void
     ForEachAdapterUnlocked(
         _In_ lambda f
         )
@@ -50,25 +59,26 @@ public:
             link = link->Flink
             )
         {
-            NxAdapter *adapter = CONTAINING_RECORD(link, NxAdapter, m_Linkage);
-
-            NTSTATUS ntStatus = f(*adapter);
-            if (!NT_SUCCESS(ntStatus))
-                return ntStatus;
+            auto adapter = CONTAINING_RECORD(link, NxAdapter, m_Linkage);
+            f(*adapter);
         }
-
-        return STATUS_SUCCESS;
     }
 
     template <typename lambda>
-    NTSTATUS
+    void
     ForEachAdapterLocked(
         _In_ lambda f
         )
     {
         auto lock = wil::acquire_wdf_wait_lock(m_ListLock);
-        return ForEachAdapterUnlocked(f);
+        ForEachAdapterUnlocked(f);
     }
+
+    static
+    void
+    GetTriageInfo(
+        void
+        );
 
 private:
 

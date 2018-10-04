@@ -14,7 +14,7 @@ Abstract:
 #include "BufferManager.tmh"
 #include "KRegKey.h"
 
-#define NUM_MEMORY_CHUNK_TEST_REG_PATH L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\NDIS\\Parameters" 
+#define NUM_MEMORY_CHUNK_TEST_REG_PATH L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\NDIS\\Parameters"
 #define NUM_MEMORY_CHUNK_TEST_REG_VALUE L"NumMemoryChunk"
 
 namespace {
@@ -75,8 +75,6 @@ private:
     PVOID   m_VirtualAddress = nullptr;
     size_t  m_Length = 0;
 };
-
-#ifdef _KERNEL_MODE
 
 class PAGED NxCommonBufferMemoryChunk : public INxMemoryChunk
 {
@@ -154,7 +152,7 @@ public:
         }
     }
 
-    INxMemoryChunk* 
+    INxMemoryChunk*
     AllocateMemoryChunk(
         _In_ size_t Size,
         _In_ NODE_REQUIREMENT PreferredNode)
@@ -221,13 +219,11 @@ private:
     NODE_REQUIREMENT    m_PreferredNode;
 };
 
-#endif //_KERNEL_MODE
-
 class PAGED NxNonPagePoolAllocator : public INxMemoryChunkAllocator
 {
 public:
 
-    INxMemoryChunk* 
+    INxMemoryChunk*
     AllocateMemoryChunk(
         _In_ size_t Size,
         _In_ NODE_REQUIREMENT PreferredNode)
@@ -245,6 +241,11 @@ public:
 
         wistd::unique_ptr<NxPoolMemoryChunk> memoryChunk =
             wil::make_unique_nothrow<NxPoolMemoryChunk>();
+
+        if (!memoryChunk)
+        {
+            return nullptr;
+        }
 
         memoryChunk->m_VirtualAddress = ExAllocatePoolWithTag(NonPagedPoolNx, allocateSize, BUFFER_MANAGER_POOL_TAG);
 
@@ -292,14 +293,12 @@ NxBufferManager::InitializeMemoryChunkAllocator()
     {
         case NET_CLIENT_MEMORY_MAPPING_REQUIREMENT_DMA_MAPPED:
         {
-#ifdef _KERNEL_MODE
-            m_MemoryChunkAllocator.reset(new (std::nothrow) NxDmaAllocator(m_MemoryConstraints[0].Dma));
-#endif //_KERNEL_MODE
+            m_MemoryChunkAllocator = wil::make_unique_nothrow<NxDmaAllocator>(m_MemoryConstraints[0].Dma);
             break;
         }
         case NET_CLIENT_MEMORY_MAPPING_REQUIREMENT_NONE:
         {
-            m_MemoryChunkAllocator.reset(new (std::nothrow) NxNonPagePoolAllocator());
+            m_MemoryChunkAllocator = wil::make_unique_nothrow<NxNonPagePoolAllocator>();
             break;
         }
         default:

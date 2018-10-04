@@ -55,8 +55,8 @@ private:
     RtlMdl() {}
 
     NTSTATUS
-    Allocate(_In_ PVOID VirtualAddress, 
-             _In_ size_t Length, 
+    Allocate(_In_ PVOID VirtualAddress,
+             _In_ size_t Length,
              _In_ bool toBuildMdl)
     {
         ULONG ulength;
@@ -163,7 +163,7 @@ NxBufferPool::StitchMemoryChunks()
         STATUS_INSUFFICIENT_RESOURCES,
         !m_MemoryChunkBaseAddresses.reserve(m_NumMemoryChunks));
 
-    CX_RETURN_IF_NOT_NT_SUCCESS(RtlSizeTMult(m_MemoryChunkSize, 
+    CX_RETURN_IF_NOT_NT_SUCCESS(RtlSizeTMult(m_MemoryChunkSize,
                                              m_NumMemoryChunks,
                                              &m_ContiguousVirtualLength));
 
@@ -237,7 +237,7 @@ NxBufferPool::AddMemoryChunks(
     _Inout_ Rtl::KArray<wistd::unique_ptr<INxMemoryChunk>>& MemoryChunks)
 {
     //
-    // buffer manager guaruntees all memory chunks it allocated meets 
+    // buffer manager guaruntees all memory chunks it allocated meets
     // the requirements, here to assert these conditions
     //
     NT_FRE_ASSERT(m_MemoryChunks.count() == 0);
@@ -280,7 +280,7 @@ NxBufferPool::AddMemoryChunks(
     m_MemoryChunks = wistd::move(MemoryChunks);
 
     CX_RETURN_IF_NOT_NT_SUCCESS(StitchMemoryChunks());
-    
+
     FillBufferPool();
 
     NT_FRE_ASSERT(m_PopulatedPoolSize == newPoolSize);
@@ -297,7 +297,7 @@ NxBufferPool::FillBufferPool()
         {
             const size_t bufferOffset = m_ChunkOffset + bufferIndex * m_StrideSize;
 
-            NxBufferDescriptor buffer = 
+            NxBufferDescriptor buffer =
             {
                 (PVOID) (((ULONG_PTR) m_MemoryChunkBaseAddresses[chunkIndex].VirtualAddress) + bufferOffset),
                 { 0, 0 },
@@ -323,7 +323,7 @@ NxBufferPool::Allocate(_Out_ PVOID* VirtualAddress,
                        _Out_ size_t* Offset,
                        _Out_ size_t* AllocatedSize)
 {
-    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, 
+    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES,
                           m_NumBuffersInUse >= m_PopulatedPoolSize);
 
     size_t bufferIndex = m_Buffers[m_NumBuffersInUse].BufferIndex;
@@ -372,7 +372,7 @@ NxBufferPool::Free(_In_ PVOID VirtualAddress)
         buffer.ChunkIndex * m_NumBuffersPerChunk +
         (offsetFromChunk - m_ChunkOffset) / m_StrideSize;
 
-    
+
     NT_FRE_ASSERT(m_BuffersInUseFlag.TestBit(buffer.BufferIndex));
     m_BuffersInUseFlag.ClearBit(buffer.BufferIndex);
 }

@@ -10,18 +10,29 @@ Abstract:
 
 #pragma once
 
+#include <FxObjectBase.hpp>
+
+struct DispatchContext
+{
+    size_t CurrentExtensionIndex = 0;
+};
+
 //
 // The NxRequest is an object that represents a Ndis Oid Request
 //
 
-PNxRequest
+struct NX_PRIVATE_GLOBALS;
+
+class NxAdapter;
+class NxRequest;
+
 FORCEINLINE
+NxRequest *
 GetNxRequestFromHandle(
     _In_ NETREQUEST Request
     );
 
-typedef class NxRequest *PNxRequest;
-class NxRequest : public CFxCancelableObject<NETREQUEST,
+class NxRequest : public CFxObject<NETREQUEST,
                                              NxRequest,
                                              GetNxRequestFromHandle,
                                              false>
@@ -32,12 +43,12 @@ private:
     //
     // Pointer to the corresponding NxAdapter object
     //
-    PNxAdapter                   m_NxAdapter;
+    NxAdapter *                  m_NxAdapter;
 
     //
     // Pointer to the Oid Queue that is tracking this Oid
     //
-    PNxRequestQueue              m_NxQueue;
+    NxRequestQueue *             m_NxQueue;
 
     //
     // List Entry for the Queue level list of oids
@@ -48,6 +59,8 @@ private:
     // List Entry for a temporary cancel list
     //
     LIST_ENTRY                   m_CancelTempListEntry;
+
+    DispatchContext              m_dispatchContext;
 
 public:
 
@@ -69,10 +82,10 @@ public:
 
 private:
     NxRequest(
-        _In_ PNX_PRIVATE_GLOBALS      NxPrivateGlobals,
+        _In_ NX_PRIVATE_GLOBALS *     NxPrivateGlobals,
         _In_ NETREQUEST               NetRequest,
-        _In_ PNxAdapter               NxAdapter,
-        _In_ PNDIS_OID_REQUEST        NdisOidRequest,
+        _In_ NxAdapter *              NxAdapter,
+        _In_ NDIS_OID_REQUEST *       NdisOidRequest,
         _In_ NDIS_OID                 OidId,
         _In_ UINT                     InputBufferLength,
         _In_ UINT                     OutputBufferLength,
@@ -86,16 +99,21 @@ public:
     static
     NTSTATUS
     _Create(
-        _In_     PNX_PRIVATE_GLOBALS      PrivateGlobals,
-        _In_     PNxAdapter               NxAdatper,
+        _In_     NX_PRIVATE_GLOBALS *     PrivateGlobals,
+        _In_     NxAdapter *              NxAdatper,
         _In_     PNDIS_OID_REQUEST        NdisOidRequest,
-        _Out_    PNxRequest*              Request
+        _Out_    NxRequest **             Request
+        );
+
+    DispatchContext *
+    GetDispatchContext(
+        void
         );
 
     RECORDER_LOG
-    GetRecorderLog() {
-        return m_NxAdapter->GetRecorderLog();
-    }
+    GetRecorderLog(
+        void
+        );
 
     VOID
     Complete(
@@ -121,14 +139,14 @@ public:
         _In_ ULONG BytesNeeded
         );
 
-    PNxAdapter
+    NxAdapter *
     GetNxAdapter() const;
 };
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxRequest, _GetNxRequestFromHandle);
 
-PNxRequest
 FORCEINLINE
+NxRequest *
 GetNxRequestFromHandle(
     _In_ NETREQUEST     Request
     )
@@ -145,3 +163,4 @@ Routine Description:
 {
     return _GetNxRequestFromHandle(Request);
 }
+

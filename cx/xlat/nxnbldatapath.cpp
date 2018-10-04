@@ -21,7 +21,7 @@ NxNblDatapath::NxNblDatapath()
     m_rxRundown.CloseAndWait();
 }
 
-void 
+void
 NxNblDatapath::SetTxHandler(_In_opt_ INxNblTx *tx)
 {
     if (tx)
@@ -37,7 +37,7 @@ NxNblDatapath::SetTxHandler(_In_opt_ INxNblTx *tx)
     }
 }
 
-void 
+void
 NxNblDatapath::SetRxHandler(_In_opt_ INxNblRx *rx)
 {
     if (rx)
@@ -53,7 +53,7 @@ NxNblDatapath::SetRxHandler(_In_opt_ INxNblRx *rx)
     }
 }
 
-void 
+void
 NxNblDatapath::SendNetBufferLists(
     _In_ NET_BUFFER_LIST *nblChain,
     _In_ ULONG portNumber,
@@ -68,9 +68,9 @@ NxNblDatapath::SendNetBufferLists(
     else
     {
         ndisSetStatusInNblChain(nblChain, NDIS_STATUS_PAUSED);
-        
-        auto sendCompleteFlags = NDIS_TEST_SEND_AT_DISPATCH_LEVEL(sendFlags) 
-            ? NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL 
+
+        auto sendCompleteFlags = NDIS_TEST_SEND_AT_DISPATCH_LEVEL(sendFlags)
+            ? NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL
             : 0;
 
         NdisMSendNetBufferListsComplete(m_ndisHandle, nblChain, sendCompleteFlags);
@@ -125,7 +125,7 @@ NxNblDatapath::ReturnNetBufferLists(
     auto actualNumberOfNbls = ndisNumNblsInNblChain(nblChain);
 #endif
 
-    auto numberOfNbls = 
+    auto numberOfNbls =
         m_rx->ReturnNetBufferLists(nblChain, receiveReturnFlags);
 
     NT_ASSERT(numberOfNbls == actualNumberOfNbls);

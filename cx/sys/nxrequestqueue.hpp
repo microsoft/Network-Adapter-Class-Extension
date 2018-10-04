@@ -10,17 +10,24 @@ Abstract:
 
 #pragma once
 
+#include <FxObjectBase.hpp>
+
 //
 // The NxRequestQueue is an object that represents a Request Queue
 //
 
-PNxRequestQueue
+struct NX_PRIVATE_GLOBALS;
+
+class NxAdapter;
+class NxRequest;
+class NxRequestQueue;
+
 FORCEINLINE
+NxRequestQueue *
 GetNxRequestQueueFromHandle(
     _In_ NETREQUESTQUEUE RequestQueue
     );
 
-typedef class NxRequestQueue *PNxRequestQueue;
 class NxRequestQueue : public CFxObject<NETREQUESTQUEUE,
                                         NxRequestQueue,
                                         GetNxRequestQueueFromHandle,
@@ -31,7 +38,7 @@ private:
     //
     // Client's Private Driver Globals
     //
-    PNX_PRIVATE_GLOBALS          m_NxPrivateGlobals;
+    NX_PRIVATE_GLOBALS *         m_NxPrivateGlobals;
 
     //
     // A copy of the config structure that client passed in
@@ -52,13 +59,13 @@ public:
     //
     // Pointer to the corresponding NxAdapter object
     //
-    PNxAdapter                   m_NxAdapter;
+    NxAdapter *                  m_NxAdapter;
 
 private:
     NxRequestQueue(
-        _In_ PNX_PRIVATE_GLOBALS       NxPrivateGlobals,
+        _In_ NX_PRIVATE_GLOBALS *      NxPrivateGlobals,
         _In_ NETREQUESTQUEUE           RequestQueue,
-        _In_ PNxAdapter                NxAdapter,
+        _In_ NxAdapter *               NxAdapter,
         _In_ PNET_REQUEST_QUEUE_CONFIG Config
         );
 
@@ -69,11 +76,11 @@ public:
     static
     NTSTATUS
     _Create(
-        _In_     PNX_PRIVATE_GLOBALS       PrivateGlobals,
-        _In_     PNxAdapter                NxAdatper,
+        _In_     NX_PRIVATE_GLOBALS *      PrivateGlobals,
+        _In_     NxAdapter *               NxAdatper,
         _In_opt_ PWDF_OBJECT_ATTRIBUTES    ClientAttributes,
         _In_     PNET_REQUEST_QUEUE_CONFIG Config,
-        _Out_    PNxRequestQueue*          Queue
+        _Out_    NxRequestQueue **         Queue
         );
 
     VOID
@@ -88,35 +95,31 @@ public:
         );
 
     RECORDER_LOG
-    GetRecorderLog() {
-        return m_NxAdapter->GetRecorderLog();
-    }
+    GetRecorderLog(
+        void
+        );
 
     VOID
-    QueueNdisOidRequest(
-        _In_ PNDIS_OID_REQUEST NdisOidRequest
+    QueueRequest(
+        _In_ NETREQUEST Request
         );
 
     VOID
     DispatchRequest(
-        _In_ PNxRequest NxRequest
+        _In_ NxRequest * NxRequest
         );
 
     VOID
     DisconnectRequest(
-        _In_ PNxRequest NxRequest
+        _In_ NxRequest * NxRequest
         );
 
-    VOID
-    CancelRequests(
-        _In_ PVOID RequestId
-        );
 };
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxRequestQueue, _GetNxRequestQueueFromHandle);
 
-PNxRequestQueue
 FORCEINLINE
+NxRequestQueue *
 GetNxRequestQueueFromHandle(
     _In_ NETREQUESTQUEUE     RequestQueue
     )

@@ -64,6 +64,14 @@ public:
         _In_ ULONG index,
         _Inout_ KPtr<Rtl::KString> &name);
 
+    PAGED NTSTATUS IsValuePresent(
+        _In_opt_ PCWSTR ValueName,
+        _Out_ bool &IsPresent);
+
+    PAGED NTSTATUS IsValuePresent(
+        _In_ PCUNICODE_STRING ValueName,
+        _Out_ bool &IsPresent);
+
     PAGED NTSTATUS QueryValueBoolean(
         _In_ PCWSTR Name,
         _Out_ BOOLEAN *Value,
@@ -113,24 +121,26 @@ public:
     PAGED NTSTATUS QueryValueGuid(
         _In_ PCUNICODE_STRING Name,
         _Out_ GUID *Value);
-    
-    template <typename Lambda>    
+
+    template <typename Lambda>
     PAGED NTSTATUS QueryValueBlob(
         _In_ PCWSTR Name,
-        _In_ Lambda Callback)
+        _In_ Lambda Callback,
+        _In_ ULONG ExpectedDataType = REG_BINARY)
     {
         UNICODE_STRING temp;
         NTSTATUS ntstatus = RtlUnicodeStringInit(&temp, Name);
         if (!NT_SUCCESS(ntstatus))
             return ntstatus;
 
-        return QueryValueBlob(&temp, Callback);
+        return QueryValueBlob(&temp, Callback, ExpectedDataType);
     }
 
-    template <typename Lambda>    
+    template <typename Lambda>
     PAGED NTSTATUS QueryValueBlob(
         _In_ PCUNICODE_STRING Name,
-        _In_ Lambda Callback)
+        _In_ Lambda Callback,
+        _In_ ULONG ExpectedDataType = REG_BINARY)
     {
         NTSTATUS NtStatus;
 
@@ -143,7 +153,7 @@ public:
         KEY_VALUE_PARTIAL_INFORMATION *Information = &StackInformation;
         wistd::unique_ptr<UCHAR[]> HeapBuffer;
 
-        ULONG BytesNeeded;    
+        ULONG BytesNeeded;
         NtStatus = ZwQueryValueKey(
                 *this,
                 const_cast<PUNICODE_STRING>(Name),
@@ -174,31 +184,33 @@ public:
             return NtStatus;
         }
 
-        if (Information->Type != REG_BINARY)
+        if (Information->Type != ExpectedDataType)
             return STATUS_OBJECT_TYPE_MISMATCH;
 
         return Callback(Information->Data, Information->DataLength);
     }
 
-    template <typename CountLambda, typename PerStringLambda>    
+    template <typename CountLambda, typename PerStringLambda>
     PAGED NTSTATUS QueryValueMultisz(
         _In_ PCWSTR Name,
         _In_ CountLambda CountCallback,
-        _In_ PerStringLambda PerStringCallback)
+        _In_ PerStringLambda PerStringCallback,
+        _In_ ULONG ExpectedDataType = REG_MULTI_SZ)
     {
         UNICODE_STRING temp;
         NTSTATUS ntstatus = RtlUnicodeStringInit(&temp, Name);
         if (!NT_SUCCESS(ntstatus))
             return ntstatus;
 
-        return QueryValueMultisz(&temp, CountCallback, PerStringCallback);
+        return QueryValueMultisz(&temp, CountCallback, PerStringCallback, ExpectedDataType);
     }
 
-    template <typename CountLambda, typename PerStringLambda>    
+    template <typename CountLambda, typename PerStringLambda>
     PAGED NTSTATUS QueryValueMultisz(
         _In_ PCUNICODE_STRING Name,
         _In_ CountLambda CountCallback,
-        _In_ PerStringLambda PerStringCallback)
+        _In_ PerStringLambda PerStringCallback,
+        _In_ ULONG ExpectedDataType = REG_MULTI_SZ)
     {
         NTSTATUS NtStatus;
 
@@ -211,7 +223,7 @@ public:
         KEY_VALUE_PARTIAL_INFORMATION *Information = &StackInformation;
         wistd::unique_ptr<UCHAR[]> HeapBuffer;
 
-        ULONG BytesNeeded;    
+        ULONG BytesNeeded;
         NtStatus = ZwQueryValueKey(
                 *this,
                 const_cast<PUNICODE_STRING>(Name),
@@ -242,7 +254,7 @@ public:
             return NtStatus;
         }
 
-        if (Information->Type != REG_MULTI_SZ)
+        if (Information->Type != ExpectedDataType)
             return STATUS_OBJECT_TYPE_MISMATCH;
 
         if (Information->DataLength % sizeof(WCHAR))
@@ -285,13 +297,13 @@ public:
         {
             if (*CurrentStart == L'\0')
                 return STATUS_SUCCESS;
-        
+
             PCWSTR CurrentEnd = CurrentStart;
             do
             {
                 ++CurrentEnd;
             } while (*CurrentEnd != L'\0');
-        
+
             NtStatus = PerStringCallback(CurrentStart, Index);
             if (!NT_SUCCESS(NtStatus))
                 return NtStatus;

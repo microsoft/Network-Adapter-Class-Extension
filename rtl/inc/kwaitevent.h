@@ -23,9 +23,9 @@ public:
     KWaitEventBase() = default;
 
 #ifdef _KERNEL_MODE
-    ~KWaitEventBase() = default;
+    NONPAGED ~KWaitEventBase() = default;
 #else
-    PAGED ~KWaitEventBase()
+    NONPAGED ~KWaitEventBase()
     {
         WIN_ASSERT(m_event == nullptr);
     }
@@ -93,7 +93,7 @@ protected:
 #endif
     }
 
-    PAGED void CleanupBase()
+    NONPAGED void CleanupBase()
     {
 #ifndef _KERNEL_MODE
         CloseHandle(m_event);
@@ -115,12 +115,12 @@ class KWaitEvent : public KWaitEventBase<manual_reset_event_t>
 {
 public:
 
-    PAGED KWaitEvent() WI_NOEXCEPT
+    PAGED KWaitEvent() noexcept
     {
         InitializeBase();
     }
 
-    PAGED ~KWaitEvent()
+    NONPAGED ~KWaitEvent()
     {
         CleanupBase();
     }
@@ -146,12 +146,12 @@ class KAutoEvent : public KWaitEventBase<auto_reset_event_t>
 {
 public:
 
-    PAGED KAutoEvent() WI_NOEXCEPT
+    PAGED KAutoEvent() noexcept
     {
         InitializeBase();
     }
 
-    PAGED ~KAutoEvent()
+    NONPAGED ~KAutoEvent()
     {
         CleanupBase();
     }

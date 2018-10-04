@@ -11,11 +11,16 @@ Abstract:
 #include "Nx.hpp"
 
 #include "NxRequestQueue.tmh"
+#include "NxRequestQueue.hpp"
+
+#include "NxAdapter.hpp"
+#include "NxMacros.hpp"
+#include "NxRequest.hpp"
 
 NxRequestQueue::NxRequestQueue(
-    _In_ PNX_PRIVATE_GLOBALS       NxPrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS *      NxPrivateGlobals,
     _In_ NETREQUESTQUEUE           NetRequestQueue,
-    _In_ PNxAdapter                NxAdapter,
+    _In_ NxAdapter *               NxAdapter,
     _In_ PNET_REQUEST_QUEUE_CONFIG Config
     ) :
     CFxObject(NetRequestQueue),
@@ -26,8 +31,6 @@ Routine Description:
     Constructor for the NxRequestQueue object.
 --*/
 {
-    FuncEntry(FLAG_REQUEST_QUEUE);
-
     RtlCopyMemory(&m_Config, Config, Config->Size);
 
     //
@@ -46,8 +49,6 @@ Routine Description:
     KeInitializeSpinLock(&m_RequestsListLock);
 
     InitializeListHead(&m_RequestsListHead);
-
-    FuncExit(FLAG_REQUEST_QUEUE);
 }
 
 NxRequestQueue::~NxRequestQueue()
@@ -56,11 +57,7 @@ Routine Description:
     D'tor for the NxRequestQueue object.
 --*/
 {
-    FuncEntry(FLAG_REQUEST_QUEUE);
-
     _FreeHandlers(&m_Config);
-
-    FuncExit(FLAG_REQUEST_QUEUE);
 }
 
 #define HANDLER_REF_TAG ((PVOID)(ULONG_PTR)('rldH'))
@@ -151,13 +148,21 @@ Arguments:
     QueueConfig->MethodHandlers = NULL;
 }
 
+RECORDER_LOG
+NxRequestQueue::GetRecorderLog(
+    void
+    )
+{
+    return m_NxAdapter->GetRecorderLog();
+}
+
 NTSTATUS
 NxRequestQueue::_Create(
-    _In_     PNX_PRIVATE_GLOBALS       PrivateGlobals,
-    _In_     PNxAdapter                NxAdapter,
+    _In_     NX_PRIVATE_GLOBALS *      PrivateGlobals,
+    _In_     NxAdapter *               NxAdapter,
     _In_opt_ PWDF_OBJECT_ATTRIBUTES    ClientAttributes,
     _In_     PNET_REQUEST_QUEUE_CONFIG Config,
-    _Out_    PNxRequestQueue*          Queue
+    _Out_    NxRequestQueue **         Queue
 )
 /*++
 Routine Description:
@@ -187,12 +192,9 @@ Remarks:
 
 --*/
 {
-    FuncEntry(FLAG_REQUEST_QUEUE);
     NTSTATUS              status;
     WDF_OBJECT_ATTRIBUTES attributes;
     NETREQUESTQUEUE       netRequestQueue;
-    PNxRequestQueue       nxRequestQueue;
-    PVOID                 nxRequestQueueMemory;
 
     //
     // Create a WDFOBJECT for the NxRequestQueue
@@ -210,7 +212,6 @@ Remarks:
     if (!NT_SUCCESS(status)) {
         LogError(NxAdapter->GetRecorderLog(), FLAG_REQUEST_QUEUE,
                  "WdfObjectCreate for NetRequestQueue failed %!STATUS!", status);
-        FuncExit(FLAG_REQUEST_QUEUE);
         return status;
     }
 
@@ -218,13 +219,13 @@ Remarks:
     // Since we just created the netRequestQueue, the NxRequestQueue object has
     // yet not been constructed. Get the NxRequestQueue's memory.
     //
-    nxRequestQueueMemory = (PVOID) GetNxRequestQueueFromHandle(netRequestQueue);
+    void * nxRequestQueueMemory = GetNxRequestQueueFromHandle(netRequestQueue);
 
     //
     // Use the inplacement new and invoke the constructor on the
     // NxRequestQueue's memory
     //
-    nxRequestQueue = new (nxRequestQueueMemory) NxRequestQueue(PrivateGlobals,
+    auto nxRequestQueue = new (nxRequestQueueMemory) NxRequestQueue(PrivateGlobals,
                                                                netRequestQueue,
                                                                NxAdapter,
                                                                Config);
@@ -248,7 +249,6 @@ Remarks:
             LogError(nxRequestQueue->GetRecorderLog(), FLAG_REQUEST_QUEUE,
                      "WdfObjectAllocateContext for ClientAttributes failed %!STATUS!", status);
             WdfObjectDelete(netRequestQueue);
-            FuncExit(FLAG_REQUEST_QUEUE);
             return status;
         }
     }
@@ -280,7 +280,6 @@ Remarks:
 
     *Queue = nxRequestQueue;
 
-    FuncExit(FLAG_REQUEST_QUEUE);
     return status;
 }
 
@@ -345,7 +344,7 @@ Arguments:
 
 VOID
 NxRequestQueue::DispatchRequest(
-    _In_ PNxRequest NxRequest
+    _In_ NxRequest * NxRequest
     )
 /*++
 Routine Description:
@@ -372,8 +371,6 @@ Remarks:
     PNET_REQUEST_QUEUE_QUERY_DATA_HANDLER queryDataHandler;
     PNET_REQUEST_QUEUE_METHOD_HANDLER methodHandler;
     NTSTATUS status;
-
-    FuncEntry(FLAG_REQUEST_QUEUE);
 
     switch (NxRequest->m_NdisOidRequest->RequestType) {
     case NdisRequestSetInformation:
@@ -567,58 +564,33 @@ Remarks:
                                NxRequest->m_OutputBufferLength);
 
 Exit:
-    FuncExit(FLAG_REQUEST_QUEUE);
     return;
 }
 
 VOID
-NxRequestQueue::QueueNdisOidRequest(
-    _In_ PNDIS_OID_REQUEST NdisOidRequest
+NxRequestQueue::QueueRequest(
+    _In_ NETREQUEST Request
     )
 /*++
 Routine Description:
-    This routine queues a NIDS_OID_REQUEST recieved from NDIS.sys to the
+    This routine queues a NETREQUEST received from NDIS.sys to the
     queue.
 
 Arguments:
-    NdisOidRequest - Pointer to the traditional NDIS_OID_REQUEST structure.
+    Request - NETREQUEST wrapping a traditional NDIS_OID_REQUEST structure.
 
 Remarks:
-    This routine first creates a NxRequest wrapper object around the the input
-    NDIS_OID_REQUEST and then queues it to the 'this' NxRequestQueue
+    None
 
 --*/
 {
-    NTSTATUS status;
-    PNxRequest nxRequest;
     KIRQL irql;
 
-    FuncEntry(FLAG_REQUEST_QUEUE);
-
-    //
-    // Create the NxRequest object from the tranditional NDIS_OID_REQUEST
-    //
-    status = NxRequest::_Create(m_NxPrivateGlobals,
-                                m_NxAdapter,
-                                NdisOidRequest,
-                                &nxRequest);
-
-    if (!NT_SUCCESS(status)) {
-
-        //
-        // _Create failed, so fail the NDIS request.
-        //
-        NdisMOidRequestComplete(m_NxAdapter->m_NdisAdapterHandle,
-                                NdisOidRequest,
-                                NdisConvertNtStatusToNdisStatus(status));
-        FuncExit(FLAG_REQUEST_QUEUE);
-        return;
-    }
+    auto nxRequest = GetNxRequestFromHandle(Request);
 
     //
     // Add the NxRequest to a Queue level list. This list may be leveraged in
     // the following situations:
-    //  * cancellation
     //  * power transitions
     //
     KeAcquireSpinLock(&m_RequestsListLock, &irql);
@@ -632,13 +604,11 @@ Remarks:
     // request anyway for us.
     //
     DispatchRequest(nxRequest);
-    FuncExit(FLAG_REQUEST_QUEUE);
-
 }
 
 VOID
 NxRequestQueue::DisconnectRequest(
-    _In_ PNxRequest NxRequest
+    _In_ NxRequest * NxRequest
     )
 /*++
 Routine Description:
@@ -652,8 +622,6 @@ Arguments:
 {
     KIRQL irql;
 
-    FuncEntry(FLAG_REQUEST_QUEUE);
-
     KeAcquireSpinLock(&m_RequestsListLock, &irql);
 
     NT_ASSERT(NxRequest->m_QueueListEntry.Flink != NULL);
@@ -666,86 +634,5 @@ Arguments:
     InitializeListEntry(&NxRequest->m_QueueListEntry);
 
     NxRequest->m_NxQueue = NULL;
-
-    FuncExit(FLAG_REQUEST_QUEUE);
 }
 
-#define CANCEL_REQUEST_TAG ((PVOID)(ULONG_PTR)('CdiO'))
-VOID
-NxRequestQueue::CancelRequests(
-    _In_ PVOID RequestId
-    )
-/*++
-Routine Description:
-    This routine cancels all the requests with a matching RequestId.
-
-Arguments:
-    RequestId - Any requests with matching with the RequestId field must be
-        canceled.
-
---*/
-{
-    PNxRequest currNxRequest, nextNxRequest;
-    KIRQL irql;
-    LIST_ENTRY tmpCancelList;
-
-    FuncEntry(FLAG_REQUEST_QUEUE);
-
-    InitializeListHead(&tmpCancelList);
-
-    KeAcquireSpinLock(&m_RequestsListLock, &irql);
-
-    //
-    // Loop through each entry request associated with the queue and
-    // see if it needs to be canceled.
-    //
-    FOR_ALL_IN_LIST(NxRequest, &m_RequestsListHead, m_QueueListEntry, currNxRequest) {
-
-        if (currNxRequest->m_NdisOidRequest->RequestId != RequestId) {
-            //
-            // Not a matching request
-            //
-            continue;
-        }
-
-        if (currNxRequest->m_CancellationStarted) {
-            //
-            // Though we found a maching Ndis Oid Request, it has already been
-            // canceled, or being canceled on a different thread
-            //
-            continue;
-        }
-
-        //
-        // Found a request that we need to cancel. Since we would be
-        // touching the request outside of a lock, add a reference to it.
-        // ALso add the request to temporary cancel list.
-        //
-        currNxRequest->m_CancellationStarted = TRUE;
-
-        WdfObjectReferenceWithTag(currNxRequest->GetFxObject(), CANCEL_REQUEST_TAG);
-
-        InsertTailList(&tmpCancelList, &currNxRequest->m_CancelTempListEntry);
-
-    }
-
-    KeReleaseSpinLock(&m_RequestsListLock, irql);
-
-    //
-    // Loop through all the requests that need to be cancelled and cancel them
-    //
-    FOR_ALL_IN_LIST_SAFE(NxRequest,
-                         &tmpCancelList,
-                         m_CancelTempListEntry,
-                         currNxRequest,
-                         nextNxRequest) {
-        currNxRequest->Cancel();
-        RemoveEntryList(&currNxRequest->m_CancelTempListEntry);
-        InitializeListEntry(&currNxRequest->m_CancelTempListEntry);
-
-        WdfObjectDereferenceWithTag(currNxRequest->GetFxObject(), CANCEL_REQUEST_TAG);
-
-    }
-
-    FuncExit(FLAG_REQUEST_QUEUE);
-}

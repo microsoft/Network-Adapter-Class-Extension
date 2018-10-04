@@ -90,19 +90,19 @@ public:
         PAGED T *operator->() const { return &(*_a)[_i]; }
     };
 
-    PAGED KArray(size_t sizeHint = 0) WI_NOEXCEPT
+    PAGED KArray(size_t sizeHint = 0) noexcept
     {
         if (sizeHint)
             (void)grow(sizeHint);
     }
 
-    PAGED ~KArray()
+    NONPAGED ~KArray()
     {
         reset();
     }
 
     PAGED KArray(
-        _In_ KArray &&rhs) WI_NOEXCEPT :
+        _In_ KArray &&rhs) noexcept :
             _p(rhs._p),
             m_numElements(rhs.m_numElements),
             m_bufferSize(rhs.m_bufferSize)
@@ -132,7 +132,7 @@ public:
         return *this;
     }
 
-    PAGED size_t count() const
+    NONPAGED size_t count() const
     {
         return m_numElements;
     }
@@ -321,7 +321,7 @@ public:
         --m_numElements;
     }
 
-    PAGED T &operator[](size_t index)
+    NONPAGED T &operator[](size_t index)
     {
         if (index >= m_numElements)
             RtlFailFast(FAST_FAIL_INVALID_ARG);
@@ -329,7 +329,7 @@ public:
         return _p[index];
     }
 
-    PAGED T const &operator[](size_t index) const
+    NONPAGED T const &operator[](size_t index) const
     {
         if (index >= m_numElements)
             RtlFailFast(FAST_FAIL_INVALID_ARG);
@@ -359,7 +359,7 @@ public:
 
 private:
 
-    PAGED void reset()
+    NONPAGED void reset()
     {
         if (_p)
         {

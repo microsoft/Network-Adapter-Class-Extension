@@ -10,15 +10,13 @@ Abstract:
 
 #include "Nx.hpp"
 
-// Tracing support
-extern "C" {
-#include "NxWakeApi.tmh"
-}
+#include <NxApi.hpp>
 
-//
-// extern the whole file
-//
-extern "C" {
+#include "NxWakeApi.tmh"
+
+#include "NxWake.hpp"
+#include "verifier.hpp"
+#include "version.hpp"
 
 WDFAPI
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -43,19 +41,15 @@ Returns:
     This API must only be called during a power transition.
 --*/
 {
-    FuncEntry(FLAG_POWER);
-
-    PNxWake          nxWake;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxWake = GetNxWakeFromHandle(NetPowerSettings);
+    auto nxWake = GetNxWakeFromHandle(NetPowerSettings);
 
     Verifier_VerifyNetPowerSettingsAccessible(pNxPrivateGlobals, nxWake);
 
-    FuncExit(FLAG_POWER);
     return nxWake->GetEnabledWakePacketPatterns();
 }
 
@@ -83,15 +77,12 @@ Returns:
     This API must only be called during a power transition.
 --*/
 {
-    FuncEntry(FLAG_POWER);
-
-    PNxWake nxWake;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxWake = GetNxWakeFromHandle(Adapter);
+    auto nxWake = GetNxWakeFromHandle(Adapter);
 
 
 
@@ -99,7 +90,6 @@ Returns:
 
     Verifier_VerifyNetPowerSettingsAccessible(pNxPrivateGlobals, nxWake);
 
-    FuncExit(FLAG_POWER);
     return  nxWake->GetEnabledProtocolOffloads();
 }
 
@@ -128,19 +118,15 @@ Returns:
 
 --*/
 {
-    FuncEntry(FLAG_POWER);
-
-    PNxWake nxWake;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxWake = GetNxWakeFromHandle(NetPowerSettings);
+    auto nxWake = GetNxWakeFromHandle(NetPowerSettings);
     Verifier_VerifyNetPowerSettingsAccessible(pNxPrivateGlobals, nxWake);
 
-    FuncExit(FLAG_POWER);
-    return  nxWake->GetEnabledMediaSpecificWakeUpEvents();
+    return nxWake->GetEnabledMediaSpecificWakeUpEvents();
 }
 
 WDFAPI
@@ -164,18 +150,15 @@ Returns:
     Refer to the documentation of WakeUpFlags field of NDIS_PM_PARAMETERS
 --*/
 {
-    FuncEntry(FLAG_POWER);
-    PNxWake nxWake;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxWake = GetNxWakeFromHandle(NetPowerSettings);
+    auto nxWake = GetNxWakeFromHandle(NetPowerSettings);
 
     Verifier_VerifyNetPowerSettingsAccessible(pNxPrivateGlobals, nxWake);
 
-    FuncExit(FLAG_POWER);
     return  nxWake->GetEnabledWakeUpFlags();
 }
 
@@ -206,24 +189,20 @@ Returns:
 
 --*/
 {
-    FuncEntry(FLAG_POWER);
-    PNxWake nxWake;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals;
     PNX_NET_POWER_ENTRY nxWakePatternEntry;
 
-    pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxWake = GetNxWakeFromHandle(NetPowerSettings);
+    auto nxWake = GetNxWakeFromHandle(NetPowerSettings);
     Verifier_VerifyNetPowerSettingsAccessible(pNxPrivateGlobals, nxWake);
 
     nxWakePatternEntry = nxWake->GetEntryAtIndex(Index,
                                                 NxPowerEntryTypeWakePattern);
     Verifier_VerifyNotNull(pNxPrivateGlobals, nxWakePatternEntry);
 
-    FuncExit(FLAG_POWER);
     return nxWakePatternEntry ? &(nxWakePatternEntry->NdisWoLPattern) : NULL;
 }
 
@@ -252,18 +231,15 @@ Returns:
     Returns the number of WoL Patterns stored in the NETPOWERSETTINGS object.
 --*/
 {
-    FuncEntry(FLAG_POWER);
-    PNxWake nxWake;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxWake = GetNxWakeFromHandle(NetPowerSettings);
+    auto nxWake = GetNxWakeFromHandle(NetPowerSettings);
 
     Verifier_VerifyNetPowerSettingsAccessible(pNxPrivateGlobals, nxWake);
 
-    FuncExit(FLAG_POWER);
     return nxWake->GetWakePatternCount();
 }
 
@@ -295,22 +271,19 @@ Returns:
         in its hardware. Returns FALSE if the pattern is not enabled.
 --*/
 {
-    FuncEntry(FLAG_POWER);
-    PNxWake nxWake;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
     PNX_NET_POWER_ENTRY nxWakeEntry;
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxWake = GetNxWakeFromHandle(NetPowerSettings);
+    auto nxWake = GetNxWakeFromHandle(NetPowerSettings);
 
     Verifier_VerifyNetPowerSettingsAccessible(pNxPrivateGlobals, nxWake);
 
     nxWakeEntry = CONTAINING_RECORD(NdisPmWolPattern,
                                 NX_NET_POWER_ENTRY,
                                 NdisWoLPattern);
-    FuncExit(FLAG_POWER);
     return nxWakeEntry->Enabled;
 }
 
@@ -343,18 +316,15 @@ Returns:
     the WakePatternType specified
 --*/
 {
-    FuncEntry(FLAG_POWER);
-    PNxWake nxWake;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxWake = GetNxWakeFromHandle(NetPowerSettings);
+    auto nxWake = GetNxWakeFromHandle(NetPowerSettings);
 
     Verifier_VerifyNetPowerSettingsAccessible(pNxPrivateGlobals, nxWake);
 
-    FuncExit(FLAG_POWER);
     return nxWake->GetWakePatternCountForType(WakePatternType);
 }
 
@@ -383,18 +353,15 @@ Returns:
     Returns the number of protocol offloads stored in the NETPOWERSETTINGS object.
 --*/
 {
-    FuncEntry(FLAG_POWER);
-    PNxWake nxWake;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxWake = GetNxWakeFromHandle(NetPowerSettings);
+    auto nxWake = GetNxWakeFromHandle(NetPowerSettings);
 
     Verifier_VerifyNetPowerSettingsAccessible(pNxPrivateGlobals, nxWake);
 
-    FuncExit(FLAG_POWER);
     return nxWake->GetProtocolOffloadCount();
 }
 
@@ -427,18 +394,15 @@ Returns:
     the specified protocol offload type
 --*/
 {
-    FuncEntry(FLAG_POWER);
-    PNxWake nxWake;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxWake = GetNxWakeFromHandle(NetPowerSettings);
+    auto nxWake = GetNxWakeFromHandle(NetPowerSettings);
 
     Verifier_VerifyNetPowerSettingsAccessible(pNxPrivateGlobals, nxWake);
 
-    FuncExit(FLAG_POWER);
     return nxWake->GetProtocolOffloadCountForType(ProtocolOffloadType);
 }
 
@@ -471,23 +435,19 @@ Returns:
 
 --*/
 {
-    FuncEntry(FLAG_POWER);
-    PNxWake nxWake;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals;
     PNX_NET_POWER_ENTRY nxPowerEntry;
 
-    pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxWake = GetNxWakeFromHandle(NetPowerSettings);
+    auto nxWake = GetNxWakeFromHandle(NetPowerSettings);
     Verifier_VerifyNetPowerSettingsAccessible(pNxPrivateGlobals, nxWake);
 
     nxPowerEntry = nxWake->GetEntryAtIndex(Index,  NxPowerEntryTypeProtocolOffload);
     Verifier_VerifyNotNull(pNxPrivateGlobals, (PVOID)nxPowerEntry);
 
-    FuncExit(FLAG_POWER);
     return nxPowerEntry ? &(nxPowerEntry->NdisProtocolOffload) : NULL;
 }
 
@@ -518,24 +478,19 @@ Returns:
     Returns FALSE if the offload is not enabled.
 --*/
 {
-    FuncEntry(FLAG_POWER);
-    PNxWake nxWake;
-    PNX_PRIVATE_GLOBALS pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
     PNX_NET_POWER_ENTRY nxPowerEntry;
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
 
-    nxWake = GetNxWakeFromHandle(NetPowerSettings);
+    auto nxWake = GetNxWakeFromHandle(NetPowerSettings);
 
     Verifier_VerifyNetPowerSettingsAccessible(pNxPrivateGlobals, nxWake);
 
     nxPowerEntry = CONTAINING_RECORD(ProtocolOffload,
                                 NX_NET_POWER_ENTRY,
                                 NdisProtocolOffload);
-    FuncExit(FLAG_POWER);
     return nxPowerEntry->Enabled;
 }
 
-
-}

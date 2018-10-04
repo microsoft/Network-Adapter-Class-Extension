@@ -20,24 +20,14 @@ Abstract:
 NTSTATUS
 NxExecutionContext::Initialize(PVOID context, EC_START_ROUTINE *callback)
 {
-    auto const priorState = SetState(EcState::Initialized);
-    WIN_VERIFY(priorState == EcState::Stopped);
-
 #if _KERNEL_MODE
 
     unique_zw_handle threadHandle;
 
-    auto status =
-        CX_LOG_IF_NOT_NT_SUCCESS_MSG(
-            PsCreateSystemThread(
-                &threadHandle, THREAD_ALL_ACCESS, nullptr, nullptr, nullptr, callback, context),
-            "Failed to start execution context. ExecutionContext=%p", this);
-
-    if (!NT_SUCCESS(status))
-    {
-        m_ecState = EcState::Stopped;
-        return status;
-    }
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        PsCreateSystemThread(
+            &threadHandle, THREAD_ALL_ACCESS, nullptr, nullptr, nullptr, callback, context),
+        "Failed to start execution context. ExecutionContext=%p", this);
 
     m_threadHandle = wistd::move(threadHandle);
 
@@ -51,16 +41,16 @@ NxExecutionContext::Initialize(PVOID context, EC_START_ROUTINE *callback)
         (PVOID*)&threadObject,
         nullptr)));
 
+    m_ecIdentifier = HandleToULong(PsGetThreadId((PETHREAD)threadObject.get()));
 #else
 
     wil::unique_handle threadObject;
     threadObject.reset(CreateThread(nullptr, 0, callback, context, 0, nullptr));
-    if (!threadObject)
-    {
-        m_ecState = EcState::Stopped;
-        return NTSTATUS_FROM_WIN32(GetLastError());
-    }
+    CX_RETURN_NTSTATUS_IF(
+        NTSTATUS_FROM_WIN32(GetLastError()),
+        ! threadObject);
 
+    m_ecIdentifier = GetThreadId(threadObject.get());
 #endif
 
     m_workerThreadObject = wistd::move(threadObject);
@@ -68,45 +58,61 @@ NxExecutionContext::Initialize(PVOID context, EC_START_ROUTINE *callback)
     return STATUS_SUCCESS;
 }
 
-NTSTATUS
-NxExecutionContext::SetGroupAffinity(
-    GROUP_AFFINITY & GroupAffinity
-    )
+NxExecutionContext::EcState
+NxExecutionContext::SetState(EcState newState)
 {
-#ifdef _KERNEL_MODE
-    return ZwSetInformationThread(
-        m_threadHandle.get(),
-        ThreadGroupInformation,
-        &GroupAffinity,
-        sizeof(GroupAffinity));
-#else
-    UNREFERENCED_PARAMETER(GroupAffinity);
-
-    return STATUS_SUCCESS;
-#endif
+    return static_cast<EcState>(
+        InterlockedExchange((LONG*)&m_ecState, (LONG)newState));
 }
 
 void
-NxExecutionContext::Start()
+NxExecutionContext::SignalStopped()
 {
-    auto const priorState = SetState(EcState::Started);
-    WIN_VERIFY(priorState == EcState::Initialized);
+    auto const priorState = SetState(EcState::Stopped);
+    WIN_VERIFY(priorState == EcState::Stopping);
 
-    m_signal.Set();
+    m_stopped.Set();
 }
 
 void
-NxExecutionContext::RequestStop()
+NxExecutionContext::SetStopping()
 {
     auto const priorState = SetState(EcState::Stopping);
-    WIN_VERIFY(priorState == EcState::Initialized || priorState == EcState::Started || priorState == EcState::Stopped);
+    WIN_VERIFY(priorState == EcState::Started);
 
-    Signal();
+    SignalWork();
 }
 
 void
-NxExecutionContext::CompleteStop()
+NxExecutionContext::SetStarted()
 {
+    auto const priorState = SetState(EcState::Started);
+    WIN_VERIFY(priorState == EcState::Stopped);
+
+    SignalWork();
+    m_changed.Set();
+}
+
+void
+NxExecutionContext::SetTerminated()
+{
+    auto const priorState = SetState(EcState::Terminated);
+    WIN_VERIFY(priorState == EcState::Stopped);
+
+    m_changed.Set();
+}
+
+void
+NxExecutionContext::WaitForStopped()
+{
+    m_stopped.Wait();
+}
+
+void
+NxExecutionContext::Terminate()
+{
+    SetTerminated();
+
     if (m_workerThreadObject)
     {
 #if _KERNEL_MODE
@@ -123,47 +129,77 @@ NxExecutionContext::CompleteStop()
         WaitForSingleObject(m_workerThreadObject.get(), INFINITE);
 
 #endif
-
-        m_workerThreadObject.reset();
     }
-
-    WIN_VERIFY(SetState(EcState::Stopped) == EcState::Stopping);
 }
 
 void
-NxExecutionContext::Signal()
+NxExecutionContext::Start()
 {
-    WIN_ASSERT(m_ecState == EcState::Started || m_ecState == EcState::Stopping);
+#if _KERNEL_MODE
+    UINT64 cpuCycleTime;
 
-    m_signal.Set();
+    (void)KeQueryTotalCycleTimeThread(
+        KeGetCurrentThread(),
+        &cpuCycleTime);
+
+    m_ecCounters.CpuCycleTime = cpuCycleTime;
+    m_ecCounters.ThreadCycleTime = 0;
+    m_ecCounters.TotalCpuCycleTime = 0;
+#else
+    m_ecCounters.CpuCycleTime = 0;
+    m_ecCounters.ThreadCycleTime = 0;
+    m_ecCounters.TotalCpuCycleTime = 0;
+#endif
+
+    SetStarted();
 }
 
 void
-NxExecutionContext::WaitForStart()
+NxExecutionContext::Cancel()
 {
-    m_signal.Wait();
-
-    WIN_ASSERT(m_ecState == EcState::Started || m_ecState == EcState::Stopping);
+    SetStopping();
 }
 
 void
-NxExecutionContext::WaitForSignal()
+NxExecutionContext::Stop()
 {
-    m_signal.Wait();
+    WaitForStopped();
+}
+
+void
+NxExecutionContext::SignalWork()
+{
+    m_work.Set();
+}
+
+void
+NxExecutionContext::WaitForWork()
+{
+    m_work.Wait();
 }
 
 bool
-NxExecutionContext::IsStopRequested()
+NxExecutionContext::IsStopping() const
 {
+    WIN_ASSERT(m_ecState != EcState::Terminated);
     WIN_ASSERT(m_ecState != EcState::Stopped);
 
     return m_ecState == EcState::Stopping;
 }
 
+bool
+NxExecutionContext::IsTerminated()
+{
+    SignalWork();
+    m_changed.Wait();
+
+    return m_ecState == EcState::Terminated;
+}
+
 void
 NxExecutionContext::SetDebugNameHint(
     _In_ PCWSTR usage,
-    _In_ ULONG index,
+    _In_ size_t index,
     _In_ NET_LUID networkInterface)
 {
     MIB_IF_ROW2 mib;
@@ -179,7 +215,7 @@ NxExecutionContext::SetDebugNameHint(
     }
 
     // Build a string like "Receive thread #3 for Contoso 2000 Ethernet Adapter #4"
-    auto cch = swprintf_s(mib.Alias, L"%ws thread #%u for %ws", usage, index, mib.Description);
+    auto cch = swprintf_s(mib.Alias, L"%ws thread #%zu for %ws", usage, index, mib.Description);
     if (cch == -1)
         return;
 
@@ -197,4 +233,64 @@ NxExecutionContext::SetDebugNameHint(
 #else
     SetThreadDescription(m_workerThreadObject.get(), mib.Alias);
 #endif
+}
+
+void
+NxExecutionContext::UpdateCounters(
+    _In_ bool IsIdleIteration
+    )
+{
+    m_ecCounters.IterationCount++;
+    UINT64 threadCycleTime = 0;
+    UINT64 threadTimeDelta = 0;
+
+#if _KERNEL_MODE
+    UINT64 cpuCycleTime = 0;
+    UINT64 cpuTimeDelta = 0;
+
+    threadCycleTime = KeQueryTotalCycleTimeThread(
+        KeGetCurrentThread(),
+        &cpuCycleTime);
+
+    cpuTimeDelta = cpuCycleTime - m_ecCounters.CpuCycleTime;
+    m_ecCounters.CpuCycleTime = cpuCycleTime;
+
+    threadTimeDelta = threadCycleTime - m_ecCounters.ThreadCycleTime;
+    m_ecCounters.ThreadCycleTime = threadCycleTime;
+
+    m_ecCounters.TotalCpuCycleTime += cpuTimeDelta;
+
+    if (cpuTimeDelta > threadTimeDelta)
+    {
+        m_ecCounters.IdleCycles += (cpuTimeDelta - threadTimeDelta);
+    }
+#else
+    if (QueryThreadCycleTime(GetCurrentThread(), &threadCycleTime))
+    {
+        threadTimeDelta = threadCycleTime - m_ecCounters.ThreadCycleTime;
+        m_ecCounters.ThreadCycleTime = threadCycleTime;
+    }
+#endif
+
+    if (IsIdleIteration)
+    {
+        m_ecCounters.BusyWaitIterationCount++;
+        m_ecCounters.BusyWaitCycles += threadTimeDelta;
+    }
+    else
+    {
+        m_ecCounters.ProcessingCycles += threadTimeDelta;
+    }
+}
+
+NxExecutionContextCounters
+NxExecutionContext::GetExecutionContextCounters() const
+{
+    return m_ecCounters;
+}
+
+ULONG
+NxExecutionContext::GetExecutionContextIdentifier() const
+{
+    return m_ecIdentifier;
 }

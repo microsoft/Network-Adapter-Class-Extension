@@ -57,7 +57,7 @@ struct KIrqlRegion
 {
     KIrqlRegion() { }
     ~KIrqlRegion() { }
-    
+
     void Enter() { }
     void Leave() { }
 
