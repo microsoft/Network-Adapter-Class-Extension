@@ -12,36 +12,36 @@ public:
 
     explicit NxScatterGatherList(
         _In_ NxDmaAdapter const &DmaAdapter
-        );
+    );
 
     ~NxScatterGatherList(
         void
-        );
+    );
 
     SCATTER_GATHER_LIST *
     release(
         void
-        );
+    );
 
     SCATTER_GATHER_LIST *
     get(
         void
-        ) const;
+    ) const;
 
     SCATTER_GATHER_LIST ** const
     releaseAndGetAddressOf(
         void
-        );
+    );
 
     SCATTER_GATHER_LIST const *
     operator->(
         void
-        ) const;
+    ) const;
 
     SCATTER_GATHER_LIST const &
     operator*(
         void
-        ) const;
+    ) const;
 
     NxScatterGatherList(const NxScatterGatherList&) = delete;
     NxScatterGatherList& operator=(const NxScatterGatherList&) = delete;

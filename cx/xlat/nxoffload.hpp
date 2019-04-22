@@ -16,11 +16,17 @@ public:
     NxTaskOffload(
         _In_ NxTranslationApp & App,
         _In_ NET_CLIENT_ADAPTER_OFFLOAD_DISPATCH const & Dispatch
-        ) noexcept;
+    ) noexcept;
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
     SetActiveCapabilities(
+        _In_ NDIS_OID_REQUEST const & Request
+    );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    SetEncapsulation(
         _In_ NDIS_OID_REQUEST const & Request
         );
 
@@ -28,7 +34,7 @@ public:
     NTSTATUS
     Initialize(
         void
-        );
+    );
 
 private:
 
@@ -53,19 +59,19 @@ private:
     NDIS_TCP_IP_CHECKSUM_OFFLOAD
     TranslateChecksumCapabilities(
         _In_ NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES const &Capabilities
-        ) const;
+    ) const;
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES
     TranslateChecksumCapabilities(
         _In_ NDIS_OFFLOAD_PARAMETERS const &OffloadParameters
-        ) const;
+    ) const;
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NET_CLIENT_OFFLOAD_LSO_CAPABILITIES
     TranslateLsoCapabilities(
         _In_ NDIS_OFFLOAD_PARAMETERS const &OffloadParameters
-        ) const;
+    ) const;
 
     _IRQL_requires_(PASSIVE_LEVEL)
     void
@@ -73,7 +79,7 @@ private:
         _In_ NET_CLIENT_OFFLOAD_LSO_CAPABILITIES const &Capabilities,
         _Out_ NDIS_TCP_LARGE_SEND_OFFLOAD_V1 &NdisLsoV1Capabilities,
         _Out_ NDIS_TCP_LARGE_SEND_OFFLOAD_V2 &NdisLsoV2Capabilities
-        ) const;
+    ) const;
 
     //
     // Methods which are compiled in kernel mode only
@@ -83,7 +89,7 @@ private:
     NTSTATUS 
     SendNdisTaskOffloadStatusIndication(
         _In_ NDIS_OFFLOAD &offloadCapabilities
-        ) const;
+    ) const;
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
@@ -91,6 +97,25 @@ private:
         _In_ NDIS_OFFLOAD &hardwareCaps,
         _In_ NDIS_OFFLOAD &defaultCaps
         ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    SetActiveCapabilities(
+        _In_ NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES const & ChecksumCapabilities,
+        _In_ NET_CLIENT_OFFLOAD_LSO_CAPABILITIES const & LsoCapabilities
+    );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    bool
+    IsChecksumOffloadSupported(
+        void
+    );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    bool
+    IsLsoOffloadSupported(
+        void
+    );
 };
 
 

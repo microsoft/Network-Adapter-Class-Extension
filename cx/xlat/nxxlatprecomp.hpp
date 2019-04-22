@@ -65,10 +65,13 @@ NdisMIndicateReceiveNetBufferLists(
 #include <nblutil.h>
 #include <netiodef.h>
 
-#define NET_ADAPTER_CX_1_3 1
-#include <NetRingBuffer.h>
-#include <NetPacket.h>
-#include <NetDatapathDescriptor.h>
+#define NETCX_ADAPTER_2
+#include <net/extension.h>
+#include <net/fragment.h>
+#include <net/packet.h>
+#include <net/ring.h>
+#include <net/ringcollection.h>
+
 #include <NetPacketPool.h>
 
 #include <KNew.h>

@@ -11,7 +11,7 @@ _Use_decl_annotations_
 DmaContext::DmaContext(
     void *SGBuffer,
     void *DmaContext
-    ) :
+) :
     ScatterGatherBuffer(SGBuffer),
     DmaTransferContext(DmaContext)
 {
@@ -21,7 +21,7 @@ DmaContext::DmaContext(
 _Use_decl_annotations_
 NxDmaTransfer::NxDmaTransfer(
     NxDmaAdapter const &DmaAdapter
-    ) :
+) :
     m_dmaAdapter(DmaAdapter)
 {
 
@@ -31,7 +31,7 @@ _Use_decl_annotations_
 NxDmaTransfer::NxDmaTransfer(
     NxDmaAdapter const &DmaAdapter,
     NET_PACKET const *Packet
-    ) :
+) :
     m_dmaAdapter(DmaAdapter),
     m_packet(Packet),
     m_valid(true)
@@ -41,7 +41,7 @@ NxDmaTransfer::NxDmaTransfer(
 _Use_decl_annotations_
 NxDmaTransfer::NxDmaTransfer(
     NxDmaTransfer &&Other
-    ) :
+) :
     m_dmaAdapter(Other.m_dmaAdapter),
     m_packet(Other.m_packet),
     m_valid(Other.m_valid)
@@ -52,7 +52,7 @@ NxDmaTransfer::NxDmaTransfer(
 
 NxDmaTransfer::~NxDmaTransfer(
     void
-    )
+)
 {
     if (m_valid)
     {
@@ -62,7 +62,7 @@ NxDmaTransfer::~NxDmaTransfer(
 
 NxDmaTransfer::operator bool(
     void
-    ) const
+) const
 {
     return m_valid;
 }
@@ -70,7 +70,7 @@ NxDmaTransfer::operator bool(
 DmaContext &
 NxDmaTransfer::GetTransferContext(
     void
-    ) const
+) const
 {
     NT_FRE_ASSERTMSG("Using an invalid NxDmaTransfer object.", m_valid);
     return m_dmaAdapter.GetDmaContextForPacket(*m_packet);
@@ -79,13 +79,13 @@ NxDmaTransfer::GetTransferContext(
 _Use_decl_annotations_
 NxDmaAdapter::NxDmaAdapter(
     NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES const &DatapathCapabilities,
-    NxRingBuffer const &PacketRing
-    ) noexcept :
+    NET_RING_COLLECTION const & Rings
+) noexcept :
     m_dmaAdapter(static_cast<DMA_ADAPTER *>(DatapathCapabilities.TxMemoryConstraints.Dma.DmaAdapter)),
     m_physicalDeviceObject(static_cast<DEVICE_OBJECT *>(DatapathCapabilities.TxMemoryConstraints.Dma.PhysicalDeviceObject)),
     m_flushIoBuffers(!!DatapathCapabilities.FlushBuffers),
-    m_dmaContext(PacketRing),
-    m_packetRingSize(PacketRing.Count()),
+    m_dmaContext(Rings, NET_RING_TYPE_PACKET),
+    m_packetRingSize(Rings.Rings[NET_RING_TYPE_PACKET]->NumberOfElements),
     m_maximumPacketSize(DatapathCapabilities.NominalMtu)
 {
 }
@@ -94,7 +94,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxDmaAdapter::Initialize(
     NET_CLIENT_DISPATCH const &ClientDispatch
-    )
+)
 {
     auto bouncePolicy = static_cast<BouncePolicy>(ClientDispatch.NetClientQueryDriverConfigurationUlong(DRIVER_CONFIG_ENUM::DMA_BOUNCE_POLICY));
 
@@ -188,7 +188,7 @@ _Use_decl_annotations_
 NxDmaTransfer
 NxDmaAdapter::InitializeDmaTransfer(
     NET_PACKET const &Packet
-    ) const
+) const
 {
     auto& dmaContext = GetDmaContextForPacket(Packet);
 
@@ -213,7 +213,7 @@ NxDmaAdapter::InitializeDmaTransfer(
 bool
 NxDmaAdapter::BypassHal(
     void
-    ) const
+) const
 {
     return m_bypassHal;
 }
@@ -221,7 +221,7 @@ NxDmaAdapter::BypassHal(
 bool
 NxDmaAdapter::AlwaysBounce(
     void
-    ) const
+) const
 {
     return m_alwaysBounce;
 }
@@ -234,7 +234,7 @@ NxDmaAdapter::BuildScatterGatherListEx(
     size_t MdlOffset,
     size_t Size,
     SCATTER_GATHER_LIST **ScatterGatherList
-    ) const
+) const
 {
     ULONG ulMdlOffset;
     CX_RETURN_IF_NOT_NT_SUCCESS(
@@ -272,7 +272,7 @@ _Use_decl_annotations_
 void
 NxDmaAdapter::PutScatterGatherList(
     SCATTER_GATHER_LIST *ScatterGatherList
-    ) const
+) const
 {
     m_dmaAdapter->DmaOperations->PutScatterGatherList(
         m_dmaAdapter,
@@ -284,18 +284,18 @@ _Use_decl_annotations_
 DmaContext &
 NxDmaAdapter::GetDmaContextForPacket(
     NET_PACKET const &Packet
-    ) const
+) const
 {
-    return m_dmaContext.GetPacketContext<DmaContext>(Packet);
+    return m_dmaContext.GetContextByElement<DmaContext>(Packet);
 }
 
 _Use_decl_annotations_
 DmaContext &
 NxDmaAdapter::GetDmaContextForPacket(
     _In_ size_t const &Index
-    ) const
+) const
 {
-    return m_dmaContext.GetPacketContext<DmaContext>(Index);
+    return m_dmaContext.GetContext<DmaContext>(Index);
 }
 
 _Use_decl_annotations_
@@ -303,7 +303,7 @@ MDL *
 NxDmaAdapter::GetMappedMdl(
     SCATTER_GATHER_LIST *ScatterGatherList,
     MDL *OriginalMdl
-    ) const
+) const
 {
     MDL *mappedMdl;
     NTSTATUS ntStatus = m_dmaAdapter->DmaOperations->BuildMdlFromScatterGatherList(
@@ -323,7 +323,7 @@ NxDmaAdapter::GetMappedMdl(
 void
 NxDmaAdapter::FreeAdapterObject(
     void
-    ) const
+) const
 {
     m_dmaAdapter->DmaOperations->FreeAdapterObject(
         m_dmaAdapter,
@@ -334,7 +334,7 @@ _Use_decl_annotations_
 void
 NxDmaAdapter::CleanupNetPacket(
     NET_PACKET const &Packet
-    ) const
+) const
 {
     if (BypassHal() || AlwaysBounce())
     {
@@ -369,7 +369,7 @@ NxDmaAdapter::CleanupNetPacket(
 void
 NxDmaAdapter::FlushIoBuffers(
     _In_ NetRbPacketRange const &PacketRange
-    ) const
+) const
 {
     if (!m_flushIoBuffers)
         return;

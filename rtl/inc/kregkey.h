@@ -39,7 +39,10 @@ class KRegKey : public unique_reg_key
 {
 public:
 
-    PAGED KRegKey() { }
+    PAGED KRegKey() = default;
+    PAGED ~KRegKey() = default;
+    PAGED KRegKey(KRegKey &&) = default;
+    PAGED KRegKey & operator=(KRegKey &&) = default;
 
 #ifndef _KERNEL_MODE
 

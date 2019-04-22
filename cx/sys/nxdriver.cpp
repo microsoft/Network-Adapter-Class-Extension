@@ -16,12 +16,17 @@ Abstract:
 #include "NxAdapter.hpp"
 #include "version.hpp"
 
+static
+EVT_WDF_OBJECT_CONTEXT_CLEANUP
+    EvtDriverCleanup;
+
+_Use_decl_annotations_
 NxDriver::NxDriver(
-    _In_ WDFDRIVER                Driver,
-    _In_ NX_PRIVATE_GLOBALS *     NxPrivateGlobals
-    ) : CFxObject(Driver),
-    m_Driver(Driver),
-    m_PrivateGlobals(NxPrivateGlobals)
+    WDFDRIVER Driver,
+    NX_PRIVATE_GLOBALS * NxPrivateGlobals
+)
+    : CFxObject(Driver)
+    , m_PrivateGlobals(NxPrivateGlobals)
 /*++
 Routine Description:
 
@@ -35,57 +40,50 @@ Arguments:
 
 --*/
 {
-    RECORDER_LOG_CREATE_PARAMS  recorderLogCreateParams;
-    NTSTATUS                    status;
-    RECORDER_LOG                recorderLog;
-
-    UNREFERENCED_PARAMETER(NxPrivateGlobals);
-
     //
     // Create a WPP Log buffer for the client.
     //
 
-    RECORDER_LOG_CREATE_PARAMS_INIT(&recorderLogCreateParams, NULL);
+    RECORDER_LOG_CREATE_PARAMS recorderLogCreateParams;
+    RECORDER_LOG_CREATE_PARAMS_INIT(&recorderLogCreateParams, nullptr);
 
     recorderLogCreateParams.TotalBufferSize = DEFAULT_WPP_TOTAL_BUFFER_SIZE;
     recorderLogCreateParams.ErrorPartitionSize = DEFAULT_WPP_ERROR_PARTITION_SIZE;
 
+    //
+    // ClientDriverGlobals->DriverName is a CHAR array that contains a NULL terminated string
+    //
+    auto clientDriverName = &m_PrivateGlobals->ClientDriverGlobals->DriverName[0];
 
+    //
+    // If clientDriverName length is larger than what LogIdentifier supports the string will
+    // be truncated
+    //
+    RtlStringCchPrintfA(
+        recorderLogCreateParams.LogIdentifier,
+        sizeof(recorderLogCreateParams.LogIdentifier),
+        "%s",
+        clientDriverName);
 
+    RECORDER_LOG recorderLog;
+    NTSTATUS ntStatus = WppRecorderLogCreate(&recorderLogCreateParams, &recorderLog);
 
-
-
-
-
-
-
-
-
-
-
-
-
-    RtlStringCchPrintfA(recorderLogCreateParams.LogIdentifier,
-                        sizeof(recorderLogCreateParams.LogIdentifier),
-                        "NxClient");
-
-    status = WppRecorderLogCreate(&recorderLogCreateParams, &recorderLog);
-    if (!NT_SUCCESS(status)) {
-
-        LogInitMsg(TRACE_LEVEL_WARNING, "Could Not allocate Recorder Log for NetAdapterCxClient : <FILL HERE> ");
-        recorderLog = NULL;
-
-        //
-        // Non fatal failure
-        //
-
-        status = STATUS_SUCCESS;
+    if (NT_SUCCESS(ntStatus))
+    {
+        m_RecorderLog = recorderLog;
     }
-
-    m_RecorderLog = recorderLog;
+    else
+    {
+        //
+        // Non-fatal failure
+        //
+        LogInitMsg(TRACE_LEVEL_WARNING, "Could Not allocate Recorder Log for NetAdapterCxClient : %s", clientDriverName);
+    }
 }
 
-NxDriver::~NxDriver()
+NxDriver::~NxDriver(
+    void
+)
 /*++
 Routine Description:
 
@@ -93,28 +91,29 @@ Routine Description:
 
 --*/
 {
-    if (m_RecorderLog) {
+    if (m_RecorderLog != nullptr)
+    {
         //
         // Delete the log buffer created in the constructor.
         //
         WppRecorderLogDelete(m_RecorderLog);
-        m_RecorderLog = NULL;
+        m_RecorderLog = nullptr;
     }
 }
 
+_Use_decl_annotations_
 NTSTATUS
 NxDriver::_CreateIfNeeded(
-    _In_ WDFDRIVER           Driver,
-    _In_ NX_PRIVATE_GLOBALS * NxPrivateGlobals
-    )
+    WDFDRIVER Driver,
+    NX_PRIVATE_GLOBALS * NxPrivateGlobals
+)
 {
-    WDF_OBJECT_ATTRIBUTES                   attributes;
-    NTSTATUS                                status;
-
-    if (NxPrivateGlobals->NxDriver != NULL) {
+    if (NxPrivateGlobals->NxDriver != nullptr)
+    {
         return STATUS_SUCCESS;
     }
 
+    WDF_OBJECT_ATTRIBUTES attributes;
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, NxDriver);
 
     //
@@ -126,35 +125,34 @@ NxDriver::_CreateIfNeeded(
     // Allocate a context on the client WDFDRIVER object and create a
     // NxDriver object on it using an in-placement new call.
     //
-    #pragma prefast(suppress:__WARNING_FUNCTION_CLASS_MISMATCH_NONE, "can't add class to static member function")
-    attributes.EvtCleanupCallback = NxDriver::_EvtWdfCleanup;
+    attributes.EvtCleanupCallback = EvtDriverCleanup;
 
     void * nxDriverAsContext;
-    status = WdfObjectAllocateContext(Driver,
-                                      &attributes,
-                                      &nxDriverAsContext);
+    NTSTATUS ntStatus = WdfObjectAllocateContext(
+        Driver,
+        &attributes,
+        &nxDriverAsContext);
 
-    if (!NT_SUCCESS(status)) {
-        LogInitMsg(TRACE_LEVEL_ERROR, "WdfObjectAllocateContext Failed %!STATUS!", status);
-        return status;
+    if (!NT_SUCCESS(ntStatus))
+    {
+        LogInitMsg(TRACE_LEVEL_ERROR, "WdfObjectAllocateContext Failed %!STATUS!", ntStatus);
+        return ntStatus;
     }
 
     auto nxDriver = new (nxDriverAsContext) NxDriver(Driver, NxPrivateGlobals);
 
     __analysis_assume(nxDriver != NULL);
 
-    NT_ASSERT(nxDriver);
-
     NxPrivateGlobals->NxDriver = nxDriver;
 
-    return status;
-
+    return ntStatus;
 }
 
+_Use_decl_annotations_
 NTSTATUS
 NxDriver::_CreateAndRegisterIfNeeded(
-    _In_ NX_PRIVATE_GLOBALS *           NxPrivateGlobals
-    )
+    NX_PRIVATE_GLOBALS * NxPrivateGlobals
+)
 /*++
 Routine Description:
     This routine is called when a client driver calls NetAdapterDeviceInitConfig.
@@ -175,9 +173,9 @@ Arguments:
     CX_RETURN_IF_NOT_NT_SUCCESS(
         _CreateIfNeeded(wdfDriver, NxPrivateGlobals));
 
-    NxDriver *nxDriver = NxPrivateGlobals->NxDriver;
+    auto nxDriver = NxPrivateGlobals->NxDriver;
 
-    if (nxDriver->m_NdisMiniportDriverHandle != NULL)
+    if (nxDriver->GetNdisMiniportDriverHandle() != nullptr)
     {
         // Already registered
         return STATUS_SUCCESS;
@@ -189,7 +187,9 @@ Arguments:
 }
 
 NTSTATUS
-NxDriver::Register()
+NxDriver::Register(
+    void
+)
 /*++
 Routine Description:
     This routine is called when the client driver calls NetAdapterDriverRegister
@@ -198,21 +198,9 @@ Routine Description:
     In response this routine registers with Ndis.sys on the behalf of the
     client driver.
 
-Arguments:
-
-    DriverType - Type of the miniport driver (regular or intermediate)
-
 --*/
 
 {
-    UNREFERENCED_PARAMETER(DriverType);
-
-    NTSTATUS                                status;
-    PDRIVER_OBJECT                          driverObject;
-    UNICODE_STRING                          registryPath;
-    NDIS_HANDLE                             ndisMiniportDriverHandle;
-    NDIS_MINIPORT_DRIVER_CHARACTERISTICS    ndisMPChars;
-
     //
     // Register with Ndis.sys on behalf of the client. To to that :
     // get the WDM driver object, registry path, and prepare the
@@ -220,122 +208,46 @@ Arguments:
     // NdisWdfRegisterMiniportDriver
     //
 
-    driverObject = WdfDriverWdmGetDriverObject(GetFxObject());
+    UNICODE_STRING registryPath = {};
 
-    status = RtlUnicodeStringInit(&registryPath, WdfDriverGetRegistryPath(GetFxObject()));
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        RtlUnicodeStringInit(
+            &registryPath,
+            WdfDriverGetRegistryPath(GetFxObject())));
 
-    if(!WIN_VERIFY(NT_SUCCESS(status))) {
-        return status;
-    }
+    NDIS_MINIPORT_DRIVER_CHARACTERISTICS ndisMPChars;
+    NdisMiniportDriverCharacteristicsInitialize(ndisMPChars);
 
-    RtlZeroMemory(&ndisMPChars, sizeof(ndisMPChars));
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        NdisWdfRegisterMiniportDriver(
+            WdfDriverWdmGetDriverObject(GetFxObject()),
+            &registryPath,
+            NetAdapterCxDriverHandle,
+            (NDIS_HANDLE)this,
+            &ndisMPChars,
+            &m_NdisMiniportDriverHandle),
+        "NdisWdfRegisterMiniportDriver failed.");
 
-    ndisMPChars.Header.Type        = NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS;
-    ndisMPChars.Header.Size        = NDIS_SIZEOF_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_3;
-    ndisMPChars.Header.Revision    = NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_3;
-    ndisMPChars.MajorNdisVersion   = NDIS_MINIPORT_MAJOR_VERSION;
-    ndisMPChars.MinorNdisVersion   = NDIS_MINIPORT_MINOR_VERSION;
-
-    //
-    // NDIS should not hold driver version information of WDF managed miniports
-    //
-    ndisMPChars.MajorDriverVersion = 0;
-    ndisMPChars.MinorDriverVersion = 0;
-
-    ndisMPChars.Flags =  0;
-    ndisMPChars.Flags |= NDIS_WDF_PNP_POWER_HANDLING; // prevent NDIS from owning the driver dispatch table
-    ndisMPChars.Flags |= NDIS_DRIVER_POWERMGMT_PROXY; // this is a virtual device so need updated capabilities
-
-    #pragma prefast(push)
-    #pragma prefast(disable:__WARNING_FUNCTION_CLASS_MISMATCH_NONE, "can't add class to static member function")
-
-    ndisMPChars.SetOptionsHandler           =  NxDriver::_EvtNdisSetOptions;
-
-    ndisMPChars.InitializeHandlerEx         =  NxAdapter::_EvtNdisInitializeEx;
-    ndisMPChars.HaltHandlerEx               =  NxAdapter::_EvtNdisHaltEx;
-    ndisMPChars.PauseHandler                =  NxAdapter::_EvtNdisPause;
-    ndisMPChars.RestartHandler              =  NxAdapter::_EvtNdisRestart;
-    ndisMPChars.OidRequestHandler           =  NxAdapter::_EvtNdisOidRequest;
-    ndisMPChars.DirectOidRequestHandler     =  NxAdapter::_EvtNdisDirectOidRequest;
-    ndisMPChars.SendNetBufferListsHandler   =  NxAdapter::_EvtNdisSendNetBufferLists;
-    ndisMPChars.ReturnNetBufferListsHandler =  NxAdapter::_EvtNdisReturnNetBufferLists;
-    ndisMPChars.CancelSendHandler           =  NxAdapter::_EvtNdisCancelSend;
-    //For the WDF model, Check For Hang handler keeps waking up the miniport if Selective Suspend
-    //is enabled. Instead of trying to address it in ndis, just dont register for
-    //CheckForHang callback.
-    //ndisMPChars.CheckForHangHandlerEx       =  NxAdapter::_EvtNdisCheckForHangEx;
-    //ndisMPChars.ResetHandlerEx              =  NxAdapter::_EvtNdisResetEx;
-    ndisMPChars.DevicePnPEventNotifyHandler =  NxAdapter::_EvtNdisDevicePnpEventNotify;
-    ndisMPChars.ShutdownHandlerEx           =  NxAdapter::_EvtNdisShutdownEx;
-    ndisMPChars.CancelOidRequestHandler     =  NxAdapter::_EvtNdisCancelOidRequest;
-    ndisMPChars.CancelDirectOidRequestHandler = NxAdapter::_EvtNdisCancelDirectOidRequest;
-    ndisMPChars.SynchronousOidRequestHandler = NxAdapter::_EvtNdisSynchronousOidRequestHandler;
-    #pragma prefast(pop)
-
-    LogVerbose(GetRecorderLog(), FLAG_DRIVER, "Calling NdisWdfRegisterMiniportDriver");
-    status = NdisWdfRegisterMiniportDriver(driverObject,
-                                           &registryPath,
-                                           NetAdapterCxDriverHandle,
-                                           (NDIS_HANDLE)this,
-                                           &ndisMPChars,
-                                           &ndisMiniportDriverHandle);
-
-    if (!NT_SUCCESS(status)) {
-        LogError(GetRecorderLog(), FLAG_DRIVER, "NdisWdfRegisterMiniportDriver Failed %!STATUS!", status);
-        return status;
-    }
-
-    //
-    // Store the NDIS's miniport driver handle in NxDriver object for
-    // future reference.
-    //
-    NT_ASSERT(m_NdisMiniportDriverHandle == NULL);
-    m_NdisMiniportDriverHandle = ndisMiniportDriverHandle;
-
-    return status;
-
+    return STATUS_SUCCESS;
 }
 
-NDIS_STATUS
-NxDriver::_EvtNdisSetOptions(
-    _In_  NDIS_HANDLE  NdisDriverHandle,
-    _In_  NDIS_HANDLE  NxDriverAsContext
-    )
-/*++
-Routine Description:
-
-    An Ndis Event Callback
-
-    The MiniportSetOptions function registers optional handlers.  For each
-    optional handler that should be registered, this function makes a call
-    to NdisSetOptionalHandlers.
-
-    MiniportSetOptions runs at IRQL = PASSIVE_LEVEL.
-
-Arguments:
-
-    DriverContext  The context handle
-
-Return Value:
-
-    NDIS_STATUS_xxx code
-
---*/
+void
+NxDriver::Deregister(
+    void
+)
 {
-    UNREFERENCED_PARAMETER(NdisDriverHandle);
-
-    LogVerbose(
-        static_cast<NxDriver *>(NxDriverAsContext)->GetRecorderLog(),
-        FLAG_DRIVER,
-        "Called NxDriver::_SetOptions");
-
-    return NDIS_STATUS_SUCCESS;
+    if (m_NdisMiniportDriverHandle != nullptr)
+    {
+        NdisMDeregisterMiniportDriver(m_NdisMiniportDriverHandle);
+        m_NdisMiniportDriverHandle = nullptr;
+    }
 }
 
-VOID
-NxDriver::_EvtWdfCleanup(
-    _In_  WDFOBJECT Driver
-    )
+_Use_decl_annotations_
+void
+EvtDriverCleanup(
+    WDFOBJECT Driver
+)
 /*++
 Routine Description:
 
@@ -349,22 +261,29 @@ Routine Description:
 --*/
 {
     auto nxDriver = GetNxDriverFromWdfDriver((WDFDRIVER)Driver);
+    nxDriver->Deregister();
+}
 
-    if (nxDriver->m_NdisMiniportDriverHandle) {
-        LogVerbose(nxDriver->GetRecorderLog(), FLAG_DRIVER, "Calling NdisMDeregisterMiniportDriver");
-        NdisMDeregisterMiniportDriver(nxDriver->m_NdisMiniportDriverHandle);
-        nxDriver->m_NdisMiniportDriverHandle = NULL;
-    } else {
-        LogVerbose(nxDriver->GetRecorderLog(), FLAG_DRIVER, "Did not call NdisMDeregisterMiniportDriver since m_NdisMiniportDriverHandle was NULL\n");
-    }
+RECORDER_LOG
+NxDriver::GetRecorderLog(
+    void
+) const
+{
+    return m_RecorderLog;
+}
 
-    return;
+NDIS_HANDLE
+NxDriver::GetNdisMiniportDriverHandle(
+    void
+) const
+{
+    return m_NdisMiniportDriverHandle;
 }
 
 NX_PRIVATE_GLOBALS *
 NxDriver::GetPrivateGlobals(
     void
-    ) const
+) const
 {
     return m_PrivateGlobals;
 }

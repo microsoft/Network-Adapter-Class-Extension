@@ -2,8 +2,8 @@
 
 #include "Nx.hpp"
 
-#include <NetRingBuffer.h>
-#include <NetPacket.h>
+#include <net/ring.h>
+#include <net/packet.h>
 
 #include "NxQueue.tmh"
 #include "NxQueue.hpp"
@@ -13,7 +13,7 @@
 void
 NetClientQueueStart(
     NET_CLIENT_QUEUE Queue
-    )
+)
 {
     reinterpret_cast<NxQueue *>(Queue)->Start();
 }
@@ -21,7 +21,7 @@ NetClientQueueStart(
 void
 NetClientQueueStop(
     NET_CLIENT_QUEUE Queue
-    )
+)
 {
     reinterpret_cast<NxQueue *>(Queue)->Stop();
 }
@@ -29,7 +29,7 @@ NetClientQueueStop(
 void
 NetClientQueueAdvance(
     NET_CLIENT_QUEUE Queue
-    )
+)
 {
     reinterpret_cast<NxQueue *>(Queue)->Advance();
 }
@@ -38,7 +38,7 @@ static
 void
 NetClientQueueCancel(
     NET_CLIENT_QUEUE Queue
-    )
+)
 {
     reinterpret_cast<NxQueue *>(Queue)->Cancel();
 }
@@ -48,32 +48,33 @@ void
 NetClientQueueSetArmed(
     NET_CLIENT_QUEUE Queue,
     BOOLEAN IsArmed
-    )
+)
 {
     reinterpret_cast<NxQueue *>(Queue)->SetArmed(IsArmed);
 }
 
 static
-SIZE_T
-NetClientQueueGetPacketExtensionOffset(
+void
+NetClientQueueGetExtension(
     NET_CLIENT_QUEUE Queue,
-    NET_CLIENT_PACKET_EXTENSION const * ExtensionToQuery
-    )
+    NET_CLIENT_PACKET_EXTENSION const * ExtensionToQuery,
+    NET_EXTENSION * Extension
+)
 {
     NET_PACKET_EXTENSION_PRIVATE extensionPrivate = {};
     extensionPrivate.Name = ExtensionToQuery->Name;
     extensionPrivate.Version = ExtensionToQuery->Version;
 
-    return reinterpret_cast<NxQueue *>(Queue)->GetPacketExtensionOffset(&extensionPrivate);
+    reinterpret_cast<NxQueue *>(Queue)->GetExtension(&extensionPrivate, Extension);
 }
 
 static
-PCNET_DATAPATH_DESCRIPTOR
-NetClientQueueGetDatapathDescriptor(
+NET_RING_COLLECTION const *
+NetClientQueueGetRingCollection(
     _In_ NET_CLIENT_QUEUE Queue
-    )
+)
 {
-    return reinterpret_cast<NxQueue *>(Queue)->GetPacketRingBufferSet();
+    return reinterpret_cast<NxQueue *>(Queue)->GetRingCollection();
 }
 
 static const NET_CLIENT_QUEUE_DISPATCH QueueDispatch
@@ -84,55 +85,9 @@ static const NET_CLIENT_QUEUE_DISPATCH QueueDispatch
     &NetClientQueueAdvance,
     &NetClientQueueCancel,
     &NetClientQueueSetArmed,
-    &NetClientQueueGetPacketExtensionOffset,
-    &NetClientQueueGetDatapathDescriptor,
+    &NetClientQueueGetExtension,
+    &NetClientQueueGetRingCollection,
 };
-
-NTSTATUS
-GetAttributesContextSize(
-    _In_ NET_PACKET_CONTEXT_ATTRIBUTES const & Attributes,
-    _Out_ ULONG & AttributesContextSize
-    )
-{
-    size_t const contextSize = Attributes.ContextSizeOverride != 0
-        ? Attributes.ContextSizeOverride
-        : Attributes.ContextTypeInfo->ContextSize;
-    size_t const alignedContextSize = WDF_ALIGN_SIZE_UP(contextSize, MEMORY_ALLOCATION_ALIGNMENT);
-
-    if (alignedContextSize < contextSize)
-    {
-        return STATUS_INTEGER_OVERFLOW;
-    }
-
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        RtlSizeTToULong(alignedContextSize, &AttributesContextSize),
-        "Attributes context size invalid, size=%Iu", alignedContextSize);
-
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS
-GetExtensionSize(
-    _In_ QUEUE_CREATION_CONTEXT const & InitContext,
-    _Out_ size_t & ExtensionSize
-    )
-{
-    ULONG size = 0;
-    for (auto & attributes : InitContext.PacketContextAttributes)
-    {
-        ULONG attributesContextSize;
-        CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-            GetAttributesContextSize(attributes, attributesContextSize),
-            "Context attribute size invalid.");
-
-        CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-            RtlULongAdd(size, attributesContextSize, &size),
-            "Extension size too large.");
-    }
-    ExtensionSize = size;
-
-    return STATUS_SUCCESS;
-}
 
 _Use_decl_annotations_
 NxQueue::NxQueue(
@@ -140,7 +95,7 @@ NxQueue::NxQueue(
     ULONG QueueId,
     NET_PACKET_QUEUE_CONFIG const & QueueConfig,
     NxQueue::Type QueueType
-    ) :
+) :
     m_queueId(QueueId),
     m_queueType(QueueType),
     m_adapter(InitContext.Adapter),
@@ -154,12 +109,18 @@ NxQueue::NxQueue(
 void
 NxQueue::Start(
     void
-    )
+)
 {
-    m_packetRingBuffer->BeginIndex = 0;
-    m_packetRingBuffer->NextIndex = 0;
-    m_packetRingBuffer->EndIndex = 0;
-    m_packetRingBuffer->OSReserved2[0] = static_cast<void *>(0);
+    for (auto ring : m_ringCollection.Rings)
+    {
+        if (ring != nullptr)
+        {
+            ring->BeginIndex = 0;
+            ring->NextIndex = 0;
+            ring->EndIndex = 0;
+            ring->OSReserved2[0] = static_cast<void *>(0);
+        }
+    }
 
     if (m_packetQueueConfig.EvtStart)
     {
@@ -170,7 +131,7 @@ NxQueue::Start(
 void
 NxQueue::Stop(
     void
-    )
+)
 {
     if (m_packetQueueConfig.EvtStop)
     {
@@ -181,7 +142,7 @@ NxQueue::Stop(
 void
 NxQueue::Advance(
     void
-    )
+)
 {
     m_packetQueueConfig.EvtAdvance(m_queue);
 }
@@ -189,7 +150,7 @@ NxQueue::Advance(
 void
 NxQueue::Cancel(
     void
-    )
+)
 {
     m_packetQueueConfig.EvtCancel(m_queue);
 }
@@ -197,7 +158,7 @@ NxQueue::Cancel(
 void
 NxQueue::SetArmed(
     bool IsArmed
-    )
+)
 {
     m_packetQueueConfig.EvtSetNotificationEnabled(m_queue, IsArmed);
 }
@@ -205,30 +166,15 @@ NxQueue::SetArmed(
 WDFOBJECT
 NxQueue::GetWdfObject(
     void
-    )
+)
 {
     return m_queue;
-}
-
-_Use_decl_annotations_
-NTSTATUS
-NxQueue::NetQueueInitAddPacketContextAttributes(
-    QUEUE_CREATION_CONTEXT * CreationContext,
-    PNET_PACKET_CONTEXT_ATTRIBUTES ContextAttributes
-    )
-{
-    if (!CreationContext->PacketContextAttributes.append(*ContextAttributes))
-    {
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    return STATUS_SUCCESS;
 }
 
 void
 NxQueue::NotifyMorePacketsAvailable(
     void
-    )
+)
 {
     m_clientDispatch->Notify(m_clientQueue);
 }
@@ -236,7 +182,7 @@ NxQueue::NotifyMorePacketsAvailable(
 NxAdapter *
 NxQueue::GetAdapter(
     void
-    )
+)
 {
     return m_adapter;
 }
@@ -244,15 +190,13 @@ NxQueue::GetAdapter(
 NTSTATUS
 NxQueue::Initialize(
     _In_ QUEUE_CREATION_CONTEXT & InitContext
-    )
+)
 {
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        GetExtensionSize(InitContext, m_privateExtensionSize),
-        "Extension Size too large.");
-
     CX_RETURN_IF_NOT_NT_SUCCESS(
-        PrepareFragmentRingBuffer(InitContext)
-        );
+        CreateRing(
+            ALIGN_UP_BY(sizeof(NET_FRAGMENT), NET_FRAGMENT_ALIGNMENT_BYTES),
+            InitContext.ClientQueueConfig->NumberOfFragments,
+            NET_RING_TYPE_FRAGMENT));
 
     if (m_AddedPacketExtensions.count() != 0)
     {
@@ -277,135 +221,46 @@ NxQueue::Initialize(
         m_privateExtensionOffset = NetPacketGetSize();
     }
 
-    auto const extensionSize = ALIGN_UP_BY(m_privateExtensionSize, MEMORY_ALLOCATION_ALIGNMENT);
-    auto const elementSize = ALIGN_UP_BY(m_privateExtensionOffset + extensionSize, NET_PACKET_ALIGNMENT_BYTES);
-    auto const ringSize = InitContext.ClientQueueConfig->NumberOfPackets * elementSize;
-    auto const allocationSize = ringSize + FIELD_OFFSET(NET_RING_BUFFER, Buffer[0]);
-
-    auto packetRingBuffer = reinterpret_cast<NET_RING_BUFFER*>(
-        ExAllocatePoolWithTag(NonPagedPoolNxCacheAligned, allocationSize, 'BRxN'));
-    if (! packetRingBuffer)
-    {
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    RtlZeroMemory(packetRingBuffer, allocationSize);
-    packetRingBuffer->OSReserved2[1] = this;
-    packetRingBuffer->ElementStride = static_cast<USHORT>(elementSize);
-    packetRingBuffer->NumberOfElements = static_cast<ULONG>(InitContext.ClientQueueConfig->NumberOfPackets);
-    packetRingBuffer->ElementIndexMask = static_cast<ULONG>(InitContext.ClientQueueConfig->NumberOfPackets - 1);
-
-    m_packetRingBuffer.reset(packetRingBuffer);
-
-    NET_DATAPATH_DESCRIPTOR_GET_PACKET_RING_BUFFER(&m_descriptor) = m_packetRingBuffer.get();
-
-    // If we have contexts on the NET_PACKETs, initialize their
-    // information in the queue
-    size_t numberOfContexts = InitContext.PacketContextAttributes.count();
-    if (numberOfContexts > 0)
-    {
-        if (!m_clientContextInfo.resize(numberOfContexts))
-        {
-            return STATUS_INSUFFICIENT_RESOURCES;
-        }
-
-        // For each context type initialize a context token
-        ULONG i = 0;
-        ULONG offset = static_cast<ULONG>(m_privateExtensionOffset);
-        for (auto& packetContextAttribs : InitContext.PacketContextAttributes)
-        {
-            ULONG contextSize;
-
-            // We already made this calculation above, if we're here this should succeed
-            WIN_VERIFY(NT_SUCCESS(
-                GetAttributesContextSize(
-                    packetContextAttribs,
-                    contextSize)));
-
-            m_clientContextInfo[i].Offset = offset;
-            m_clientContextInfo[i].Size = contextSize;
-            m_clientContextInfo[i].ContextTypeInfo = packetContextAttribs.ContextTypeInfo;
-
-            NT_ASSERT(m_clientContextInfo[i].Offset + m_clientContextInfo[i].Size <= m_packetRingBuffer->ElementStride);
-
-            i++;
-
-            // Make sure we don't return a false positive by adding
-            // the size of the last packet context type to the offset
-            // when there is no next context
-            if (i < numberOfContexts)
-            {
-                CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-                    RtlULongAdd(offset, contextSize, &offset),
-                    "Failed to calculate the offset to the packet context");
-            }
-        }
-    }
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        CreateRing(
+            ALIGN_UP_BY(m_privateExtensionOffset, NET_PACKET_ALIGNMENT_BYTES),
+            InitContext.ClientQueueConfig->NumberOfPackets,
+            NET_RING_TYPE_PACKET));
 
     *InitContext.AdapterDispatch = &QueueDispatch;
 
     return STATUS_SUCCESS;
 }
 
-NET_DATAPATH_DESCRIPTOR*
-NxQueue::GetPacketRingBufferSet(
+NET_RING_COLLECTION const *
+NxQueue::GetRingCollection(
     void
-    )
+) const
 {
-    return &m_descriptor;
-}
-
-size_t
-NxQueue::GetPrivateExtensionOffset(
-    void
-    ) const
-{
-    return m_privateExtensionOffset;
-}
-
-Rtl::KArray<NET_PACKET_CONTEXT_TOKEN_INTERNAL, NonPagedPoolNx> &
-NxQueue::GetClientContextInfo(
-    void
-    )
-{
-    return m_clientContextInfo;
+    return &m_ringCollection;
 }
 
 _Use_decl_annotations_
-NET_PACKET_CONTEXT_TOKEN *
-NxQueue::GetPacketContextTokenFromTypeInfo(
-    PCNET_CONTEXT_TYPE_INFO ContextTypeInfo
-    )
+void
+NxQueue::GetExtension(
+    const NET_PACKET_EXTENSION_PRIVATE* ExtensionToQuery,
+    NET_EXTENSION* Extension
+)
 {
-    for (auto & info : m_clientContextInfo)
-    {
-        if (info.ContextTypeInfo == ContextTypeInfo)
-        {
-            return reinterpret_cast<NET_PACKET_CONTEXT_TOKEN *>(&info);
-        }
-    }
-
-    return nullptr;
-}
-
-_Use_decl_annotations_
-size_t
-NxQueue::GetPacketExtensionOffset(
-    const NET_PACKET_EXTENSION_PRIVATE* ExtensionToQuery
-    )
-{
-    size_t assignedOffset = NET_PACKET_EXTENSION_INVALID_OFFSET;
+    Extension->Enabled = false;
 
     for (auto& extension : m_AddedPacketExtensions)
     {
         if ((0 == wcscmp(extension.Name, ExtensionToQuery->Name)) &&
             (extension.Version >= ExtensionToQuery->Version))
         {
-            assignedOffset = extension.AssignedOffset;
+            auto const ring = m_ringCollection.Rings[NET_RING_TYPE_PACKET];
+            Extension->Reserved[0] = ring->Buffer + extension.AssignedOffset;
+            Extension->Reserved[1] = reinterpret_cast<void *>(ring->ElementStride);
+            Extension->Enabled = true;
             break;
         }
     }
-
-    return assignedOffset;
 }
 
 _Use_decl_annotations_
@@ -414,7 +269,7 @@ NxTxQueue::NxTxQueue(
     QUEUE_CREATION_CONTEXT const & InitContext,
     ULONG QueueId,
     NET_PACKET_QUEUE_CONFIG const & QueueConfig
-    ) :
+) :
     CFxObject(static_cast<NETPACKETQUEUE>(Object)),
     NxQueue(InitContext, QueueId, QueueConfig, NxQueue::Type::Tx)
 {
@@ -425,7 +280,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxTxQueue::Initialize(
     QUEUE_CREATION_CONTEXT & InitContext
-    )
+)
 {
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         PrepareAndStorePacketExtensions(InitContext),
@@ -444,7 +299,7 @@ NxRxQueue::NxRxQueue(
     QUEUE_CREATION_CONTEXT const & InitContext,
     ULONG QueueId,
     NET_PACKET_QUEUE_CONFIG const & QueueConfig
-    ) :
+) :
     CFxObject(static_cast<NETPACKETQUEUE>(Object)),
     NxQueue(InitContext, QueueId, QueueConfig, NxQueue::Type::Rx)
 {
@@ -455,7 +310,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxRxQueue::Initialize(
     QUEUE_CREATION_CONTEXT & InitContext
-    )
+)
 {
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         PrepareAndStorePacketExtensions(InitContext),
@@ -497,12 +352,12 @@ _Use_decl_annotations_
 NTSTATUS
 NxQueue::PrepareAndStorePacketExtensions(
     QUEUE_CREATION_CONTEXT & InitContext
-    )
+)
 {
     auto const sortByAlignment = [](
         NET_PACKET_EXTENSION_PRIVATE const & Lhs,
         NET_PACKET_EXTENSION_PRIVATE const & Rhs
-        )
+)
     {
         return Lhs.NonWdfStyleAlignment < Rhs.NonWdfStyleAlignment;
     };
@@ -530,27 +385,28 @@ NxQueue::PrepareAndStorePacketExtensions(
 
 _Use_decl_annotations_
 NTSTATUS
-NxQueue::PrepareFragmentRingBuffer(QUEUE_CREATION_CONTEXT & InitContext)
+NxQueue::CreateRing(
+    size_t ElementSize,
+    UINT32 ElementCount,
+    NET_RING_TYPE RingType
+)
 {
-    auto const numberOfFragments = InitContext.ClientQueueConfig->NumberOfFragments;
-    auto const elementSize = ALIGN_UP_BY(sizeof(NET_PACKET_FRAGMENT), NET_PACKET_FRAGMENT_ALIGNMENT_BYTES);
-    auto const ringSize = numberOfFragments * elementSize ;
-    auto const allocationSize = ringSize + FIELD_OFFSET(NET_RING_BUFFER, Buffer[0]);
+    auto const size = ElementSize * ElementCount + FIELD_OFFSET(NET_RING, Buffer[0]);
+    auto ring = reinterpret_cast<NET_RING *>(
+        ExAllocatePoolWithTag(NonPagedPoolNxCacheAligned, size, 'BRxN'));
 
-    auto fragmentRingBuffer = reinterpret_cast<NET_RING_BUFFER*>(
-        ExAllocatePoolWithTag(NonPagedPoolNxCacheAligned, allocationSize, 'BRxN'));
+    CX_RETURN_NTSTATUS_IF(
+        STATUS_INSUFFICIENT_RESOURCES,
+        ! ring);
 
-    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !fragmentRingBuffer);
+    RtlZeroMemory(ring, size);
+    ring->OSReserved2[1] = this;
+    ring->ElementStride = static_cast<USHORT>(ElementSize);
+    ring->NumberOfElements = static_cast<UINT32>(ElementCount);
+    ring->ElementIndexMask = static_cast<ULONG>(ElementCount - 1);
 
-    RtlZeroMemory(fragmentRingBuffer, allocationSize);
-    fragmentRingBuffer->OSReserved2[1] = this;
-    fragmentRingBuffer->ElementStride = static_cast<USHORT>(elementSize);
-    fragmentRingBuffer->NumberOfElements = static_cast<ULONG>(numberOfFragments);
-    fragmentRingBuffer->ElementIndexMask = static_cast<ULONG>(numberOfFragments - 1);
-
-    m_fragmentRingBuffer.reset(fragmentRingBuffer);
-
-    NET_DATAPATH_DESCRIPTOR_GET_FRAGMENT_RING_BUFFER(&m_descriptor) = m_fragmentRingBuffer.get();
+    m_rings[RingType].reset(ring);
+    m_ringCollection.Rings[RingType] = m_rings[RingType].get();
 
     return STATUS_SUCCESS;
 }

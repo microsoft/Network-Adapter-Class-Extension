@@ -11,11 +11,12 @@
 _Success_(return)
 bool
 NxGetPacketEtherType(
-    _In_ NET_DATAPATH_DESCRIPTOR const *descriptor,
+    _In_ NET_RING_COLLECTION const * descriptor,
     _In_ NET_PACKET const *packet,
     _Out_ USHORT *ethertype)
 {
-    auto fragment = NET_PACKET_GET_FRAGMENT(packet, descriptor, 0);
+    auto fr = NetRingCollectionGetFragmentRing(descriptor);
+    auto fragment = NetRingGetFragmentAtIndex(fr, packet->FragmentIndex);
     auto buffer = (UCHAR const*)fragment->VirtualAddress + fragment->Offset;
     auto bytesRemaining = (ULONG)fragment->ValidLength;
 
@@ -349,12 +350,13 @@ ParseUdpHeader(
 NET_PACKET_LAYOUT
 NxGetPacketLayout(
     _In_ NDIS_MEDIUM mediaType,
-    _In_ NET_DATAPATH_DESCRIPTOR const * descriptor,
+    _In_ NET_RING_COLLECTION const * descriptor,
     _In_ NET_PACKET const *packet)
 {
     NT_ASSERT(packet->FragmentCount != 0);
 
-    auto fragment = NET_PACKET_GET_FRAGMENT(packet, descriptor, 0);
+    auto fr = NetRingCollectionGetFragmentRing(descriptor);
+    auto fragment = NetRingGetFragmentAtIndex(fr, packet->FragmentIndex);
     auto buffer = (UCHAR const*)fragment->VirtualAddress + fragment->Offset;
     auto bytesRemaining = (ULONG)fragment->ValidLength;
 

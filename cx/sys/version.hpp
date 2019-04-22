@@ -5,7 +5,7 @@
 #define INIT_GUID
 #include <initguid.h>
 
-#include <netadaptercxfuncenum.h>
+#include <netfuncenum.h>
 
 #include <NxXlat.hpp>
 
@@ -40,6 +40,13 @@ struct NX_PRIVATE_GLOBALS {
     // Pointer to the client driver's WDF globals
     //
     WDF_DRIVER_GLOBALS *ClientDriverGlobals;
+
+    //
+    // True if the client driver is a media specific
+    // extension. For the list of such client drivers
+    // see Verifier_VerifyIsMediaExtension
+    //
+    bool IsMediaExtension;
 };
 
 class CxDriverContext
@@ -73,7 +80,7 @@ NxDbgBreak(
 FORCEINLINE
 NX_PRIVATE_GLOBALS *
 GetPrivateGlobals(
-    PNET_DRIVER_GLOBALS PublicGlobals
+    NET_DRIVER_GLOBALS * PublicGlobals
     )
 {
     return CONTAINING_RECORD(PublicGlobals,

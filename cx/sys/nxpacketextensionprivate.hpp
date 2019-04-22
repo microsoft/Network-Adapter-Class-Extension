@@ -13,7 +13,7 @@ public:
     NTSTATUS
     Initialize(
         _In_ NET_PACKET_EXTENSION_PRIVATE const * Extension
-        );
+    );
 
     NET_PACKET_EXTENSION_PRIVATE
         m_extension = {};

@@ -238,7 +238,7 @@ NxExecutionContext::SetDebugNameHint(
 void
 NxExecutionContext::UpdateCounters(
     _In_ bool IsIdleIteration
-    )
+)
 {
     m_ecCounters.IterationCount++;
     UINT64 threadCycleTime = 0;

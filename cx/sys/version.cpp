@@ -63,7 +63,7 @@ CxDriverContext::Init()
 void
 CxDriverContext::Destroy(
     _In_ WDFOBJECT Driver
-    )
+)
 {
     CxDriverContext *context = GetCxDriverContextFromHandle(Driver);
 
@@ -75,7 +75,7 @@ static
 void
 EvtDriverUnload(
     WDFDRIVER Driver
-    )
+)
 /*++
 Routine Description:
     Driver Unload routine. Client register this routine with WDF at the time
@@ -110,7 +110,7 @@ static
 NTSTATUS
 NetAdapterCxInitialize(
     VOID
-    )
+)
 {
     return STATUS_SUCCESS;
 }
@@ -119,7 +119,7 @@ static
 VOID
 NetAdapterCxDeinitialize(
     VOID
-    )
+)
 {
 }
 
@@ -128,7 +128,7 @@ ULONG64
 MAKEVER(
     ULONG major,
     ULONG minor
-    )
+)
 {
     return (static_cast<ULONG64>(major) << 16) | minor;
 }
@@ -136,9 +136,9 @@ MAKEVER(
 static
 NTSTATUS
 NetAdapterCxBindClient(
-    PWDF_CLASS_BIND_INFO   ClassInfo,
-    PWDF_COMPONENT_GLOBALS ClientGlobals
-    )
+    WDF_CLASS_BIND_INFO *  ClassInfo,
+    WDF_COMPONENT_GLOBALS * ClientGlobals
+)
 /*++
 Routine Description:
     This call is called by WDF to bind a NetAdapterCx client driver to the NetAdapterCx.
@@ -165,6 +165,7 @@ Return Value:
         case MAKEVER(1,0):
         case MAKEVER(1,1):
         case MAKEVER(1,2):
+        case MAKEVER(1,3):
             DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                 "\n\n"
                 "**********************************************************\n"
@@ -173,8 +174,7 @@ Return Value:
                 "**********************************************************\n"
                 "\n",
                 ClassInfo->Version.Minor,
-                NETADAPTER_CURRENT_MINOR_VERSION
-            );
+                NETADAPTER_CURRENT_MINOR_VERSION);
 
             __fallthrough;
 
@@ -184,16 +184,19 @@ Return Value:
 
         case MAKEVER(NETADAPTER_CURRENT_MAJOR_VERSION, NETADAPTER_CURRENT_MINOR_VERSION):
 
-            // The current in-development version has a changing ABI.
-            // To detect common ABI mismatches, check if the function table looks correct.
+            if (ClassInfo->FunctionTableCount != NetFunctionTableNumEntries &&
+                ClassInfo->Version.Build > 0)
+            {
+                //
+                // If a client driver is using a preview version of NetAdapterCx we only
+                // let it bind if it is targeting the latest preview the OS supports
+                //
 
-            if (ClassInfo->FunctionTableCount != NetFunctionTableNumEntries) {
                 DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                         "\n\n************************* \n"
                         "* NetAdapterCx detected a function count mismatch. The driver \n"
                         "* using this extension will not load until it is re-compiled \n"
-                        "* with the latest version of the extension's header and libs \n"
-                        );
+                        "* with the latest version of the extension's header and libs \n");
                 DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                         "* Actual function table count  : %u \n"
                         "* Expected function table count: %u \n"
@@ -204,6 +207,12 @@ Return Value:
                 return STATUS_INVALID_PARAMETER;
             }
     }
+
+    //
+    // Verify our function table has at least the amount of entries the class extension
+    // is requesting. If not we messed up the version check above
+    //
+    NT_FRE_ASSERT(NetVersion.FuncCount >= ClassInfo->FunctionTableCount);
 
     //
     // Setup the function table
@@ -245,8 +254,7 @@ Return Value:
         //
         DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
             "\n\n************************* \n"
-            "* Driver verifier should be enabled on both client and Cx\n"
-            );
+            "* Driver verifier should be enabled on both client and Cx\n");
         DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
             "* If not, DV may report false violations while verifiying NDIS rules\n"
             "*************************** \n\n");
@@ -255,16 +263,16 @@ Return Value:
 
     pGlobals->ClientDriverGlobals = reinterpret_cast<WDF_DRIVER_GLOBALS *>(ClientGlobals);
 
-    *((PNET_DRIVER_GLOBALS*)ClassInfo->ClassBindInfo) = &pGlobals->Public;
+    *((NET_DRIVER_GLOBALS **)ClassInfo->ClassBindInfo) = &pGlobals->Public;
     return STATUS_SUCCESS;
 }
 
 static
 VOID
 NetAdapterCxUnbindClient(
-    PWDF_CLASS_BIND_INFO   ClassInfo,
-    PWDF_COMPONENT_GLOBALS ClientGlobals
-    )
+    WDF_CLASS_BIND_INFO * ClassInfo,
+    WDF_COMPONENT_GLOBALS * ClientGlobals
+)
 /*++
 
 Routine Description:
@@ -279,19 +287,19 @@ Arguments:
 
 --*/
 {
-    PNET_DRIVER_GLOBALS    publicGlobals;
+    NET_DRIVER_GLOBALS * publicGlobals;
     UNREFERENCED_PARAMETER(ClientGlobals);
 
     if (ClassInfo->ClassBindInfo == NULL) {
         return;
     }
 
-    publicGlobals = *((PNET_DRIVER_GLOBALS*)ClassInfo->ClassBindInfo);
+    publicGlobals = *((NET_DRIVER_GLOBALS **)ClassInfo->ClassBindInfo);
 
     if (publicGlobals == NULL) {
         return;
     }
-    auto pGlobals = GetPrivateGlobals(*((PNET_DRIVER_GLOBALS*)ClassInfo->ClassBindInfo));
+    auto pGlobals = GetPrivateGlobals(*((NET_DRIVER_GLOBALS **)ClassInfo->ClassBindInfo));
 
     Verifier_VerifyPrivateGlobals(pGlobals);
 
@@ -304,7 +312,7 @@ static
 NTSTATUS
 CreateControlDevice(
     _Inout_ PUNICODE_STRING Name
-    )
+)
 /*++
 
 Routine Description:
@@ -324,7 +332,7 @@ Arguments:
 {
     NTSTATUS status = STATUS_SUCCESS;
 
-    PWDFDEVICE_INIT pInit;
+    WDFDEVICE_INIT * pInit;
     ULONG i;
 
     pInit = WdfControlDeviceInitAllocate(WdfGetDriver(), &SDDL_DEVOBJ_KERNEL_ONLY);
@@ -370,7 +378,7 @@ static
 VOID
 DeleteControlDevice(
     VOID
-    )
+)
 /*++
 
 Routine Description:
@@ -410,7 +418,7 @@ NTSTATUS
 DriverEntry(
     PDRIVER_OBJECT DriverObject,
     PUNICODE_STRING RegistryPath
-    )
+)
 /*++
 Routine Description:
     The standard DriverEntry routine for any driver.
@@ -482,21 +490,7 @@ Routine Description:
     // Cx callbacks with NDIS. NDIS.sys calls these callbacks at
     // the appropriate time.
     //
-    NDIS_WDF_CX_CHARACTERISTICS_INIT(&chars);
-    chars.EvtCxGetDeviceObject = NxAdapter::_EvtNdisGetDeviceObject;
-    chars.EvtCxGetNextDeviceObject = NxAdapter::_EvtNdisGetNextDeviceObject;
-    chars.EvtCxGetAssignedFdoName = NxAdapter::_EvtNdisGetAssignedFdoName;
-    chars.EvtCxPowerReference = NxAdapter::_EvtNdisPowerReference;
-    chars.EvtCxPowerDereference = NxAdapter::_EvtNdisPowerDereference;
-    chars.EvtCxPowerAoAcEngage = NxAdapter::_EvtNdisAoAcEngage;
-    chars.EvtCxPowerAoAcDisengage = NxAdapter::_EvtNdisAoAcDisengage;
-    chars.EvtCxGetNdisHandleFromDeviceObject = NxAdapter::_EvtNdisWdmDeviceGetNdisAdapterHandle;
-    chars.EvtCxUpdatePMParameters = NxAdapter::_EvtNdisUpdatePMParameters;
-    chars.EvtCxAllocateMiniportBlock = NxAdapter::_EvtNdisAllocateMiniportBlock;
-    chars.EvtCxMiniportCompleteAdd = NxAdapter::_EvtNdisMiniportCompleteAdd;
-    chars.EvtCxDeviceStartComplete = NxAdapter::_EvtNdisDeviceStartComplete;
-    chars.EvtCxMiniportDeviceReset = NxAdapter::_EvtNdisMiniportDeviceReset;
-    chars.EvtCxMiniportQueryDeviceResetSupport = NxAdapter::_EvtNdisMiniportQueryDeviceResetSupport;
+    NdisWdfCxCharacteristicsInitialize(chars);
 
     //
     // Register with NDIS

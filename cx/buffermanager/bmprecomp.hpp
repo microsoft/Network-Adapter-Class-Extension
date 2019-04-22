@@ -1,15 +1,8 @@
 
 #include "umwdm.h"
 #include <ntintsafe.h>
-#include "KArray.h"
-#include <wil\resource.h>
-
-#ifndef NET_ADAPTER_CX_1_3
-#define NET_ADAPTER_CX_1_3 1
-#include <netringbuffer.h>
-#include <netpacket.h>
-#undef NET_ADAPTER_CX_1_3
-#endif //!NET_ADAPTER_CX_1_3
+#include <KArray.h>
+#include <wil/resource.h>
 
 #include <NxTrace.hpp>
 #include <NxTraceLogging.hpp>

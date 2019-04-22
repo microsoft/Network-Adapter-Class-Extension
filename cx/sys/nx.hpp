@@ -25,18 +25,17 @@ Abstract:
 #include <wdfcxbase.h>
 #include <wdfldr.h>
 
-#include <wil\resource.h>
+#include <wil/resource.h>
 
-#include <netadaptercx.h>
-#include <netringbuffer.h>
+#include <preview/netadaptercx.h>
+
+#include <net/ring.h>
 #include <netpacketpool.h>
-#include <netpacketlibrary.h>
 
-// Since we're hiding this header from clients, we
-// need to include it directly
-#include <netadaptercx_p\1.2\netpacketextension_p.h>
-#include <netadaptercx_p\1.3\netadapterextension.h>
-#include <netadaptercx_p\1.3\netdevice_p.h>
+#include <netadapter_p.h>
+#include <netpacketextension_p.h>
+#include <netadapterextension_p.h>
+#include <netdevice_p.h>
 
 #include <ndis_p.h>
 #include <ndiswdf.h>

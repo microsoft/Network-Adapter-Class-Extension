@@ -12,6 +12,9 @@ Abstract:
 #include "verifier.tmh"
 #include "verifier.hpp"
 
+#include <net/checksumtypes_p.h>
+#include <net/lsotypes_p.h>
+
 #include "NxAdapter.hpp"
 #include "NxDevice.hpp"
 #include "NxDriver.hpp"
@@ -20,8 +23,6 @@ Abstract:
 #include "NxRequest.hpp"
 #include "NxWake.hpp"
 #include "version.hpp"
-
-#define NXQUEUE_FROM_RING_BUFFER(rb) ((NxQueue*)(rb)->OSReserved2[1])
 
 //
 // If you change this behavior, or add new ones, make sure to update these comments.
@@ -39,7 +40,7 @@ Verifier_ReportViolation(
     _In_ FailureCode         FailureCode,
     _In_ ULONG_PTR           Parameter2,
     _In_ ULONG_PTR           Parameter3
-    )
+)
 /*++
 Routine Description:
     This function takes failure parameters, and based on Action decides how to report it.
@@ -69,7 +70,7 @@ Routine Description:
 VOID
 Verifier_VerifyPrivateGlobals(
     NX_PRIVATE_GLOBALS * PrivateGlobals
-    )
+)
 {
     if (PrivateGlobals->Signature != NX_PRIVATE_GLOBALS_SIG)
     {
@@ -88,7 +89,7 @@ NetAdapterCxBugCheck(
     _In_ FailureCode         FailureCode,
     _In_ ULONG_PTR           Parameter2,
     _In_ ULONG_PTR           Parameter3
-    )
+)
 /*++
 Routine Description:
     This function will bugcheck the system using NetAdapterCx bugcode. The first parameter
@@ -108,7 +109,7 @@ Routine Description:
 VOID
 Verifier_VerifyIrqlPassive(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals
-    )
+)
 {
     KIRQL currentIrql = KeGetCurrentIrql();
 
@@ -126,7 +127,7 @@ Verifier_VerifyIrqlPassive(
 VOID
 Verifier_VerifyIrqlLessThanOrEqualDispatch(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals
-    )
+)
 {
     KIRQL currentIrql = KeGetCurrentIrql();
 
@@ -145,7 +146,7 @@ VOID
 Verifier_VerifyAdapterNotStarted(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NxAdapter *         pNxAdapter
-    )
+)
 {
     if (pNxAdapter->StartCalled())
     {
@@ -162,7 +163,7 @@ VOID
 Verifier_VerifyNetPowerSettingsAccessible(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NxWake *             NetWake
-    )
+)
 {
     if (!NetWake->ArePowerSettingsAccessible())
     {
@@ -176,28 +177,11 @@ Verifier_VerifyNetPowerSettingsAccessible(
 }
 
 VOID
-Verifier_VerifyObjectSupportsCancellation(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ WDFOBJECT Object
-    )
-{
-    if (GetNxRequestFromHandle(static_cast<NETREQUEST>(Object)) == NULL)
-    {
-        Verifier_ReportViolation(
-            PrivateGlobals,
-            VerifierAction_BugcheckAlways,
-            FailureCode_ObjectIsNotCancelable,
-            (ULONG_PTR)Object,
-            0);
-    }
-}
-
-VOID
 Verifier_VerifyNetRequestCompletionStatusNotPending(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NETREQUEST NetRequest,
     _In_ NTSTATUS   CompletionStatus
-    )
+)
 {
     if (CompletionStatus == STATUS_PENDING)
     {
@@ -215,7 +199,7 @@ Verifier_VerifyNetRequestType(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NxRequest * NxRequest,
     _In_ NDIS_REQUEST_TYPE Type
-    )
+)
 {
     NT_ASSERT(Type != NdisRequestQueryInformation && Type != NdisRequestQueryStatistics);
 
@@ -234,7 +218,7 @@ VOID
 Verifier_VerifyNetRequestIsQuery(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NxRequest * NxRequest
-    )
+)
 {
     if (NxRequest->m_NdisOidRequest->RequestType != NdisRequestQueryInformation &&
         NxRequest->m_NdisOidRequest->RequestType != NdisRequestQueryStatistics)
@@ -252,7 +236,7 @@ VOID
 Verifier_VerifyNetRequest(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NxRequest * pNxRequest
-    )
+)
 {
     switch (pNxRequest->m_NdisOidRequest->RequestType)
     {
@@ -279,7 +263,7 @@ VOID
 Verifier_VerifyNotNull(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ void const * const Ptr
-    )
+)
 {
     if (!Ptr)
     {
@@ -295,8 +279,8 @@ Verifier_VerifyNotNull(
 NTSTATUS
 Verifier_VerifyQueueConfiguration(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ PNET_REQUEST_QUEUE_CONFIG QueueConfig
-    )
+    _In_ NET_REQUEST_QUEUE_CONFIG * QueueConfig
+)
 {
     NTSTATUS status = STATUS_SUCCESS;
 
@@ -456,7 +440,7 @@ Verifier_VerifyPowerCapabilities(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NxAdapter const & NxAdapter,
     _In_ NET_ADAPTER_POWER_CAPABILITIES const & PowerCapabilities
-    )
+)
 {
     if(!VERIFIER_CHECK_FLAGS(PowerCapabilities.Flags, NET_ADAPTER_POWER_CAPABILITIES_SUPPORTED_FLAGS))
     {
@@ -561,8 +545,8 @@ Verifier_VerifyPowerCapabilities(
 VOID
 Verifier_VerifyLinkLayerCapabilities(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ PNET_ADAPTER_LINK_LAYER_CAPABILITIES LinkLayerCapabilities
-    )
+    _In_ NET_ADAPTER_LINK_LAYER_CAPABILITIES * LinkLayerCapabilities
+)
 {
     if (!VERIFIER_CHECK_FLAGS(LinkLayerCapabilities->SupportedStatistics, NET_ADAPTER_STATISTICS_SUPPORTED_FLAGS))
     {
@@ -589,7 +573,7 @@ VOID
 Verifier_VerifyLinkLayerAddress(
     _In_ NX_PRIVATE_GLOBALS *PrivateGlobals,
     _In_ NET_ADAPTER_LINK_LAYER_ADDRESS *LinkLayerAddress
-    )
+)
 {
     if (LinkLayerAddress->Length > NDIS_MAX_PHYS_ADDRESS_LENGTH)
     {
@@ -607,8 +591,8 @@ Verifier_VerifyLinkLayerAddress(
 VOID
 Verifier_VerifyCurrentLinkState(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ PNET_ADAPTER_LINK_STATE LinkState
-    )
+    _In_ NET_ADAPTER_LINK_STATE * LinkState
+)
 {
     switch (LinkState->MediaConnectState)
     {
@@ -683,7 +667,7 @@ VOID
 Verifier_VerifyQueryAsUlongFlags(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NET_CONFIGURATION_QUERY_ULONG_FLAGS Flags
-    )
+)
 {
     if (!VERIFIER_CHECK_FLAGS(Flags, NET_CONFIGURATION_QUERY_ULONG_SUPPORTED_FLAGS))
     {
@@ -696,74 +680,11 @@ Verifier_VerifyQueryAsUlongFlags(
     }
 }
 
-NTSTATUS
-Verifier_VerifyQueryNetworkAddressParameters(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ ULONG BufferLength,
-    _In_ PVOID NetworkAddressBuffer
-    )
-{
-    if ((BufferLength == 0) || (NetworkAddressBuffer == NULL))
-    {
-        Verifier_ReportViolation(
-            PrivateGlobals,
-            VerifierAction_DbgBreakIfDebuggerPresent,
-            FailureCode_QueryNetworkAddressInvalidParameter,
-            0,
-            0);
-
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    return STATUS_SUCCESS;
-}
-
-VOID
-Verifier_VerifyNetPacketContextToken(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ NET_DATAPATH_DESCRIPTOR const * Descriptor,
-    _In_ NET_PACKET* NetPacket,
-    _In_ PNET_PACKET_CONTEXT_TOKEN Token
-    )
-{
-    UNREFERENCED_PARAMETER(NetPacket);
-
-    // If verifier is enabled, make sure the packet context
-    // token is valid
-    if (PrivateGlobals->CxVerifierOn)
-    {
-        auto rb = NET_DATAPATH_DESCRIPTOR_GET_PACKET_RING_BUFFER(Descriptor);
-        NxQueue *queue = NXQUEUE_FROM_RING_BUFFER(rb);
-
-        bool tokenFound = false;
-        for (auto& contextInfo : queue->GetClientContextInfo())
-        {
-            if ((ULONG_PTR)Token == (ULONG_PTR)&contextInfo)
-            {
-                tokenFound = true;
-                break;
-            }
-        }
-
-        if (!tokenFound)
-        {
-            // Token was not found in the queue that owns the
-            // NET_PACKET, this is not valid
-            Verifier_ReportViolation(
-                PrivateGlobals,
-                VerifierAction_BugcheckAlways,
-                FailureCode_InvalidPacketContextToken,
-                (ULONG_PTR)Token,
-                0);
-        }
-    }
-}
-
 VOID
 Verifier_VerifyMtuSize(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
          ULONG MtuSize
-    )
+)
 {
     if (MtuSize == 0)
     {
@@ -780,7 +701,7 @@ VOID
 Verifier_VerifyQueueInitContext(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ QUEUE_CREATION_CONTEXT *NetQueueInit
-    )
+)
 {
     if (NetQueueInit->Signature != QUEUE_CREATION_CONTEXT_SIGNATURE)
     {
@@ -817,7 +738,7 @@ VOID
 Verifier_VerifyNetPacketQueueConfiguration(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NET_PACKET_QUEUE_CONFIG const * Configuration
-    )
+)
 {
     // All Evt callbacks are required
     if (Configuration->EvtCancel == nullptr ||
@@ -836,8 +757,8 @@ Verifier_VerifyNetPacketQueueConfiguration(
 VOID
 Verifier_VerifyObjectAttributesParentIsNull(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ PWDF_OBJECT_ATTRIBUTES ObjectAttributes
-    )
+    _In_ WDF_OBJECT_ATTRIBUTES * ObjectAttributes
+)
 {
     if (ObjectAttributes != nullptr && ObjectAttributes->ParentObject != nullptr)
     {
@@ -853,9 +774,9 @@ Verifier_VerifyObjectAttributesParentIsNull(
 VOID
 Verifier_VerifyObjectAttributesContextSize(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_opt_ PWDF_OBJECT_ATTRIBUTES ObjectAttributes,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES * ObjectAttributes,
     _In_ SIZE_T MaximumContextSize
-    )
+)
 {
     // FxValidateObjectAttributes checks most problems; we only add a maximum size check.
 
@@ -888,7 +809,7 @@ VOID
 Verifier_VerifyDatapathCallbacks(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NET_ADAPTER_DATAPATH_CALLBACKS const *DatapathCallbacks
-    )
+)
 {
     if (DatapathCallbacks->EvtAdapterCreateRxQueue == nullptr ||
         DatapathCallbacks->EvtAdapterCreateTxQueue == nullptr)
@@ -906,7 +827,7 @@ VOID
 Verifier_VerifyAdapterInitSignature(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ AdapterInit const *AdapterInit
-    )
+)
 {
     if (AdapterInit->InitSignature != ADAPTER_INIT_SIGNATURE)
     {
@@ -923,7 +844,7 @@ VOID
 Verifier_VerifyAdapterExtensionInitSignature(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ AdapterExtensionInit const *AdapterExtensionInit
-    )
+)
 {
     if (AdapterExtensionInit->InitSignature != ADAPTER_EXTENSION_INIT_SIGNATURE)
     {
@@ -940,7 +861,7 @@ VOID
 Verifier_VerifyAdapterInitNotUsed(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ AdapterInit const *AdapterInit
-    )
+)
 {
     if (AdapterInit->CreatedAdapter != nullptr)
     {
@@ -956,8 +877,8 @@ Verifier_VerifyAdapterInitNotUsed(
 VOID
 Verifier_VerifyReceiveScalingCapabilities(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ PCNET_ADAPTER_RECEIVE_SCALING_CAPABILITIES Capabilities
-    )
+    _In_ NET_ADAPTER_RECEIVE_SCALING_CAPABILITIES const * Capabilities
+)
 {
     if (! RTL_IS_POWER_OF_TWO(Capabilities->IndirectionTableSize))
     {
@@ -1023,24 +944,6 @@ Verifier_VerifyReceiveScalingCapabilities(
 }
 
 VOID
-Verifier_VerifyNetPacketContextAttributes(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ PNET_PACKET_CONTEXT_ATTRIBUTES PacketContextAttributes
-)
-{
-    if (PacketContextAttributes->ContextSizeOverride != 0 &&
-        PacketContextAttributes->ContextSizeOverride < PacketContextAttributes->ContextTypeInfo->Size)
-    {
-        Verifier_ReportViolation(
-            PrivateGlobals,
-            VerifierAction_BugcheckAlways,
-            FailureCode_InvalidPacketContextSizeOverride,
-            (ULONG_PTR)PacketContextAttributes->ContextSizeOverride,
-            (ULONG_PTR)PacketContextAttributes->ContextTypeInfo->Size);
-    }
-}
-
-VOID
 Verifier_VerifyNetPacketExtensionName(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ PCWSTR ExtensionName
@@ -1062,7 +965,7 @@ Verifier_VerifyNetPacketExtensionName(
 VOID
 Verifier_VerifyNetPacketExtensionVersionedSize(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ PNET_PACKET_EXTENSION NetPacketExtension
+    _In_ NET_PACKET_EXTENSION const * NetPacketExtension
 )
 {
     bool reportVersionedSizeViolation = false;
@@ -1116,7 +1019,7 @@ Verifier_VerifyNetPacketExtensionVersionedSize(
 VOID
 Verifier_VerifyNetPacketExtension(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ PNET_PACKET_EXTENSION NetPacketExtension
+    _In_ NET_PACKET_EXTENSION const * NetPacketExtension
 )
 {
     if ((NetPacketExtension->Name == nullptr) ||
@@ -1171,7 +1074,7 @@ Verifier_VerifyNetPacketExtension(
 VOID
 Verifier_VerifyNetPacketExtensionQuery(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ PNET_PACKET_EXTENSION_QUERY NetPacketExtension
+    _In_ NET_PACKET_EXTENSION_QUERY const * NetPacketExtension
 )
 {
     if ((NetPacketExtension->Name == nullptr) ||
@@ -1202,11 +1105,11 @@ VOID
 Verifier_VerifyNetAdapterTxCapabilities(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ const NET_ADAPTER_TX_CAPABILITIES *TxCapabilities
-    )
+)
 {
     // If the mapping requirement is DMA, the adapter has to provide the DMA capabilities
     if (TxCapabilities->MappingRequirement == NetMemoryMappingRequirementDmaMapped &&
-        TxCapabilities->DmaCapabilities == nullptr)
+        ((TxCapabilities->DmaCapabilities == nullptr) || (TxCapabilities->DmaCapabilities->DmaEnabler == nullptr)))
     {
         Verifier_ReportViolation(
             PrivateGlobals,
@@ -1216,6 +1119,24 @@ Verifier_VerifyNetAdapterTxCapabilities(
             1);
     }
 
+    // If the mapping requirement is DMA, the adapter has to provide the DMA v3 inteface
+    if (TxCapabilities->MappingRequirement == NetMemoryMappingRequirementDmaMapped)
+    {
+        PDMA_ADAPTER dmaAdapter =
+            WdfDmaEnablerWdmGetDmaAdapter(TxCapabilities->DmaCapabilities->DmaEnabler,
+                                          WdfDmaDirectionWriteToDevice);
+
+        if (dmaAdapter->DmaOperations->GetDmaAdapterInfo == nullptr)
+        {
+            Verifier_ReportViolation(
+                PrivateGlobals,
+                VerifierAction_BugcheckAlways,
+                FailureCode_InvalidAdapterTxCapabilities,
+                (ULONG_PTR) TxCapabilities,
+                2);
+        }
+    }
+
     if (TxCapabilities->MaximumNumberOfQueues == 0)
     {
         Verifier_ReportViolation(
@@ -1223,7 +1144,7 @@ Verifier_VerifyNetAdapterTxCapabilities(
             VerifierAction_BugcheckAlways,
             FailureCode_InvalidAdapterTxCapabilities,
             (ULONG_PTR)TxCapabilities,
-            2);
+            3);
     }
 
     // A valid fragment alignment requirement is either the default value or in the format (2^n)
@@ -1235,7 +1156,7 @@ Verifier_VerifyNetAdapterTxCapabilities(
             VerifierAction_BugcheckAlways,
             FailureCode_InvalidAdapterTxCapabilities,
             (ULONG_PTR)TxCapabilities,
-            3);
+            4);
     }
 
     if ((TxCapabilities->FragmentRingNumberOfElementsHint > 0) &&
@@ -1246,7 +1167,7 @@ Verifier_VerifyNetAdapterTxCapabilities(
             VerifierAction_BugcheckAlways,
             FailureCode_NotPowerOfTwo,
             TxCapabilities->FragmentRingNumberOfElementsHint,
-            4);
+            5);
     }
 }
 
@@ -1254,7 +1175,7 @@ VOID
 Verifier_VerifyNetAdapterRxCapabilities(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ const NET_ADAPTER_RX_CAPABILITIES *RxCapabilities
-    )
+)
 {
     // If the adapter does not ask the OS to allocate receive fragments, then
     // EvtAdapterReturnRxBuffer must be set
@@ -1274,7 +1195,7 @@ Verifier_VerifyNetAdapterRxCapabilities(
 
     // If the mapping requirement is DMA, the adapter has to provide the DMA capabilities
     if (RxCapabilities->MappingRequirement == NetMemoryMappingRequirementDmaMapped &&
-        RxCapabilities->DmaCapabilities == nullptr)
+        ((RxCapabilities->DmaCapabilities == nullptr) || (RxCapabilities->DmaCapabilities->DmaEnabler == nullptr)))
     {
         Verifier_ReportViolation(
             PrivateGlobals,
@@ -1284,6 +1205,24 @@ Verifier_VerifyNetAdapterRxCapabilities(
             1);
     }
 
+    // If the mapping requirement is DMA, the adapter has to provide the DMA v3 inteface
+    if (RxCapabilities->MappingRequirement == NetMemoryMappingRequirementDmaMapped)
+    {
+        PDMA_ADAPTER dmaAdapter =
+            WdfDmaEnablerWdmGetDmaAdapter(RxCapabilities->DmaCapabilities->DmaEnabler,
+                                          WdfDmaDirectionReadFromDevice);
+
+        if (dmaAdapter->DmaOperations->GetDmaAdapterInfo == nullptr)
+        {
+            Verifier_ReportViolation(
+                PrivateGlobals,
+                VerifierAction_BugcheckAlways,
+                FailureCode_InvalidAdapterRxCapabilities,
+                (ULONG_PTR) RxCapabilities,
+                2);
+        }
+    }
+
     if (RxCapabilities->MaximumNumberOfQueues == 0)
     {
         Verifier_ReportViolation(
@@ -1291,7 +1230,7 @@ Verifier_VerifyNetAdapterRxCapabilities(
             VerifierAction_BugcheckAlways,
             FailureCode_InvalidAdapterRxCapabilities,
             (ULONG_PTR)RxCapabilities,
-            2);
+            3);
     }
 
     // A valid fragment alignment requirement is either the default value or in the format (2^n)
@@ -1303,7 +1242,7 @@ Verifier_VerifyNetAdapterRxCapabilities(
             VerifierAction_BugcheckAlways,
             FailureCode_NotPowerOfTwo,
             RxCapabilities->FragmentBufferAlignment,
-            3);
+            4);
     }
 
     if ((RxCapabilities->FragmentRingNumberOfElementsHint > 0) &&
@@ -1314,33 +1253,7 @@ Verifier_VerifyNetAdapterRxCapabilities(
             VerifierAction_BugcheckAlways,
             FailureCode_NotPowerOfTwo,
             RxCapabilities->FragmentRingNumberOfElementsHint,
-            4);
-    }
-}
-
-VOID
-Verifier_VerifyAdapterCanBeDeleted(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ NxAdapter const *Adapter
-    )
-{
-    WDFDEVICE parentDevice = Adapter->GetDevice();
-
-    if (parentDevice != nullptr)
-    {
-        NxDevice *nxDevice = GetNxDeviceFromHandle(parentDevice);
-
-        // The default NETADAPTER can't be deleted while the device
-        // is still started
-        if (Adapter->IsDefault() && nxDevice->IsStarted())
-        {
-            Verifier_ReportViolation(
-                PrivateGlobals,
-                VerifierAction_BugcheckAlways,
-                FailureCode_IllegalAdapterDelete,
-                reinterpret_cast<ULONG_PTR>(Adapter),
-                0);
-        }
+            5);
     }
 }
 
@@ -1349,7 +1262,7 @@ Verifier_VerifyDeviceAdapterCollectionIsEmpty(
     _In_ NX_PRIVATE_GLOBALS *PrivateGlobals,
     _In_ NxDevice const *Device,
     _In_ NxAdapterCollection const *AdapterCollection
-    )
+)
 {
     if (AdapterCollection->Count() > 0)
     {
@@ -1366,7 +1279,7 @@ VOID
 Verifier_VerifyLsoCapabilities(
     _In_ NX_PRIVATE_GLOBALS *PrivateGlobals,
     _In_ NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES const *LsoCapabilities
-    )
+)
 {
     if (LsoCapabilities->IPv4 || LsoCapabilities->IPv6)
     {
@@ -1389,5 +1302,77 @@ Verifier_VerifyLsoCapabilities(
                 LsoCapabilities->MinimumSegmentCount,
                 2);
         }
+    }
+}
+
+void
+Verifier_VerifyIsMediaExtension(
+    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals
+)
+{
+    auto const clientName = &PrivateGlobals->ClientDriverGlobals->DriverName[0];
+    auto const maxClientNameCch = ARRAYSIZE(PrivateGlobals->ClientDriverGlobals->DriverName);
+
+    // We only support MbbCx as of now
+    if (_strnicmp(clientName, "mbbcx", maxClientNameCch) != 0)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_IllegalPrivateApiCall,
+            0,
+            0);
+    }
+}
+
+void
+Verifier_VerifyExtensionGlobals(
+    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals
+)
+{
+    Verifier_VerifyPrivateGlobals(PrivateGlobals);
+
+    if (!PrivateGlobals->IsMediaExtension)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_IllegalPrivateApiCall,
+            1,
+            0);
+    }
+}
+
+void
+Verifier_VerifyRxQueueHandle(
+    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NETPACKETQUEUE NetRxQueue
+)
+{
+    if (!GetRxQueueFromHandle(NetRxQueue))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidQueueHandle,
+            0,
+            0);
+    }
+}
+
+void
+Verifier_VerifyTxQueueHandle(
+    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NETPACKETQUEUE NetTxQueue
+)
+{
+    if (!GetTxQueueFromHandle(NetTxQueue))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidQueueHandle,
+            1,
+            0);
     }
 }

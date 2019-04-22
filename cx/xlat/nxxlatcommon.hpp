@@ -28,57 +28,13 @@ using unique_nbl = wistd::unique_ptr<NET_BUFFER_LIST, wil::function_deleter<decl
 using unique_nbl_pool = wil::unique_any<NDIS_HANDLE, decltype(&::NdisFreeNetBufferListPool), &::NdisFreeNetBufferListPool>;
 
 __inline
-UINT32
-NetRingBufferIncrementIndexByCount(
-    _In_ NET_RING_BUFFER CONST *RingBuffer,
-    _In_ UINT32 Index,
-    _In_ UINT32 Count
-)
-{
-    return (Index + Count) & RingBuffer->ElementIndexMask;
-}
-
-__inline
-NET_PACKET *
-NetRingBufferGetPacketAtIndex(
-    _In_ NET_RING_BUFFER *RingBuffer,
-    _In_ UINT32 Index
-)
-{
-    return (NET_PACKET*) NetRingBufferGetElementAtIndex(RingBuffer, Index);
-}
-
-__inline
 SIZE_T
 NetPacketFragmentGetSize(
     void
 )
 {
-    // In the future the size of a fragment might not be a simple sizeof(NET_PACKET_FRAGMENT), so create
+    // In the future the size of a fragment might not be a simple sizeof(NET_FRAGMENT), so create
     // a function stub now to easily track the places where we need such information
-    return sizeof(NET_PACKET_FRAGMENT);
+    return sizeof(NET_FRAGMENT);
 }
 
-__inline
-void
-DetachFragmentsFromPacket(
-    _Inout_ NET_PACKET& Packet,
-    _In_ NET_DATAPATH_DESCRIPTOR const &Descriptor
-)
-{
-    if (Packet.IgnoreThisPacket)
-    {
-        NT_ASSERT(Packet.FragmentCount == 0);
-        return;
-    }
-
-    auto fragmentRing = NET_DATAPATH_DESCRIPTOR_GET_FRAGMENT_RING_BUFFER(&Descriptor);
-
-    NT_ASSERT(Packet.FragmentOffset == fragmentRing->BeginIndex);
-    NT_ASSERT(Packet.FragmentCount <= NetRingBufferGetNumberOfElementsInRange(fragmentRing, fragmentRing->BeginIndex, fragmentRing->EndIndex));
-
-    fragmentRing->BeginIndex = NetRingBufferIncrementIndexByCount(fragmentRing, fragmentRing->BeginIndex, Packet.FragmentCount);
-
-    Packet.FragmentCount = 0;
-    Packet.FragmentOffset = 0;
-}

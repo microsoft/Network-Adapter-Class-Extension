@@ -113,7 +113,7 @@ NxConfiguration::~NxConfiguration()
 VOID
 NxConfiguration::_EvtCleanup(
     _In_  WDFOBJECT Configuration
-    )
+)
 /*++
 Routine Description:
     A WDF Event Callback
@@ -139,7 +139,7 @@ NTSTATUS
 NxConfiguration::_Create(
     _In_     NX_PRIVATE_GLOBALS *     PrivateGlobals,
     _In_     NxDevice *               NxDevice,
-    _In_opt_ PWDF_OBJECT_ATTRIBUTES   ConfigurationAttributes,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES *  ConfigurationAttributes,
     _In_opt_ NxConfiguration *        ParentNxConfiguration,
     _Out_    NxConfiguration **       NxConfigurationArg
 )
@@ -327,7 +327,7 @@ Routine Description:
     configObject.Header.Size = NDIS_SIZEOF_CONFIGURATION_OBJECT_REVISION_1;
     C_ASSERT(NDIS_SIZEOF_CONFIGURATION_OBJECT_REVISION_1 <= sizeof(NDIS_CONFIGURATION_OBJECT));
 
-    configObject.NdisHandle = m_NxAdapter->m_NdisAdapterHandle;
+    configObject.NdisHandle = m_NxAdapter->GetNdisHandle();
 
     ndisStatus = NdisOpenConfigurationEx(&configObject,
                                          &ndisConfigurationHandle);
@@ -393,7 +393,7 @@ Routine Description:
 VOID
 NxConfiguration::DeleteFromFailedOpen(
     VOID
-    )
+)
 {
     NT_ASSERT(m_NdisConfigurationHandle == NULL);
     WdfObjectDelete(GetFxObject());
@@ -402,7 +402,7 @@ NxConfiguration::DeleteFromFailedOpen(
 VOID
 NxConfiguration::Close(
     VOID
-    )
+)
 {
     //
     // For this object Close is equivalent to Delete.
@@ -413,8 +413,8 @@ NxConfiguration::Close(
 
 NTSTATUS
 NxConfiguration::AddAttributes(
-    _In_ PWDF_OBJECT_ATTRIBUTES Attributes
-    )
+    _In_ WDF_OBJECT_ATTRIBUTES * Attributes
+)
 {
     NTSTATUS status;
     status = WdfObjectAllocateContext(GetFxObject(), Attributes, NULL);
@@ -429,7 +429,7 @@ NxConfiguration::AddAttributes(
 RECORDER_LOG
 NxConfiguration::GetRecorderLog(
     VOID
-    )
+)
 {
     if (m_IsDeviceConfig)
     {
@@ -446,7 +446,7 @@ NxConfiguration::QueryUlong(
     _In_  NET_CONFIGURATION_QUERY_ULONG_FLAGS Flags,
     _In_  PCUNICODE_STRING                    ValueName,
     _Out_ PULONG                              Value
-    )
+)
 /*++
 Routine Description:
 
@@ -537,9 +537,9 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS
 NxConfiguration::QueryString(
     _In_     PCUNICODE_STRING                      ValueName,
-    _In_opt_ PWDF_OBJECT_ATTRIBUTES                StringAttributes,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES *               StringAttributes,
     _Out_    WDFSTRING*                            WdfString
-    )
+)
 /*++
 Routine Description:
 
@@ -625,9 +625,9 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS
 NxConfiguration::QueryMultiString(
     _In_     PCUNICODE_STRING                      ValueName,
-    _In_opt_ PWDF_OBJECT_ATTRIBUTES                StringsAttributes,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES *               StringsAttributes,
     _In_     WDFCOLLECTION                         Collection
-    )
+)
 /*++
 Routine Description:
 
@@ -684,9 +684,9 @@ NxConfiguration::QueryBinary(
     _In_     PCUNICODE_STRING                      ValueName,
     _Strict_type_match_ _In_
              POOL_TYPE                             PoolType,
-    _In_opt_ PWDF_OBJECT_ATTRIBUTES                MemoryAttributes,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES *               MemoryAttributes,
     _Out_    WDFMEMORY*                            WdfMemory
-    )
+)
 /*++
 Routine Description:
 
@@ -780,12 +780,12 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS
 NxConfiguration::QueryLinkLayerAddress(
     _Out_    NET_ADAPTER_LINK_LAYER_ADDRESS         *LinkLayerAddress
-    )
+)
 /*++
 Routine Description:
 
     This method queries from registry the link layer address of the adapter.
-    This is a part of the adapter configuration, so it should be called 
+    This is a part of the adapter configuration, so it should be called
     after the adapter is created.
 
 Arguments:
@@ -849,7 +849,7 @@ NTSTATUS
 NxConfiguration::AssignUlong(
     _In_  PCUNICODE_STRING                      ValueName,
     _In_  ULONG                                 Value
-    )
+)
 /*++
 Routine Description:
 
@@ -901,7 +901,7 @@ NTSTATUS
 NxConfiguration::AssignUnicodeString(
     _In_  PCUNICODE_STRING                      ValueName,
     _In_  PCUNICODE_STRING                      Value
-    )
+)
 /*++
 Routine Description:
 
@@ -957,7 +957,7 @@ NxConfiguration::AssignBinary(
     _In_                                PCUNICODE_STRING    ValueName,
     _In_reads_bytes_(BufferLength)      PVOID               Buffer,
     _In_                                ULONG               BufferLength
-    )
+)
 /*++
 Routine Description:
 
@@ -1028,7 +1028,7 @@ NTSTATUS
 NxConfiguration::AssignMultiString(
     _In_  PCUNICODE_STRING                      ValueName,
     _In_  WDFCOLLECTION                         StringsCollection
-    )
+)
 /*++
 Routine Description:
 

@@ -37,75 +37,75 @@ FORCEINLINE
 NxDriver *
 GetNxDriverFromWdfDriver(
     _In_ WDFDRIVER Driver
-    );
+);
 
 class NxDriver : public CFxObject<WDFDRIVER,
                                   NxDriver,
                                   GetNxDriverFromWdfDriver,
                                   false>
 {
-//friend class NxAdapter;
 
 private:
-    WDFDRIVER    m_Driver;
-    RECORDER_LOG m_RecorderLog;
-    NDIS_HANDLE  m_NdisMiniportDriverHandle;
-    NX_PRIVATE_GLOBALS *m_PrivateGlobals;
+
+    RECORDER_LOG
+        m_RecorderLog = nullptr;
+
+    NDIS_HANDLE
+        m_NdisMiniportDriverHandle = nullptr;
+
+    NX_PRIVATE_GLOBALS *
+        m_PrivateGlobals = nullptr;
 
     NxDriver(
         _In_ WDFDRIVER                Driver,
         _In_ NX_PRIVATE_GLOBALS *     NxPrivateGlobals
-        );
+    );
 
 public:
+
     static
     NTSTATUS
     _CreateAndRegisterIfNeeded(
         _In_ NX_PRIVATE_GLOBALS *           NxPrivateGlobals
-        );
+    );
 
     static
     NTSTATUS
     _CreateIfNeeded(
         _In_ WDFDRIVER           Driver,
         _In_ NX_PRIVATE_GLOBALS * NxPrivateGlobals
-        );
+    );
 
     NTSTATUS
-    Register();
+    Register(
+        void
+    );
 
-    static
-    NDIS_STATUS
-    _EvtNdisSetOptions(
-        _In_  NDIS_HANDLE  NdisDriverHandle,
-        _In_  NDIS_HANDLE  NxDriverAsContext
-        );
-
-    static
-    VOID
-    _EvtWdfCleanup(
-        _In_  WDFOBJECT Driver
+    void
+    Deregister(
+        void
     );
 
     RECORDER_LOG
-    GetRecorderLog() {
-        return m_RecorderLog;
-    }
+    GetRecorderLog(
+        void
+    ) const;
 
     NDIS_HANDLE
-    GetNdisMiniportDriverHandle() {
-        return m_NdisMiniportDriverHandle;
-    }
+    GetNdisMiniportDriverHandle(
+        void
+    ) const;
 
     NX_PRIVATE_GLOBALS *
     GetPrivateGlobals(
         void
-        ) const;
+    ) const;
 
-    ~NxDriver();
+    ~NxDriver(
+        void
+    );
 
 };
-
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxDriver, _GetNxDriverFromWdfDriver);
 
 FORCEINLINE

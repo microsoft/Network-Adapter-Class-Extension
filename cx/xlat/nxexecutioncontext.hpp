@@ -83,47 +83,47 @@ public:
     Initialize(
         void * context,
         EC_START_ROUTINE * callback
-        );
+    );
 
     void
     Start(
         void
-        );
+    );
 
     void
     Cancel(
         void
-        );
+    );
 
     void
     Stop(
         void
-        );
+    );
 
     void
     Terminate(
         void
-        );
+    );
 
     void
     SignalWork(
         void
-        );
+    );
 
     void
     WaitForWork(
         void
-        );
+    );
 
     void
     SignalStopped(
         void
-        );
+    );
 
     void
     WaitForStopped(
         void
-        );
+    );
 
 
     /// Called only by code running in the EC. Returns true if stopping and
@@ -131,24 +131,24 @@ public:
     bool
     IsStopping(
         void
-        ) const;
+    ) const;
 
     bool
     IsTerminated(
         void
-        );
+    );
 
     void
     SetDebugNameHint(
         _In_ PCWSTR usage,
         _In_ size_t index,
         _In_ NET_LUID networkInterface
-        );
+    );
 
     void
     UpdateCounters(
         _In_ bool IsIdleIteration
-        );
+    );
 
     NxExecutionContextCounters
     GetExecutionContextCounters() const;
@@ -173,22 +173,22 @@ private:
     EcState
     SetState(
         EcState newState
-        );
+    );
 
     void
     SetStopping(
         void
-        );
+    );
 
     void
     SetStarted(
         void
-        );
+    );
 
     void
     SetTerminated(
         void
-        );
+    );
 
     KAutoEvent m_work;
     KAutoEvent m_stopped;
@@ -205,3 +205,4 @@ private:
 
     ULONG m_ecIdentifier = 0;
 };
+

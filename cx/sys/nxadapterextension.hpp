@@ -19,13 +19,13 @@ public:
 
     NxAdapterExtension(
         _In_ AdapterExtensionInit const *ExtensionConfig
-        );
+    );
 
     void
     InvokeOidPreprocessCallback(
         _In_ NETADAPTER Adapter,
         _In_ NETREQUEST Request
-        );
+    );
 
 private:
 

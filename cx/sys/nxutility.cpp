@@ -21,7 +21,7 @@ _Use_decl_annotations_
 void
 AsyncResult::Set(
     NTSTATUS Status
-    )
+)
 {
     m_status = Status;
     m_signal.Set();
@@ -30,7 +30,7 @@ AsyncResult::Set(
 NTSTATUS
 AsyncResult::Wait(
     void
-    )
+)
 {
     m_signal.Wait();
     return m_status;
@@ -42,12 +42,12 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS
 NxWdfCollectionAddMultiSz(
     _Inout_  WDFCOLLECTION                         Collection,
-    _In_opt_ PWDF_OBJECT_ATTRIBUTES                StringsAttributes,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES *               StringsAttributes,
     _In_reads_bytes_(BufferLength)
              PWCHAR                                MultiSzBuffer,
     _In_     ULONG                                 BufferLength,
     _In_opt_ RECORDER_LOG                          RecorderLog
-    )
+)
 /*++
 Routine Description:
 
@@ -196,7 +196,7 @@ static EVT_PACKET_QUEUE_CANCEL DefaultRxPacketQueueCancel;
 NET_ADAPTER_DATAPATH_CALLBACKS
 GetDefaultDatapathCallbacks(
     void
-    )
+)
 {
     NET_ADAPTER_DATAPATH_CALLBACKS datapathCallbacks;
     NET_ADAPTER_DATAPATH_CALLBACKS_INIT(
@@ -211,8 +211,8 @@ _Use_decl_annotations_
 NTSTATUS
 DefaultCreateTxQueue(
     NETADAPTER Adapter,
-    PNETTXQUEUE_INIT QueueInit
-    )
+    NETTXQUEUE_INIT * QueueInit
+)
 {
     NET_PACKET_QUEUE_CONFIG queueConfig;
     NET_PACKET_QUEUE_CONFIG_INIT(
@@ -236,8 +236,8 @@ _Use_decl_annotations_
 NTSTATUS
 DefaultCreateRxQueue(
     NETADAPTER Adapter,
-    PNETRXQUEUE_INIT QueueInit
-    )
+    NETRXQUEUE_INIT * QueueInit
+)
 {
     NET_PACKET_QUEUE_CONFIG queueConfig;
     NET_PACKET_QUEUE_CONFIG_INIT(
@@ -261,17 +261,17 @@ _Use_decl_annotations_
 void
 DefaultTxPacketQueueAdvance(
     NETPACKETQUEUE Queue
-    )
+)
 {
     auto txQueue = GetTxQueueFromHandle(Queue);
     auto nxAdapter = txQueue->GetAdapter();
 
-    auto datapathDescriptor = NETEXPORT(NetTxQueueGetDatapathDescriptor)(
+    auto rings = NETEXPORT(NetTxQueueGetRingCollection)(
         nxAdapter->GetPublicGlobals(),
         Queue);
 
     // Complete any new transmit packets to avoid NDIS NBL leaking watchdog firing
-    auto packetRing = NET_DATAPATH_DESCRIPTOR_GET_PACKET_RING_BUFFER(datapathDescriptor);
+    auto packetRing = NetRingCollectionGetPacketRing(rings);
     packetRing->BeginIndex = packetRing->EndIndex;
 }
 
@@ -279,7 +279,7 @@ _Use_decl_annotations_
 void
 DefaultRxPacketQueueAdvance(
     NETPACKETQUEUE Queue
-    )
+)
 {
     // In the receive case the packets are owned by the client driver, no need to complete
     // them in the advance callback
@@ -291,7 +291,7 @@ void
 DefaultPacketQueueSetNotificationEnabled(
     NETPACKETQUEUE Queue,
     BOOLEAN NotificationEnabled
-    )
+)
 {
     UNREFERENCED_PARAMETER((Queue, NotificationEnabled));
 }
@@ -300,7 +300,7 @@ _Use_decl_annotations_
 void
 DefaultTxPacketQueueCancel(
     NETPACKETQUEUE Queue
-    )
+)
 {
     UNREFERENCED_PARAMETER(Queue);
 }
@@ -309,15 +309,15 @@ _Use_decl_annotations_
 void
 DefaultRxPacketQueueCancel(
     NETPACKETQUEUE Queue
-    )
+)
 {
     auto rxQueue = GetRxQueueFromHandle(Queue);
     auto nxAdapter = rxQueue->GetAdapter();
 
-    auto datapathDescriptor = NETEXPORT(NetRxQueueGetDatapathDescriptor)(
+    auto rings = NETEXPORT(NetRxQueueGetRingCollection)(
         nxAdapter->GetPublicGlobals(),
         Queue);
 
-    auto packetRing = NET_DATAPATH_DESCRIPTOR_GET_PACKET_RING_BUFFER(datapathDescriptor);
+    auto packetRing = NetRingCollectionGetPacketRing(rings);
     packetRing->BeginIndex = packetRing->EndIndex;
 }

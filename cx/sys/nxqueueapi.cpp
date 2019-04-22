@@ -3,8 +3,8 @@
 #include "Nx.hpp"
 
 #include <NxApi.hpp>
-#include <NetRingBuffer.h>
-#include <NetPacket.h>
+#include <net/ring.h>
+#include <net/packet.h>
 
 #include "NxQueueApi.tmh"
 
@@ -18,12 +18,12 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetTxQueueCreate)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _Inout_ PNETTXQUEUE_INIT NetTxQueueInit,
-    _In_opt_ PWDF_OBJECT_ATTRIBUTES TxQueueAttributes,
-    _In_ PNET_PACKET_QUEUE_CONFIG Configuration,
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _Inout_ NETTXQUEUE_INIT * NetTxQueueInit,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES * TxQueueAttributes,
+    _In_ NET_PACKET_QUEUE_CONFIG * Configuration,
     _Out_ NETPACKETQUEUE* TxQueue
-    )
+)
 {
     auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
     auto & InitContext = *reinterpret_cast<QUEUE_CREATION_CONTEXT*>(NetTxQueueInit);
@@ -78,12 +78,13 @@ WDFAPI
 VOID
 NETEXPORT(NetTxQueueNotifyMoreCompletedPacketsAvailable)(
     _In_
-    PNET_DRIVER_GLOBALS DriverGlobals,
+    NET_DRIVER_GLOBALS * DriverGlobals,
     _In_
     NETPACKETQUEUE TxQueue
-    )
+)
 {
     Verifier_VerifyPrivateGlobals(GetPrivateGlobals(DriverGlobals));
+    Verifier_VerifyTxQueueHandle(GetPrivateGlobals(DriverGlobals), TxQueue);
 
     GetTxQueueFromHandle(TxQueue)->NotifyMorePacketsAvailable();
 }
@@ -93,10 +94,10 @@ WDFAPI
 ULONG
 NETEXPORT(NetTxQueueInitGetQueueId)(
     _In_
-    PNET_DRIVER_GLOBALS DriverGlobals,
+    NET_DRIVER_GLOBALS * DriverGlobals,
     _In_
-    PNETTXQUEUE_INIT NetTxQueueInit
-    )
+    NETTXQUEUE_INIT * NetTxQueueInit
+)
 {
     auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
     auto InitContext = reinterpret_cast<QUEUE_CREATION_CONTEXT*>(NetTxQueueInit);
@@ -110,57 +111,21 @@ NETEXPORT(NetTxQueueInitGetQueueId)(
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
-PCNET_DATAPATH_DESCRIPTOR
-NETEXPORT(NetTxQueueGetDatapathDescriptor)(
+NET_RING_COLLECTION const *
+NETEXPORT(NetTxQueueGetRingCollection)(
     _In_
-    PNET_DRIVER_GLOBALS DriverGlobals,
+    NET_DRIVER_GLOBALS * DriverGlobals,
     _In_
     NETPACKETQUEUE NetTxQueue
-    )
+)
 {
     auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyTxQueueHandle(pNxPrivateGlobals, NetTxQueue);
 
-    return GetTxQueueFromHandle(NetTxQueue)->GetPacketRingBufferSet();
-}
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-WDFAPI
-NTSTATUS
-NETEXPORT(NetTxQueueInitAddPacketContextAttributes)(
-    _In_    PNET_DRIVER_GLOBALS             DriverGlobals,
-    _Inout_ PNETTXQUEUE_INIT                NetTxQueueInit,
-    _In_    PNET_PACKET_CONTEXT_ATTRIBUTES  PacketContextAttributes
-    )
-{
-    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
-
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyNetPacketContextAttributes(pNxPrivateGlobals, PacketContextAttributes);
-
-    QUEUE_CREATION_CONTEXT *queueCreationContext = reinterpret_cast<QUEUE_CREATION_CONTEXT *>(NetTxQueueInit);
-
-    return NxQueue::NetQueueInitAddPacketContextAttributes(queueCreationContext, PacketContextAttributes);
-}
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-WDFAPI
-PNET_PACKET_CONTEXT_TOKEN
-NETEXPORT(NetTxQueueGetPacketContextToken)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _In_ NETPACKETQUEUE NetTxQueue,
-    _In_ PCNET_CONTEXT_TYPE_INFO ContextTypeInfo
-    )
-{
-    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
-
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-
-    return GetTxQueueFromHandle(NetTxQueue)->GetPacketContextTokenFromTypeInfo(ContextTypeInfo);
+    return GetTxQueueFromHandle(NetTxQueue)->GetRingCollection();
 }
 
 _Must_inspect_result_
@@ -168,12 +133,12 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetRxQueueCreate)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _Inout_ PNETRXQUEUE_INIT NetRxQueueInit,
-    _In_opt_ PWDF_OBJECT_ATTRIBUTES RxQueueAttributes,
-    _In_ PNET_PACKET_QUEUE_CONFIG Configuration,
-    _Out_ NETPACKETQUEUE* RxQueue
-    )
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _Inout_ NETRXQUEUE_INIT * NetRxQueueInit,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES * RxQueueAttributes,
+    _In_ NET_PACKET_QUEUE_CONFIG * Configuration,
+    _Out_ NETPACKETQUEUE * RxQueue
+)
 {
     auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
@@ -229,14 +194,15 @@ WDFAPI
 VOID
 NETEXPORT(NetRxQueueNotifyMoreReceivedPacketsAvailable)(
     _In_
-    PNET_DRIVER_GLOBALS DriverGlobals,
+    NET_DRIVER_GLOBALS * DriverGlobals,
     _In_
     NETPACKETQUEUE RxQueue
-    )
+)
 {
     auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyRxQueueHandle(pNxPrivateGlobals, RxQueue);
 
     GetRxQueueFromHandle(RxQueue)->NotifyMorePacketsAvailable();
 }
@@ -246,10 +212,10 @@ WDFAPI
 ULONG
 NETEXPORT(NetRxQueueInitGetQueueId)(
     _In_
-    PNET_DRIVER_GLOBALS DriverGlobals,
+    NET_DRIVER_GLOBALS * DriverGlobals,
     _In_
-    PNETRXQUEUE_INIT NetRxQueueInit
-    )
+    NETRXQUEUE_INIT * NetRxQueueInit
+)
 {
     auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
     auto InitContext = reinterpret_cast<QUEUE_CREATION_CONTEXT*>(NetRxQueueInit);
@@ -263,57 +229,21 @@ NETEXPORT(NetRxQueueInitGetQueueId)(
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
-PCNET_DATAPATH_DESCRIPTOR
-NETEXPORT(NetRxQueueGetDatapathDescriptor)(
+NET_RING_COLLECTION const *
+NETEXPORT(NetRxQueueGetRingCollection)(
     _In_
-    PNET_DRIVER_GLOBALS DriverGlobals,
+    NET_DRIVER_GLOBALS * DriverGlobals,
     _In_
     NETPACKETQUEUE NetRxQueue
-    )
+)
 {
     auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyRxQueueHandle(pNxPrivateGlobals, NetRxQueue);
 
-    return GetRxQueueFromHandle(NetRxQueue)->GetPacketRingBufferSet();
-}
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-WDFAPI
-NTSTATUS
-NETEXPORT(NetRxQueueInitAddPacketContextAttributes)(
-    _In_    PNET_DRIVER_GLOBALS             DriverGlobals,
-    _Inout_ PNETRXQUEUE_INIT                NetRxQueueInit,
-    _In_    PNET_PACKET_CONTEXT_ATTRIBUTES  PacketContextAttributes
-    )
-{
-    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
-
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyNetPacketContextAttributes(pNxPrivateGlobals, PacketContextAttributes);
-
-    QUEUE_CREATION_CONTEXT *queueCreationContext = reinterpret_cast<QUEUE_CREATION_CONTEXT *>(NetRxQueueInit);
-
-    return NxQueue::NetQueueInitAddPacketContextAttributes(queueCreationContext, PacketContextAttributes);
-}
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-WDFAPI
-PNET_PACKET_CONTEXT_TOKEN
-NETEXPORT(NetRxQueueGetPacketContextToken)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _In_ NETPACKETQUEUE NetRxQueue,
-    _In_ PCNET_CONTEXT_TYPE_INFO ContextTypeInfo
-    )
-{
-    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
-
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-
-    return GetRxQueueFromHandle(NetRxQueue)->GetPacketContextTokenFromTypeInfo(ContextTypeInfo);
+    return GetRxQueueFromHandle(NetRxQueue)->GetRingCollection();
 }
 
 _Must_inspect_result_
@@ -321,10 +251,10 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetTxQueueInitAddPacketExtension)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _In_ PNETTXQUEUE_INIT QueueInit,
-    _In_ const PNET_PACKET_EXTENSION ExtensionToAdd
-    )
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETTXQUEUE_INIT * QueueInit,
+    _In_ const NET_PACKET_EXTENSION * ExtensionToAdd
+)
 {
     auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
     QUEUE_CREATION_CONTEXT *queueCreationContext = reinterpret_cast<QUEUE_CREATION_CONTEXT *>(QueueInit);
@@ -344,40 +274,15 @@ NETEXPORT(NetTxQueueInitAddPacketExtension)(
     return NxQueue::NetQueueInitAddPacketExtension(queueCreationContext, &extensionPrivate);
 }
 
-_IRQL_requires_max_(PASSIVE_LEVEL)
-WDFAPI
-SIZE_T
-NETEXPORT(NetTxQueueGetPacketExtensionOffset)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _In_ NETPACKETQUEUE NetTxQueue,
-    _In_ const PNET_PACKET_EXTENSION_QUERY ExtensionToGet
-    )
-{
-    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
-
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyTypeSize(pNxPrivateGlobals, ExtensionToGet);
-    Verifier_VerifyNetPacketExtensionQuery(pNxPrivateGlobals, ExtensionToGet);
-
-    NxTxQueue *txQueue = GetTxQueueFromHandle(NetTxQueue);
-
-    NET_PACKET_EXTENSION_PRIVATE extensionPrivate = {};
-    extensionPrivate.Name = ExtensionToGet->Name;
-    extensionPrivate.Version = ExtensionToGet->Version;
-
-    return txQueue->GetPacketExtensionOffset(&extensionPrivate);
-}
-
 _Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetRxQueueInitAddPacketExtension)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _In_ PNETRXQUEUE_INIT QueueInit,
-    _In_ const PNET_PACKET_EXTENSION ExtensionToAdd
-    )
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETRXQUEUE_INIT * QueueInit,
+    _In_ NET_PACKET_EXTENSION const * ExtensionToAdd
+)
 {
     //
     // store the incoming NET_PACKET_EXTENSION into QUEUE_CREATION_CONTEXT,
@@ -408,26 +313,58 @@ NETEXPORT(NetRxQueueInitAddPacketExtension)(
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
-SIZE_T
-NETEXPORT(NetRxQueueGetPacketExtensionOffset)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _In_ NETPACKETQUEUE NetRxQueue,
-    _In_ const PNET_PACKET_EXTENSION_QUERY ExtensionToGet
-    )
+VOID
+NETEXPORT(NetTxQueueGetExtension)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETPACKETQUEUE NetTxQueue,
+    _In_ const NET_PACKET_EXTENSION_QUERY* Query,
+    _Out_ NET_EXTENSION* Extension
+)
 {
     auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
+    RtlZeroMemory(Extension, sizeof(*Extension));
+
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyTypeSize(pNxPrivateGlobals, ExtensionToGet);
-    Verifier_VerifyNetPacketExtensionQuery(pNxPrivateGlobals, ExtensionToGet);
+    Verifier_VerifyTypeSize(pNxPrivateGlobals, Query);
+    Verifier_VerifyNetPacketExtensionQuery(pNxPrivateGlobals, Query);
+    Verifier_VerifyTxQueueHandle(pNxPrivateGlobals, NetTxQueue);
+
+    NxTxQueue *txQueue = GetTxQueueFromHandle(NetTxQueue);
+
+    NET_PACKET_EXTENSION_PRIVATE extensionPrivate = {};
+    extensionPrivate.Name = Query->Name;
+    extensionPrivate.Version = Query->Version;
+
+    txQueue->GetExtension(&extensionPrivate, Extension);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+VOID
+NETEXPORT(NetRxQueueGetExtension)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETPACKETQUEUE NetRxQueue,
+    _In_ const NET_PACKET_EXTENSION_QUERY* Query,
+    _Out_ NET_EXTENSION* Extension
+)
+{
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    RtlZeroMemory(Extension, sizeof(*Extension));
+
+    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyTypeSize(pNxPrivateGlobals, Query);
+    Verifier_VerifyNetPacketExtensionQuery(pNxPrivateGlobals, Query);
+    Verifier_VerifyRxQueueHandle(pNxPrivateGlobals, NetRxQueue);
 
     NxRxQueue *rxQueue = GetRxQueueFromHandle(NetRxQueue);
 
     NET_PACKET_EXTENSION_PRIVATE extensionPrivate = {};
-    extensionPrivate.Name = ExtensionToGet->Name;
-    extensionPrivate.Version = ExtensionToGet->Version;
+    extensionPrivate.Name = Query->Name;
+    extensionPrivate.Version = Query->Version;
 
-    return rxQueue->GetPacketExtensionOffset(&extensionPrivate);
+    rxQueue->GetExtension(&extensionPrivate, Extension);
 }
-

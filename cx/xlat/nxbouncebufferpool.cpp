@@ -8,7 +8,7 @@
 
 NxBounceBufferPool::~NxBounceBufferPool(
     void
-    )
+)
 {
     if (m_bufferPool)
     {
@@ -21,19 +21,25 @@ _Use_decl_annotations_
 NTSTATUS
 NxBounceBufferPool::Initialize(
     NET_CLIENT_DISPATCH const &ClientDispatch,
-    NET_DATAPATH_DESCRIPTOR const *Descriptor,
+    NET_RING_COLLECTION const * Descriptor,
     NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES &DatapathCapabilities,
     size_t NumberOfBuffers
-    )
+)
 {
     m_descriptor = Descriptor;
-    m_bufferSize = DatapathCapabilities.MaximumTxFragmentSize;
+
+    //
+    // Current bouncing logic ensures that a bounced NET_PACKET always has a single NET_FRAGMENT
+    // So we can include NET_PACKET backfill in the buffer size
+    //
+    m_txPayloadBackfill = DatapathCapabilities.TxPayloadBackfill;
+    m_bufferSize = DatapathCapabilities.MaximumTxFragmentSize + m_txPayloadBackfill;
 
     NET_CLIENT_BUFFER_POOL_CONFIG bufferPoolConfig = {
         &DatapathCapabilities.TxMemoryConstraints,
         NumberOfBuffers,
         m_bufferSize,
-        DatapathCapabilities.TxPayloadBackfill,
+        0,
         0,
         MM_ANY_NODE_OK,
         NET_CLIENT_BUFFER_POOL_FLAGS_NONE
@@ -52,13 +58,13 @@ bool
 NxBounceBufferPool::BounceNetBuffer(
     NET_BUFFER const &NetBuffer,
     NET_PACKET &NetPacket
-    )
+)
 /*
 
 Description:
 
     This routine tries to allocate a buffer from the buffer pool and bounce
-    the payload described by NetBuffer into *one* NET_PACKET_FRAGMENT.
+    the payload described by NetBuffer into *one* NET_FRAGMENT.
 
 Return value:
 
@@ -67,11 +73,11 @@ Return value:
 
 Remarks:
 
-    If this routine returns false and NetPacket.IgnoreThisPacket is TRUE the
+    If this routine returns false and NetPacket.Ignore is TRUE the
     caller should not try to bounce the buffer again.
 */
 {
-    auto& fragmentRing = *NET_DATAPATH_DESCRIPTOR_GET_FRAGMENT_RING_BUFFER(m_descriptor);
+    auto& fragmentRing = *NetRingCollectionGetFragmentRing(m_descriptor);
     auto availableFragments = NetRbFragmentRange::OsRange(fragmentRing);
 
     if (availableFragments.Count() == 0)
@@ -100,11 +106,12 @@ Remarks:
 
     if (bytesToCopy == 0 || bytesToCopy > m_bufferSize)
     {
-        NetPacket.IgnoreThisPacket = TRUE;
+        NetPacket.Ignore = TRUE;
         NetPacket.FragmentCount = 0;
         return false;
     }
 
+    fragment.Offset = m_txPayloadBackfill;
     size_t currentFragmentOffset = fragment.Offset;
     auto baseFragmentVa = static_cast<UCHAR *>(fragment.VirtualAddress);
     for (size_t remain = bytesToCopy; remain > 0; mdl = mdl->Next)
@@ -138,15 +145,15 @@ Remarks:
 
     if (fragment.ValidLength != bytesToCopy)
     {
-        NetPacket.IgnoreThisPacket = TRUE;
+        NetPacket.Ignore = TRUE;
         NetPacket.FragmentCount = 0;
         return false;
     }
 
     // Attach the fragment chain to the packet
     NetPacket.FragmentCount = 1;
-    NetPacket.FragmentOffset = availableFragments.begin().GetIndex();
-    fragmentRing.EndIndex = NetRingBufferIncrementIndex(&fragmentRing, fragmentRing.EndIndex);
+    NetPacket.FragmentIndex = availableFragments.begin().GetIndex();
+    fragmentRing.EndIndex = NetRingIncrementIndex(&fragmentRing, fragmentRing.EndIndex);
 
     return true;
 }
@@ -155,16 +162,17 @@ _Use_decl_annotations_
 void
 NxBounceBufferPool::FreeBounceBuffers(
     NET_PACKET &NetPacket
-    )
+)
 {
-    if (NetPacket.IgnoreThisPacket)
+    if (NetPacket.Ignore)
     {
         return;
     }
 
+    auto fr = NetRingCollectionGetFragmentRing(m_descriptor);
     for (size_t i = 0; i < NetPacket.FragmentCount; i++)
     {
-        auto fragment = NET_PACKET_GET_FRAGMENT(&NetPacket, m_descriptor, i);
+        auto fragment = NetRingGetFragmentAtIndex(fr, (NetPacket.FragmentIndex + i) & fr->ElementIndexMask);
 
         if (fragment->OsReserved_Bounced)
         {

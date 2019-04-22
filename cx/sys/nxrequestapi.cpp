@@ -36,10 +36,10 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 VOID
 NETEXPORT(NetRequestCompleteWithoutInformation)(
-    _In_ PNET_DRIVER_GLOBALS Globals,
+    _In_ NET_DRIVER_GLOBALS * Globals,
     _In_ NETREQUEST          Request,
     _In_ NTSTATUS            CompletionStatus
-    )
+)
 /*++
 Routine Description:
 
@@ -68,11 +68,11 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 VOID
 NETEXPORT(NetRequestSetDataComplete)(
-    _In_ PNET_DRIVER_GLOBALS Globals,
+    _In_ NET_DRIVER_GLOBALS * Globals,
     _In_ NETREQUEST          Request,
     _In_ NTSTATUS            CompletionStatus,
     _In_ UINT                BytesRead
-    )
+)
 /*++
 Routine Description:
 
@@ -109,11 +109,11 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 VOID
 NETEXPORT(NetRequestQueryDataComplete)(
-    _In_ PNET_DRIVER_GLOBALS Globals,
+    _In_ NET_DRIVER_GLOBALS * Globals,
     _In_ NETREQUEST          Request,
     _In_ NTSTATUS            CompletionStatus,
     _In_ UINT                BytesWritten
-    )
+)
 /*++
 Routine Description:
 
@@ -150,12 +150,12 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 VOID
 NETEXPORT(NetRequestMethodComplete)(
-    _In_ PNET_DRIVER_GLOBALS Globals,
+    _In_ NET_DRIVER_GLOBALS * Globals,
     _In_ NETREQUEST          Request,
     _In_ NTSTATUS            CompletionStatus,
     _In_ UINT                BytesRead,
     _In_ UINT                BytesWritten
-    )
+)
 /*++
 Routine Description:
 
@@ -196,10 +196,10 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 VOID
 NETEXPORT(NetRequestSetBytesNeeded)(
-    _In_ PNET_DRIVER_GLOBALS Globals,
+    _In_ NET_DRIVER_GLOBALS * Globals,
     _In_ NETREQUEST          Request,
     _In_ UINT                BytesNeeded
-    )
+)
 /*++
 Routine Description:
 
@@ -251,9 +251,9 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 NDIS_OID
 NETEXPORT(NetRequestGetId)(
-    _In_ PNET_DRIVER_GLOBALS Globals,
+    _In_ NET_DRIVER_GLOBALS * Globals,
     _In_ NETREQUEST          Request
-    )
+)
 /*++
 Routine Description:
 
@@ -281,7 +281,7 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetRequestRetrieveInputOutputBuffer)(
-    _In_      PNET_DRIVER_GLOBALS Globals,
+    _In_      NET_DRIVER_GLOBALS * Globals,
     _In_      NETREQUEST          Request,
     _In_      UINT                MininumInputLengthRequired,
     _In_      UINT                MininumOutputLengthRequired,
@@ -290,7 +290,7 @@ NETEXPORT(NetRequestRetrieveInputOutputBuffer)(
     _Out_opt_ PUINT               InputBufferLength,
     _Out_opt_ PUINT               OutputBufferLength
 
-    )
+)
 /*++
 Routine Description:
 
@@ -381,9 +381,9 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 PNDIS_OID_REQUEST
 NETEXPORT(NetRequestWdmGetNdisOidRequest)(
-    _In_ PNET_DRIVER_GLOBALS Globals,
+    _In_ NET_DRIVER_GLOBALS * Globals,
     _In_ NETREQUEST          Request
-    )
+)
 /*++
 Routine Description:
 
@@ -412,9 +412,9 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 NDIS_PORT_NUMBER
 NETEXPORT(NetRequestGetPortNumber)(
-    _In_ PNET_DRIVER_GLOBALS Globals,
+    _In_ NET_DRIVER_GLOBALS * Globals,
     _In_ NETREQUEST          Request
-    )
+)
 /*++
 Routine Description:
 
@@ -441,9 +441,9 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 NDIS_NIC_SWITCH_ID
 NETEXPORT(NetRequestGetSwitchId)(
-    _In_ PNET_DRIVER_GLOBALS Globals,
+    _In_ NET_DRIVER_GLOBALS * Globals,
     _In_ NETREQUEST          Request
-    )
+)
 /*++
 Routine Description:
 
@@ -470,9 +470,9 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 NDIS_NIC_SWITCH_VPORT_ID
 NETEXPORT(NetRequestGetVPortId)(
-    _In_ PNET_DRIVER_GLOBALS Globals,
+    _In_ NET_DRIVER_GLOBALS * Globals,
     _In_ NETREQUEST          Request
-    )
+)
 /*++
 Routine Description:
 
@@ -499,9 +499,9 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 NDIS_REQUEST_TYPE
 NETEXPORT(NetRequestGetType)(
-    _In_ PNET_DRIVER_GLOBALS Globals,
+    _In_ NET_DRIVER_GLOBALS * Globals,
     _In_ NETREQUEST          Request
-    )
+)
 /*++
 Routine Description:
 
@@ -528,9 +528,9 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 NETADAPTER
 NETEXPORT(NetRequestGetAdapter)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETREQUEST Request
-    )
+)
 /*++
 Routine Description:
     This method is called by the clients to retrieve the NETADAPTER

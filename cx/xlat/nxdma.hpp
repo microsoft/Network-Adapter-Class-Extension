@@ -1,7 +1,8 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
 #pragma once
 
-#include "NxContextBuffer.hpp"
+#include "NxRingContext.hpp"
+#include "NxRingBuffer.hpp"
 
 class NxDmaAdapter;
 
@@ -17,7 +18,7 @@ struct DmaContext
     DmaContext(
         _In_ void *SGBuffer,
         _In_ void *DmaContext
-        );
+    );
 };
 
 enum class BouncePolicy : ULONG
@@ -34,29 +35,29 @@ public:
 
     NxDmaTransfer(
         _In_ NxDmaAdapter const &DmaAdapter
-        );
+    );
 
     NxDmaTransfer(
         _In_ NxDmaAdapter const &DmaAdapter,
         _In_ NET_PACKET const *Packet
-        );
+    );
 
     NxDmaTransfer(
         _In_ NxDmaTransfer &&Other
-        );
+    );
 
     ~NxDmaTransfer(
         void
-        );
+    );
 
     operator bool(
         void
-        ) const;
+    ) const;
 
     DmaContext &
     GetTransferContext(
         void
-        ) const;
+    ) const;
 
     NxDmaTransfer(const NxDmaTransfer&) = delete;
     NxDmaTransfer& operator=(const NxDmaTransfer&) = delete;
@@ -75,33 +76,33 @@ public:
 
     NxDmaAdapter(
         _In_ NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES const &DatapathCapabilities,
-        _In_ NxRingBuffer const &PacketRing
-        ) noexcept;
+        _In_ NET_RING_COLLECTION const & Rings
+    ) noexcept;
 
     NTSTATUS
     Initialize(
         _In_ NET_CLIENT_DISPATCH const &ClientDispatch
-        );
+    );
 
     DmaContext &
     GetDmaContextForPacket(
         _In_ NET_PACKET const &Packet
-        ) const;
+    ) const;
 
     bool
     BypassHal(
         void
-        ) const;
+    ) const;
 
     bool
     AlwaysBounce(
         void
-        ) const;
+    ) const;
 
     NxDmaTransfer
     InitializeDmaTransfer(
         _In_ NET_PACKET const &Packet
-        ) const;
+    ) const;
 
     NTSTATUS
     BuildScatterGatherListEx(
@@ -110,40 +111,40 @@ public:
         _In_ size_t MdlOffset,
         _In_ size_t Size,
         _Out_ SCATTER_GATHER_LIST **ScatterGatherList
-        ) const;
+    ) const;
 
     void
     PutScatterGatherList(
         _In_ SCATTER_GATHER_LIST *ScatterGatherList
-        ) const;
+    ) const;
 
     MDL *
     GetMappedMdl(
         _In_ SCATTER_GATHER_LIST *ScatterGatherList,
         _In_ MDL *OriginalMdl
-        ) const;
+    ) const;
 
     void
     FreeAdapterObject(
         void
-        ) const;
+    ) const;
 
     void
     CleanupNetPacket(
         _In_ NET_PACKET const &Packet
-        ) const;
+    ) const;
 
     void
     FlushIoBuffers(
         _In_ NetRbPacketRange const &PacketRange
-        ) const;
+    ) const;
 
 private:
 
     DmaContext &
     GetDmaContextForPacket(
         _In_ size_t const &Index
-        ) const;
+    ) const;
 
 private:
 
@@ -161,5 +162,6 @@ private:
     KPoolPtr<UCHAR> m_scatterGatherListBuffer;
     KPoolPtr<UCHAR> m_dmaTransferBuffer;
 
-    NxContextBuffer m_dmaContext;
+    NxRingContext m_dmaContext;
 };
+

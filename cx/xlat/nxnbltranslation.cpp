@@ -2,9 +2,12 @@
 
 #include "NxXlatPrecomp.hpp"
 #include "NxXlatCommon.hpp"
-#include "NxNblTranslation.tmh"
 
+#include "NxNblTranslation.tmh"
 #include "NxNblTranslation.hpp"
+
+#include <net/checksum_p.h>
+#include <net/lso_p.h>
 
 #include "NxPacketLayout.hpp"
 #include "NxChecksumInfo.hpp"
@@ -12,14 +15,14 @@
 
 NxNblTranslator::NxNblTranslator(
     NxNblTranslationStats &Stats,
-    const NET_DATAPATH_DESCRIPTOR & DatapathDescriptor,
+    NET_RING_COLLECTION * Rings,
     const NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES & DatapathCapabilities,
     const NxDmaAdapter *DmaAdapter,
-    const NxContextBuffer & ContextBuffer,
+    const NxRingContext & ContextBuffer,
     NDIS_MEDIUM MediaType
-    ) :
+) :
     m_stats(Stats),
-    m_datapathDescriptor(DatapathDescriptor),
+    m_rings(Rings),
     m_datapathCapabilities(DatapathCapabilities),
     m_contextBuffer(ContextBuffer),
     m_mediaType(MediaType),
@@ -31,7 +34,7 @@ NxNblTranslator::NxNblTranslator(
 bool
 NxNblTranslator::RequiresDmaMapping(
     void
-    ) const
+) const
 {
     return m_datapathCapabilities.TxMemoryConstraints.MappingRequirement == NET_CLIENT_MEMORY_MAPPING_REQUIREMENT_DMA_MAPPED;
 }
@@ -39,25 +42,26 @@ NxNblTranslator::RequiresDmaMapping(
 NetRbFragmentRange
 NxNblTranslator::EmptyFragmentRange(
     void
-    ) const
+) const
 {
-    return { *NET_DATAPATH_DESCRIPTOR_GET_FRAGMENT_RING_BUFFER(&m_datapathDescriptor), 0, 0 };
+    return { *NetRingCollectionGetFragmentRing(m_rings), 0, 0 };
 }
 
 size_t
 NxNblTranslator::MaximumNumberOfFragments(
     void
-    ) const
+) const
 {
-    return NET_DATAPATH_DESCRIPTOR_GET_FRAGMENT_RING_BUFFER(&m_datapathDescriptor)->NumberOfElements - 1;
+    return NetRingCollectionGetFragmentRing(m_rings)->NumberOfElements - 1;
 }
 
 _Use_decl_annotations_
 void
 NxNblTranslator::TranslateNetBufferListOOBDataToNetPacketExtensions(
     NET_BUFFER_LIST const &netBufferList,
-    NET_PACKET* netPacket
-    ) const
+    NET_PACKET* netPacket,
+    UINT32 packetIndex
+) const
 {
     // For every in-use packet extensions for a NET_PACKET
     // translator (NET_PACKET owner) zeroes existing data and fill in new data
@@ -66,7 +70,7 @@ NxNblTranslator::TranslateNetBufferListOOBDataToNetPacketExtensions(
     if (IsPacketChecksumEnabled())
     {
         NET_PACKET_CHECKSUM* checksumExt =
-            NetPacketGetPacketChecksum(netPacket, m_netPacketChecksumOffset);
+            NetExtensionGetPacketChecksum(&m_netPacketChecksumExtension, packetIndex);
         RtlZeroMemory(checksumExt, NET_PACKET_EXTENSION_CHECKSUM_VERSION_1_SIZE);
 
         auto const &checksumInfo =
@@ -86,7 +90,7 @@ NxNblTranslator::TranslateNetBufferListOOBDataToNetPacketExtensions(
     if (IsPacketLargeSendSegmentationEnabled())
     {
         NET_PACKET_LARGE_SEND_SEGMENTATION* lsoExt =
-            NetPacketGetPacketLargeSendSegmentation(netPacket, m_netPacketLsoOffset);
+            NetExtensionGetPacketLargeSendSegmentation(&m_netPacketLsoExtension, packetIndex);
         RtlZeroMemory(lsoExt, NET_PACKET_EXTENSION_LSO_VERSION_1_SIZE);
 
         if (netPacket->Layout.Layer4Type == NET_PACKET_LAYER4_TYPE_TCP)
@@ -105,7 +109,7 @@ NxNblTranslationStatus
 NxNblTranslator::TranslateNetBufferToNetPacket(
     NET_BUFFER & netBuffer,
     NET_PACKET* netPacket
-    ) const
+) const
 {
     auto backfill = static_cast<ULONG>(m_datapathCapabilities.TxPayloadBackfill);
 
@@ -161,7 +165,7 @@ NxNblTranslator::TranslateNetBufferToNetPacket(
         return NxNblTranslationStatus::CannotTranslate;
     }
 
-    auto& fragmentRing = *NET_DATAPATH_DESCRIPTOR_GET_FRAGMENT_RING_BUFFER(&m_datapathDescriptor);
+    auto& fragmentRing = *NetRingCollectionGetFragmentRing(m_rings);
     auto const availableFragments = NetRbFragmentRange::OsRange(fragmentRing);
 
     auto const result = RequiresDmaMapping() ?
@@ -174,7 +178,7 @@ NxNblTranslator::TranslateNetBufferToNetPacket(
         {
             // Commit the fragment chain to the packet
             netPacket->FragmentCount = static_cast<UINT16>(result.FragmentChain.Count());
-            netPacket->FragmentOffset = result.FragmentChain.begin().GetIndex();
+            netPacket->FragmentIndex = result.FragmentChain.begin().GetIndex();
             fragmentRing.EndIndex = result.FragmentChain.end().GetIndex();
 
             if (backfill > 0)
@@ -199,7 +203,7 @@ bool
 IsAddressAligned(
     _In_ void *Address,
     _In_ size_t Alignment
-    )
+)
 {
     return (reinterpret_cast<ULONG_PTR>(Address) & (Alignment - 1)) == 0;
 }
@@ -207,8 +211,8 @@ IsAddressAligned(
 _Use_decl_annotations_
 bool
 NxNblTranslator::ShouldBounceFragment(
-    NET_PACKET_FRAGMENT const &Fragment
-    ) const
+    NET_FRAGMENT const & Fragment
+) const
 {
     auto const alignment = m_datapathCapabilities.TxMemoryConstraints.AlignmentRequirement;
     auto const maxPhysicalAddress = m_datapathCapabilities.TxMemoryConstraints.Dma.MaximumPhysicalAddress;
@@ -219,8 +223,9 @@ NxNblTranslator::ShouldBounceFragment(
         return true;
     }
 
-    bool checkMaxPhysicalAddress = RequiresDmaMapping() && maxPhysicalAddress.QuadPart != 0;
-    if (checkMaxPhysicalAddress && Fragment.Mapping.DmaLogicalAddress.QuadPart > maxPhysicalAddress.QuadPart)
+    auto const maxLogicalAddress = static_cast<LOGICAL_ADDRESS>(maxPhysicalAddress.QuadPart);
+    auto const checkMaxPhysicalAddress = RequiresDmaMapping() && maxLogicalAddress != 0;
+    if (checkMaxPhysicalAddress && Fragment.Mapping.DmaLogicalAddress > maxLogicalAddress)
     {
         m_stats.DMA.PhysicalAddressTooLarge += 1;
         return true;
@@ -236,7 +241,7 @@ NxNblTranslator::TranslateMdlChainToFragmentRangeKvmOnly(
     size_t MdlOffset,
     size_t BytesToCopy,
     NetRbFragmentRange const &AvailableFragments
-    ) const
+) const
 {
     auto it = AvailableFragments.begin();
 
@@ -330,7 +335,7 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRange(
     size_t BytesToCopy,
     NET_PACKET const &Packet,
     NetRbFragmentRange const &AvailableFragments
-    ) const
+) const
 {
     if (m_dmaAdapter->AlwaysBounce())
     {
@@ -368,7 +373,7 @@ bool
 CanTranslateSglToNetPacket(
     _In_ SCATTER_GATHER_LIST const &Sgl,
     _In_ MDL const &Mdl
-    )
+)
 {
     auto mdlCount = 0ull;
     for (auto mdl = &Mdl; mdl != nullptr; mdl = mdl->Next)
@@ -387,7 +392,7 @@ NxNblTranslator::TranslateScatterGatherListToFragmentRange(
     size_t MdlOffset,
     NxScatterGatherList const &Sgl,
     NetRbFragmentRange const &AvailableFragments
-    ) const
+) const
 {
     if (Sgl->NumberOfElements > m_datapathCapabilities.MaximumNumberOfTxFragments)
     {
@@ -425,7 +430,7 @@ NxNblTranslator::TranslateScatterGatherListToFragmentRange(
         currentFragment.Capacity = sge.Length;
         currentFragment.ValidLength = sge.Length;
         currentFragment.Offset = 0;
-        currentFragment.Mapping.DmaLogicalAddress = sge.Address;
+        currentFragment.Mapping.DmaLogicalAddress = sge.Address.QuadPart;
 
         void *kvm = MmGetSystemAddressForMdlSafe(currentMdl, LowPagePriority | MdlMappingNoExecute);
 
@@ -466,7 +471,7 @@ _Use_decl_annotations_
 bool
 NxNblTranslator::MapMdlChainToSystemVA(
     MDL &Mdl
-    ) const
+) const
 {
     auto currentMdl = &Mdl;
     while (currentMdl != nullptr)
@@ -529,7 +534,7 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeUseHal(
     size_t BytesToCopy,
     NxDmaTransfer const &DmaTransfer,
     NetRbFragmentRange const &AvailableFragments
-    ) const
+) const
 {
     NxScatterGatherList sgl { *m_dmaAdapter };
 
@@ -567,7 +572,7 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeUseHal(
     if (mappedMdl == nullptr)
     {
         // We need the mapped MDL chain to be able to translate the Scatter/Gather list
-        // to a chain of NET_PACKET_FRAGMENTs, if we don't have it we need to bounce
+        // to a chain of NET_FRAGMENT, if we don't have it we need to bounce
         return { NxNblTranslationStatus::BounceRequired, EmptyFragmentRange() };
     }
 
@@ -622,7 +627,7 @@ CountNumberOfPages(
     _In_ MDL &MdlChain,
     _In_ size_t MdlOffset,
     _In_ size_t ByteCount
-    )
+)
 {
     size_t numberOfPages = 0;
     auto mdl = &MdlChain;
@@ -661,7 +666,7 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeBypassHal(
     size_t MdlOffset,
     size_t BytesToCopy,
     NetRbFragmentRange const &AvailableFragments
-    ) const
+) const
 {
     auto it = AvailableFragments.begin();
 
@@ -723,7 +728,7 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeBypassHal(
 
             // Performance can be optimized by coalescing adjacent fragments
 
-            currentFragment.Mapping.DmaLogicalAddress = MmGetPhysicalAddress(reinterpret_cast<void *>(va));
+            currentFragment.Mapping.DmaLogicalAddress = MmGetPhysicalAddress(reinterpret_cast<void *>(va)).QuadPart;
             currentFragment.VirtualAddress = reinterpret_cast<void *>(va);
 
             if (ShouldBounceFragment(currentFragment))
@@ -749,17 +754,26 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeBypassHal(
 }
 
 _Use_decl_annotations_
-NetRbPacketIterator
+bool
 NxNblTranslator::TranslateNbls(
     NET_BUFFER_LIST *&currentNbl,
     NET_BUFFER *&currentNetBuffer,
-    NetRbPacketRange const &rb,
     NxBounceBufferPool &BouncePool
-    ) const
+) const
 {
-    for (auto currentPacket = rb.begin(); currentPacket != rb.end(); currentPacket++)
+    auto pr = NetRingCollectionGetPacketRing(m_rings);
+    auto const endIndex = pr->EndIndex;
+
+    while (currentNbl && pr->EndIndex != ((pr->OSReserved0 - 1) & pr->ElementIndexMask))
     {
-        switch (TranslateNetBufferToNetPacket(*currentNetBuffer, &(*currentPacket)))
+        if (! currentNetBuffer)
+        {
+            currentNetBuffer = currentNbl->FirstNetBuffer;
+        }
+
+        auto currentPacket = NetRingGetPacketAtIndex(pr, pr->EndIndex);
+
+        switch (TranslateNetBufferToNetPacket(*currentNetBuffer, currentPacket))
         {
         case NxNblTranslationStatus::BounceRequired:
             // The buffers in the NET_BUFFER's MDL chain cannot be transmitted as is. As such we need
@@ -767,7 +781,7 @@ NxNblTranslator::TranslateNbls(
 
             if(!BouncePool.BounceNetBuffer(*currentNetBuffer, *currentPacket))
             {
-                if (currentPacket->IgnoreThisPacket)
+                if (currentPacket->Ignore)
                 {
                     // If it was not possible to bounce the NET_BUFFER and the
                     // current packet was marked to be ignored we should *not*
@@ -780,7 +794,7 @@ NxNblTranslator::TranslateNbls(
                     // It was not possible to bounce the NET_BUFFER because we're
                     // out of some resource. Try again later.
                     m_stats.Packet.BounceFailure += 1;
-                    return currentPacket;
+                    return endIndex != pr->EndIndex;
                 }
             }
 
@@ -788,101 +802,43 @@ NxNblTranslator::TranslateNbls(
             __fallthrough;
 
         case NxNblTranslationStatus::Success:
-            currentPacket->Layout = NxGetPacketLayout(m_mediaType, &m_datapathDescriptor, &(*currentPacket));
-            TranslateNetBufferListOOBDataToNetPacketExtensions(*currentNbl, &(*currentPacket));
+            currentPacket->Layout = NxGetPacketLayout(m_mediaType, m_rings, currentPacket);
+            TranslateNetBufferListOOBDataToNetPacketExtensions(*currentNbl, currentPacket, pr->EndIndex);
             break;
+
         case NxNblTranslationStatus::InsufficientResources:
             // There are not enough resources at the moment to translate the NET_BUFFER,
             // stop processing here. Once there are enough resources available this will
             // make forward progress
-            return currentPacket;
+            return endIndex != pr->EndIndex;
 
         case NxNblTranslationStatus::CannotTranslate:
             // For some reason we won't ever be able to translate the NET_BUFFER,
             // mark the corresponding NET_PACKET to be dropped.
-            currentPacket->IgnoreThisPacket = true;
+            currentPacket->Ignore = true;
             currentPacket->FragmentCount = 0;
             m_stats.Packet.CannotTranslate += 1;
             break;
         }
 
-        if (currentNetBuffer->Next)
-        {
-            currentNetBuffer = currentNetBuffer->Next;
-        }
-        else
+        currentNetBuffer = currentNetBuffer->Next;
+
+        if (! currentNetBuffer)
         {
             // This is the final NB in the NBL, so let's bundle the NBL
             // up with the NET_PACKET.  We'll find it later when completing packets.
 
-            auto &currentPacketExtension = m_contextBuffer.GetPacketContext<PacketContext>(*currentPacket);
+            auto &currentPacketExtension = m_contextBuffer.GetContext<PacketContext>(pr->EndIndex);
             currentPacketExtension.NetBufferListToComplete = currentNbl;
 
             // Now let's advance to the next NBL.
             currentNbl = currentNbl->Next;
-
-            // If this was the last NBL, we're done for now.  Remember which packet is next.
-            if (!currentNbl)
-                return ++currentPacket;
-
-            currentNetBuffer = currentNbl->FirstNetBuffer;
-
-#if defined(DBG) && defined(_KERNEL_MODE)
-            // We're trying to avoid writing to the NBL now, but that means it will
-            // temporarily hold a stale pointer.  Scribble a bogus value here to
-            // ensure nobody tries to dereference it until the NBL is completed and
-            // a correct value is written here.
-            currentPacketExtension.NetBufferListToComplete->Next = (NET_BUFFER_LIST*)MM_BAD_POINTER;
-#endif
-        }
-    }
-
-    return rb.end();
-}
-
-
-void
-ReusePackets(
-    _In_ NET_DATAPATH_DESCRIPTOR const* descriptor,
-    _In_ NetRbPacketRange &packets
-    )
-{
-    if (packets.Count() == 0)
-        return;
-
-    auto const beginIndex = packets.begin().GetIndex();
-    auto const endIndex = packets.end().GetIndex();
-
-    auto pRb = const_cast<NET_RING_BUFFER *>(&packets.RingBuffer());
-
-    if (beginIndex < endIndex)
-    {
-        // We didn't wrap around this time, so we can do it in one go.
-        NetPacketReuseMany(
-            descriptor,
-            packets.At(0),
-            pRb->ElementStride,
-            packets.Count());
-    }
-    else
-    {
-        // Wraparound: clean the first few packets, then the last few packets.
-
-        if (endIndex > 0)
-        {
-            NetPacketReuseMany(
-                descriptor,
-                NetRingBufferGetPacketAtIndex(pRb, 0),
-                pRb->ElementStride,
-                endIndex);
         }
 
-        NetPacketReuseMany(
-            descriptor,
-            NetRingBufferGetPacketAtIndex(pRb, beginIndex),
-            pRb->ElementStride,
-            (pRb->NumberOfElements - beginIndex));
+        pr->EndIndex = NetRingIncrementIndex(pr, pr->EndIndex);
     }
+
+    return endIndex != pr->EndIndex;
 }
 
 _Use_decl_annotations_
@@ -890,11 +846,8 @@ void
 NxNblTranslator::TranslateNetPacketExtensionsCompletionToNetBufferList(
     const NET_PACKET *netPacket,
     PNET_BUFFER_LIST netBufferList
-    ) const
+) const
 {
-    UINT64 totalPacketSize = 0;
-    ULONG lsoTcpHeaderOffset = 0;
-
     if ((netPacket->Layout.Layer4Type == NET_PACKET_LAYER4_TYPE_TCP) &&
         (IsPacketLargeSendSegmentationEnabled()))
     {
@@ -905,22 +858,28 @@ NxNblTranslator::TranslateNetPacketExtensionsCompletionToNetBufferList(
 
         if (lsoInfo.Value != 0)
         {
-            auto lsoType = lsoInfo.Transmit.Type;
+            auto const lsoType = lsoInfo.Transmit.Type;
             lsoInfo.Value = 0;
 
             switch (lsoType)
             {
             case NDIS_TCP_LARGE_SEND_OFFLOAD_V1_TYPE:
                 {
-                    lsoTcpHeaderOffset = lsoInfo.LsoV1Transmit.TcpHeaderOffset;
+                    size_t totalPacketSize = 0;
 
+                    auto fr = NetRingCollectionGetFragmentRing(m_rings);
                     for (UINT32 i = 0; i < netPacket->FragmentCount; i++)
                     {
-                        totalPacketSize += NET_PACKET_GET_FRAGMENT(netPacket, &m_datapathDescriptor, i)->ValidLength;
+                        totalPacketSize += static_cast<size_t>(NetRingGetFragmentAtIndex(fr, (netPacket->FragmentIndex + i) & fr->ElementIndexMask)->ValidLength);
                     }
 
+                    auto const tcpPayloadOffset =
+                        netPacket->Layout.Layer2HeaderLength +
+                        netPacket->Layout.Layer3HeaderLength +
+                        netPacket->Layout.Layer4HeaderLength;
+
                     lsoInfo.LsoV1TransmitComplete.Type = lsoType;
-                    lsoInfo.LsoV1TransmitComplete.TcpPayload = (ULONG)(totalPacketSize - lsoTcpHeaderOffset);
+                    lsoInfo.LsoV1TransmitComplete.TcpPayload = (ULONG)(totalPacketSize - tcpPayloadOffset);
                 }
                 break;
             case NDIS_TCP_LARGE_SEND_OFFLOAD_V2_TYPE:
@@ -941,47 +900,47 @@ NxNblTranslator::TranslateNetPacketExtensionsCompletionToNetBufferList(
 _Use_decl_annotations_
 TxPacketCompletionStatus
 NxNblTranslator::CompletePackets(
-    NetRbPacketRange const &rb,
     NxBounceBufferPool &BouncePool
-    ) const
+) const
 {
-    TxPacketCompletionStatus result{ rb.begin() };
+    TxPacketCompletionStatus result;
 
-    for (; result.CompletedTo != rb.end(); ++result.CompletedTo)
+    auto pr = NetRingCollectionGetPacketRing(m_rings);
+    auto const osreserved0 = pr->OSReserved0;
+
+    for (; pr->OSReserved0 != pr->BeginIndex;
+        pr->OSReserved0 = NetRingIncrementIndex(pr, pr->OSReserved0))
     {
-        auto &extension = m_contextBuffer.GetPacketContext<PacketContext>(*result.CompletedTo);
+        auto packet = NetRingGetPacketAtIndex(pr, pr->OSReserved0);
+        auto & extension = m_contextBuffer.GetContext<PacketContext>(pr->OSReserved0);
 
-        // Release any DMA resources allocated for this packet
         if (m_dmaAdapter)
         {
-            m_dmaAdapter->CleanupNetPacket(*result.CompletedTo);
+            m_dmaAdapter->CleanupNetPacket(*packet);
         }
 
         // Free any bounce buffers allocated for this packet
-        BouncePool.FreeBounceBuffers(*result.CompletedTo);
+        BouncePool.FreeBounceBuffers(*packet);
 
         if (auto completedNbl = extension.NetBufferListToComplete)
         {
             extension.NetBufferListToComplete = nullptr;
 
             completedNbl->Status = NDIS_STATUS_SUCCESS;
-
             completedNbl->Next = result.CompletedChain;
             result.CompletedChain = completedNbl;
 
             TranslateNetPacketExtensionsCompletionToNetBufferList(
-                &(*result.CompletedTo),
+                packet,
                 completedNbl);
 
             result.NumCompletedNbls += 1;
         }
 
-        DetachFragmentsFromPacket(*result.CompletedTo, m_datapathDescriptor);
+        RtlZeroMemory(packet, pr->ElementStride);
     }
 
-    NetRbPacketRange completed{ rb.begin(), result.CompletedTo };
-
-    ReusePackets(&m_datapathDescriptor, completed);
+    result.CompletedPackets = osreserved0 != pr->OSReserved0;
 
     return result;
 }
@@ -989,11 +948,11 @@ NxNblTranslator::CompletePackets(
 bool
 NxNblTranslator::IsPacketChecksumEnabled() const
 {
-    return m_netPacketChecksumOffset != NET_PACKET_EXTENSION_INVALID_OFFSET;
+    return m_netPacketChecksumExtension.Enabled;
 }
 
 bool
 NxNblTranslator::IsPacketLargeSendSegmentationEnabled() const
 {
-    return m_netPacketLsoOffset != NET_PACKET_EXTENSION_INVALID_OFFSET;
+    return m_netPacketLsoExtension.Enabled;
 }

@@ -26,7 +26,7 @@ FORCEINLINE
 NxRequestQueue *
 GetNxRequestQueueFromHandle(
     _In_ NETREQUESTQUEUE RequestQueue
-    );
+);
 
 class NxRequestQueue : public CFxObject<NETREQUESTQUEUE,
                                         NxRequestQueue,
@@ -66,8 +66,8 @@ private:
         _In_ NX_PRIVATE_GLOBALS *      NxPrivateGlobals,
         _In_ NETREQUESTQUEUE           RequestQueue,
         _In_ NxAdapter *               NxAdapter,
-        _In_ PNET_REQUEST_QUEUE_CONFIG Config
-        );
+        _In_ NET_REQUEST_QUEUE_CONFIG * Config
+    );
 
 public:
 
@@ -78,41 +78,41 @@ public:
     _Create(
         _In_     NX_PRIVATE_GLOBALS *      PrivateGlobals,
         _In_     NxAdapter *               NxAdatper,
-        _In_opt_ PWDF_OBJECT_ATTRIBUTES    ClientAttributes,
-        _In_     PNET_REQUEST_QUEUE_CONFIG Config,
+        _In_opt_ WDF_OBJECT_ATTRIBUTES *   ClientAttributes,
+        _In_     NET_REQUEST_QUEUE_CONFIG * Config,
         _Out_    NxRequestQueue **         Queue
-        );
+    );
 
     VOID
     ReferenceHandlers(
         VOID
-        );
+    );
 
     static
     VOID
     _FreeHandlers(
-        _In_ PNET_REQUEST_QUEUE_CONFIG RequestQueueConfig
-        );
+        _In_ NET_REQUEST_QUEUE_CONFIG * RequestQueueConfig
+    );
 
     RECORDER_LOG
     GetRecorderLog(
         void
-        );
+    );
 
     VOID
     QueueRequest(
         _In_ NETREQUEST Request
-        );
+    );
 
     VOID
     DispatchRequest(
         _In_ NxRequest * NxRequest
-        );
+    );
 
     VOID
     DisconnectRequest(
         _In_ NxRequest * NxRequest
-        );
+    );
 
 };
 

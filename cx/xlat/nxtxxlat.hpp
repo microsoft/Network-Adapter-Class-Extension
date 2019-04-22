@@ -16,7 +16,7 @@ Abstract:
 #include "NxExecutionContext.hpp"
 #include "NxSignal.hpp"
 #include "NxRingBuffer.hpp"
-#include "NxContextBuffer.hpp"
+#include "NxRingContext.hpp"
 #include "NxNblQueue.hpp"
 #include "NxNbl.hpp"
 #include "NxNblTranslation.hpp"
@@ -35,52 +35,52 @@ public:
         _In_ NET_CLIENT_DISPATCH const * Dispatch,
         _In_ NET_CLIENT_ADAPTER Adapter,
         _In_ NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
-        ) noexcept;
+    ) noexcept;
 
     virtual
     ~NxTxXlat(
         void
-        );
+    );
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
     size_t
     GetQueueId(
         void
-        ) const;
+    ) const;
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
     Initialize(
         void
-        );
+    );
 
     _IRQL_requires_(PASSIVE_LEVEL)
     void
     Start(
         void
-        );
+    );
 
     _IRQL_requires_(PASSIVE_LEVEL)
     void
     Cancel(
         void
-        );
+    );
 
     _IRQL_requires_(PASSIVE_LEVEL)
     void
     Stop(
         void
-        );
+    );
 
     void
     TransmitThread(
         void
-        );
+    );
 
     void
     Notify(
         void
-        );
+    );
 
     //
     // INxNblTx
@@ -93,10 +93,7 @@ public:
         _In_ ULONG PortNumber,
         _In_ ULONG NumberOfNbls,
         _In_ ULONG SendFlags
-        );
-
-    void
-    ReportCounters();
+    );
 
 private:
 
@@ -117,13 +114,13 @@ private:
 
     NET_CLIENT_QUEUE m_queue = nullptr;
     NET_CLIENT_QUEUE_DISPATCH const * m_queueDispatch = nullptr;
-    size_t m_checksumOffset = NET_PACKET_EXTENSION_INVALID_OFFSET;
-    size_t m_lsoOffset = NET_PACKET_EXTENSION_INVALID_OFFSET;
+    NET_EXTENSION m_checksumExtension = {};
+    NET_EXTENSION m_lsoExtension = {};
 
     // allocated in Init
-    NET_DATAPATH_DESCRIPTOR const * m_descriptor;
-    NxRingBuffer m_ringBuffer;
-    NxContextBuffer m_contextBuffer;
+    NET_RING_COLLECTION m_rings;
+    NxRingBuffer m_packetRing;
+    NxRingContext m_packetContext;
     NxBounceBufferPool m_bounceBufferPool;
     wistd::unique_ptr<NxDmaAdapter> m_dmaAdapter;
 
@@ -138,17 +135,6 @@ private:
     // and halt queue operation
     bool m_producedPackets = false;
     bool m_completedPackets = false;
-
-    // Tx translation specific counters
-    ULONG64 m_CumulativeNBLQueueDepthInLastInterval = 0;
-    ULONG64 m_IterationCountInLastInterval = 0;
-    ULONG64 m_NBLQueueEmptyCount = 0;
-    ULONG64 m_NBLQueueOccupiedCount = 0;
-
-#ifdef _KERNEL_MODE
-    KTIMER m_CounterReportTimer;
-    KDPC m_CounterReportDpc;
-#endif
 
     struct ArmedNotifications
     {
@@ -206,32 +192,22 @@ private:
     void
     ArmNotifications(
         _In_ ArmedNotifications reasons
-        );
+    );
 
     NTSTATUS
     PreparePacketExtensions(
         _Inout_ Rtl::KArray<NET_CLIENT_PACKET_EXTENSION>& addedPacketExtensions
-        );
+    );
 
-    size_t
-    GetPacketExtensionOffsets(
+    void
+    GetPacketExtension(
         PCWSTR ExtensionName,
-        ULONG ExtensionVersion
-        ) const;
+        ULONG ExtensionVersion,
+        NET_EXTENSION * Extension
+    ) const;
 
     void
     SetupTxThreadProperties();
 
-    void
-    UpdateTxTranslationSpecificCounters();
-
-    bool m_shouldReportCounters = false;
-    ULONG m_counterReportInterval = 0;
-    bool m_shouldUpdateEcCounters = false;
-
-#ifdef  _KERNEL_MODE
-    static
-    KDEFERRED_ROUTINE CounterReportDpcRoutine;
-#endif //  _KERNEL_MODE
 };
 

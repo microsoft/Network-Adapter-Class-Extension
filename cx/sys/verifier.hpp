@@ -14,6 +14,9 @@ struct AdapterInit;
 struct QUEUE_CREATION_CONTEXT;
 struct NX_PRIVATE_GLOBALS;
 
+struct _NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES;
+typedef _NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES;
+
 class NxAdapter;
 class NxAdapterCollection;
 class NxDevice;
@@ -123,27 +126,18 @@ typedef enum _FailureCode : ULONG_PTR
     FailureCode_MacAddressLengthTooLong,
     FailureCode_InvalidLinkLayerCapabilities,
     FailureCode_InvalidLinkState,
-    FailureCode_ObjectIsNotCancelable,
     FailureCode_ParameterCantBeNull,
     FailureCode_InvalidQueryUlongFlag,
-    FailureCode_QueryNetworkAddressInvalidParameter,
     FailureCode_QueueConfigurationHasError,
     FailureCode_InvalidRequestQueueType,
-    FailureCode_NetPacketContextTypeMismatch,
-    FailureCode_NetPacketDoesNotHaveContext,
     FailureCode_MtuMustBeGreaterThanZero,
     FailureCode_BadQueueInitContext,
     FailureCode_CreatingNetQueueFromWrongThread,
-    FailureCode_InvalidDatapathCapabilities,
     FailureCode_NetQueueInvalidConfiguration,
     FailureCode_ParentObjectNotNull,
-    FailureCode_InvalidNetAdapterConfig,
     FailureCode_QueueAlreadyCreated,
     FailureCode_ObjectAttributesContextSizeTooLarge,
     FailureCode_NotPowerOfTwo,
-    FailureCode_IllegalObjectAttributes,
-    FailureCode_InvalidPacketContextToken,
-    FailureCode_InvalidPacketContextSizeOverride,
     FailureCode_InvalidNetPacketExtensionName,
     FailureCode_InvalidNetPacketExtensionVersion,
     FailureCode_InvalidNetPacketExtensionAlignment,
@@ -154,13 +148,14 @@ typedef enum _FailureCode : ULONG_PTR
     FailureCode_InvalidReceiveScalingHashType,
     FailureCode_InvalidReceiveScalingProtocolType,
     FailureCode_InvalidReceiveScalingEncapsulationType,
-    FailureCode_IllegalAdapterDelete,
     FailureCode_RemovingDeviceWithAdapters,
     FailureCode_InvalidDatapathCallbacks,
     FailureCode_InvalidNetAdapterInitSignature,
     FailureCode_NetAdapterInitAlreadyUsed,
     FailureCode_InvalidNetAdapterExtensionInitSignature,
     FailureCode_InvalidLsoCapabilities,
+    FailureCode_IllegalPrivateApiCall,
+    FailureCode_InvalidQueueHandle,
 } FailureCode;
 
 //
@@ -181,7 +176,7 @@ NetAdapterCxBugCheck(
     _In_ FailureCode         FailureCode,
     _In_ ULONG_PTR           Parameter2,
     _In_ ULONG_PTR           Parameter3
-    );
+);
 
 VOID
 Verifier_ReportViolation(
@@ -190,66 +185,60 @@ Verifier_ReportViolation(
     _In_ FailureCode         FailureCode,
     _In_ ULONG_PTR           Parameter2,
     _In_ ULONG_PTR           Parameter3
-    );
+);
 
 VOID
 Verifier_VerifyPrivateGlobals(
     NX_PRIVATE_GLOBALS * PrivateGlobals
-    );
+);
 
 VOID
 Verifier_VerifyIrqlPassive(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals
-    );
+);
 
 VOID
 Verifier_VerifyIrqlLessThanOrEqualDispatch(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals
-    );
+);
 
 VOID
 Verifier_VerifyAdapterNotStarted(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NxAdapter *         pNxAdapter
-    );
+);
 
 VOID
 Verifier_VerifyNetPowerSettingsAccessible(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NxWake *             NetWake
-    );
-
-VOID
-Verifier_VerifyObjectSupportsCancellation(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ WDFOBJECT Object
-    );
+);
 
 VOID
 Verifier_VerifyNetRequestCompletionStatusNotPending(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NETREQUEST NetRequest,
     _In_ NTSTATUS   CompletionStatus
-    );
+);
 
 VOID
 Verifier_VerifyNetRequestType(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NxRequest * NxRequest,
     _In_ NDIS_REQUEST_TYPE Type
-    );
+);
 
 VOID
 Verifier_VerifyNetRequestIsQuery(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NxRequest * NxRequest
-    );
+);
 
 VOID
 Verifier_VerifyNetRequest(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NxRequest * pNxRequest
-    );
+);
 
 template <typename T>
 VOID
@@ -275,166 +264,161 @@ VOID
 Verifier_VerifyNotNull(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ void const * const Ptr
-    );
+);
 
 NTSTATUS
 Verifier_VerifyQueueConfiguration(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ PNET_REQUEST_QUEUE_CONFIG QueueConfig
-    );
+    _In_ NET_REQUEST_QUEUE_CONFIG * QueueConfig
+);
 
 VOID
 Verifier_VerifyReceiveScalingCapabilities(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ PCNET_ADAPTER_RECEIVE_SCALING_CAPABILITIES Capabilities
-    );
+    _In_ const NET_ADAPTER_RECEIVE_SCALING_CAPABILITIES * Capabilities
+);
 
 VOID
 Verifier_VerifyPowerCapabilities(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NxAdapter const & NxAdapter,
     _In_ NET_ADAPTER_POWER_CAPABILITIES const & PowerCapabilities
-    );
+);
 
 VOID
 Verifier_VerifyLinkLayerCapabilities(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ PNET_ADAPTER_LINK_LAYER_CAPABILITIES LinkLayerCapabilities
-    );
+    _In_ NET_ADAPTER_LINK_LAYER_CAPABILITIES * LinkLayerCapabilities
+);
 
 VOID
 Verifier_VerifyCurrentLinkState(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ PNET_ADAPTER_LINK_STATE LinkState
-    );
+    _In_ NET_ADAPTER_LINK_STATE * LinkState
+);
 
 VOID
 Verifier_VerifyLinkLayerAddress(
     _In_ NX_PRIVATE_GLOBALS *PrivateGlobals,
     _In_ NET_ADAPTER_LINK_LAYER_ADDRESS *LinkLayerAddress
-    );
+);
 
 VOID
 Verifier_VerifyQueryAsUlongFlags(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NET_CONFIGURATION_QUERY_ULONG_FLAGS Flags
-    );
-
-NTSTATUS
-Verifier_VerifyQueryNetworkAddressParameters(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ ULONG BufferLength,
-    _In_ PVOID NetworkAddressBuffer
-    );
-
-VOID
-Verifier_VerifyNetPacketContextToken(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ NET_DATAPATH_DESCRIPTOR const * Descriptor,
-    _In_ NET_PACKET* NetPacket,
-    _In_ PNET_PACKET_CONTEXT_TOKEN Token
-    );
+);
 
 VOID
 Verifier_VerifyMtuSize(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
          ULONG MtuSize
-    );
+);
 
 VOID
 Verifier_VerifyQueueInitContext(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ QUEUE_CREATION_CONTEXT *NetQueueInit
-    );
+);
 
 VOID
 Verifier_VerifyNetPacketQueueConfiguration(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NET_PACKET_QUEUE_CONFIG const * Configuration
-    );
+);
 
 VOID
 Verifier_VerifyObjectAttributesParentIsNull(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ PWDF_OBJECT_ATTRIBUTES ObjectAttributes
-    );
+    _In_ WDF_OBJECT_ATTRIBUTES * ObjectAttributes
+);
 
 VOID
 Verifier_VerifyObjectAttributesContextSize(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_opt_ PWDF_OBJECT_ATTRIBUTES ObjectAttributes,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES * ObjectAttributes,
     _In_ SIZE_T MaximumContextSize
-    );
+);
 
 VOID
 Verifier_VerifyDatapathCallbacks(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NET_ADAPTER_DATAPATH_CALLBACKS const *DatapathCallbacks
-    );
+);
 
 VOID
 Verifier_VerifyAdapterInitSignature(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ AdapterInit const *AdapterInit
-    );
+);
 
 VOID
 Verifier_VerifyAdapterExtensionInitSignature(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ AdapterExtensionInit const *AdapterExtensionInit
-    );
+);
 
 VOID
 Verifier_VerifyAdapterInitNotUsed(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ AdapterInit const *AdapterInit
-    );
-
-VOID
-Verifier_VerifyNetPacketContextAttributes(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ PNET_PACKET_CONTEXT_ATTRIBUTES PacketContextAttributes
-    );
+);
 
 VOID
 Verifier_VerifyNetPacketExtension(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ PNET_PACKET_EXTENSION NetPacketExtension
-    );
+    _In_ NET_PACKET_EXTENSION const * NetPacketExtension
+);
 
 VOID
 Verifier_VerifyNetPacketExtensionQuery(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ PNET_PACKET_EXTENSION_QUERY NetPacketExtension
-    );
+    _In_ NET_PACKET_EXTENSION_QUERY const * NetPacketExtension
+);
 
 VOID
 Verifier_VerifyNetAdapterTxCapabilities(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ const NET_ADAPTER_TX_CAPABILITIES *TxCapabilities
-    );
+);
 
 VOID
 Verifier_VerifyNetAdapterRxCapabilities(
     _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ const NET_ADAPTER_RX_CAPABILITIES *RxCapabilities
-    );
-
-VOID
-Verifier_VerifyAdapterCanBeDeleted(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ NxAdapter const *Adapter
-    );
+);
 
 VOID
 Verifier_VerifyDeviceAdapterCollectionIsEmpty(
     _In_ NX_PRIVATE_GLOBALS *PrivateGlobals,
     _In_ NxDevice const *Device,
     _In_ NxAdapterCollection const *AdapterCollection
-    );
+);
 
 VOID
 Verifier_VerifyLsoCapabilities(
     _In_ NX_PRIVATE_GLOBALS *PrivateGlobals,
     _In_ NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES const *LsoCapabilities
-    );
+);
+
+void
+Verifier_VerifyExtensionGlobals(
+    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals
+);
+
+void
+Verifier_VerifyIsMediaExtension(
+    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals
+);
+
+void
+Verifier_VerifyRxQueueHandle(
+    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NETPACKETQUEUE NetRxQueue
+);
+
+void
+Verifier_VerifyTxQueueHandle(
+    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NETPACKETQUEUE NetTxQueue
+);

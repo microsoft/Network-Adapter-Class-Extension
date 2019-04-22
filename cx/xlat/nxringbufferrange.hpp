@@ -4,14 +4,14 @@
 
 Abstract:
 
-    The NxRingBufferView allows iteration over the elements of a NET_RING_BUFFER.
+    The NxRingBufferView allows iteration over the elements of a NET_RING.
 
 --*/
 
 #pragma once
 
-#include "NetRingBuffer.h"
-#include "NetPacket.h"
+#include <net/ring.h>
+#include <net/packet.h>
 
 #ifdef XLAT_UNIT_TEST
 #include <iterator>
@@ -28,14 +28,14 @@ class NetRingBufferIterator
 {
     friend class NetRingBufferRange<T>;
 
-    NET_RING_BUFFER const & m_rb;
+    NET_RING const & m_rb;
     UINT32 m_index;
 
-    static NET_RING_BUFFER * Handle(NET_RING_BUFFER const & rb) { return const_cast<NET_RING_BUFFER*>(&rb); }
+    static NET_RING * Handle(NET_RING const & rb) { return const_cast<NET_RING *>(&rb); }
 
 public:
 
-    NetRingBufferIterator(NET_RING_BUFFER const & rb, UINT32 index) :
+    NetRingBufferIterator(NET_RING const & rb, UINT32 index) :
         m_rb(rb),
         m_index(index)
     {
@@ -44,22 +44,22 @@ public:
 
     T &operator*()
     {
-        return *(T*)NetRingBufferGetElementAtIndex(Handle(m_rb), m_index);
+        return *(T*)NetRingGetElementAtIndex(Handle(m_rb), m_index);
     }
 
     T const &operator*() const
     {
-        return *(T*)NetRingBufferGetElementAtIndex(Handle(m_rb), m_index);
+        return *(T*)NetRingGetElementAtIndex(Handle(m_rb), m_index);
     }
 
     T *operator->()
     {
-        return (T*)NetRingBufferGetElementAtIndex(Handle(m_rb), m_index);
+        return (T*)NetRingGetElementAtIndex(Handle(m_rb), m_index);
     }
 
     T const *operator->() const
     {
-        return (T*)NetRingBufferGetElementAtIndex(Handle(m_rb), m_index);
+        return (T*)NetRingGetElementAtIndex(Handle(m_rb), m_index);
     }
 
     NetRingBufferIterator &operator++()
@@ -116,7 +116,7 @@ public:
 
     UINT32 GetDistanceFrom(NetRingBufferIterator const &other) const
     {
-        return NetRingBufferGetNumberOfElementsInRange(Handle(m_rb), other.m_index, m_index);
+        return NetRingGetRangeCount(Handle(m_rb), other.m_index, m_index);
     }
 
     UINT32 GetIndex() const
@@ -128,13 +128,13 @@ public:
 template<typename T>
 class NetRingBufferRange
 {
-    NET_RING_BUFFER const & m_rb;
+    NET_RING const & m_rb;
     UINT32 m_begin, m_end;
 
 public:
     using iterator = NetRingBufferIterator<T>;
 
-    NetRingBufferRange(NET_RING_BUFFER const &rb, UINT32 begin, UINT32 end) :
+    NetRingBufferRange(NET_RING const &rb, UINT32 begin, UINT32 end) :
         m_rb(rb),
         m_begin(begin),
         m_end(end)
@@ -166,8 +166,8 @@ public:
     {
         NT_ASSERT(n < Count());
 
-        return (T*)NetRingBufferGetElementAtIndex(
-            const_cast<NET_RING_BUFFER*>(&m_rb),
+        return (T*)NetRingGetElementAtIndex(
+            const_cast<NET_RING *>(&m_rb),
             (m_begin + n) & m_rb.ElementIndexMask);
     }
 
@@ -175,17 +175,17 @@ public:
     {
         NT_ASSERT(n < Count());
 
-        return (T const *)NetRingBufferGetElementAtIndex(
-            const_cast<NET_RING_BUFFER*>(&m_rb),
+        return (T const *)NetRingGetElementAtIndex(
+            const_cast<NET_RING *>(&m_rb),
             (m_begin + n) & m_rb.ElementIndexMask);
     }
 
-    NET_RING_BUFFER const &RingBuffer() const
+    NET_RING const & RingBuffer() const
     {
         return m_rb;
     }
 
-    static NetRingBufferRange OsRange(NET_RING_BUFFER const & rb)
+    static NetRingBufferRange OsRange(NET_RING const & rb)
     {
         // view only shows moveable elements
         return NetRingBufferRange(
@@ -193,7 +193,7 @@ public:
             iterator(rb, rb.BeginIndex).GetPrevious());
     }
 
-    static NetRingBufferRange ClientRange(NET_RING_BUFFER const & rb)
+    static NetRingBufferRange ClientRange(NET_RING const & rb)
     {
         return NetRingBufferRange(rb, rb.BeginIndex, rb.EndIndex);
     }
@@ -201,5 +201,5 @@ public:
 
 using NetRbPacketRange = NetRingBufferRange<NET_PACKET>;
 using NetRbPacketIterator = NetRingBufferIterator<NET_PACKET>;
-using NetRbFragmentIterator = NetRingBufferIterator<NET_PACKET_FRAGMENT>;
-using NetRbFragmentRange = NetRingBufferRange<NET_PACKET_FRAGMENT>;
+using NetRbFragmentIterator = NetRingBufferIterator<NET_FRAGMENT>;
+using NetRbFragmentRange = NetRingBufferRange<NET_FRAGMENT>;

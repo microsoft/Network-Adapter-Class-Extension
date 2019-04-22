@@ -91,6 +91,7 @@ template<typename TCONTEXT>
 class KWorkItem : public KWorkItemBase<TCONTEXT, KWorkItem<TCONTEXT>>
 {
 public:
+    using CallbackFunctionPtr = typename KWorkItemBase<TCONTEXT, KWorkItem<TCONTEXT>>::CallbackFunctionPtr;
 
     PAGED KWorkItem(_In_ TCONTEXT *context, _In_ CallbackFunctionPtr callback) noexcept :
         KWorkItemBase<TCONTEXT, KWorkItem<TCONTEXT>>(context, callback)
@@ -114,6 +115,7 @@ template<typename TCONTEXT>
 class KCoalescingWorkItem : protected KWorkItemBase<TCONTEXT, KCoalescingWorkItem<TCONTEXT>>
 {
 public:
+    using CallbackFunctionPtr = typename KWorkItemBase<TCONTEXT, KCoalescingWorkItem<TCONTEXT>>::CallbackFunctionPtr;
 
     PAGED KCoalescingWorkItem(_In_ TCONTEXT *context, _In_ CallbackFunctionPtr callback) :
         KWorkItemBase<TCONTEXT, KCoalescingWorkItem<TCONTEXT>>(context, callback),
@@ -153,6 +155,7 @@ template<typename TCONTEXT>
 class KRepeatingWorkItem : protected KWorkItemBase<TCONTEXT, KCoalescingWorkItem<TCONTEXT>>
 {
 public:
+    using CallbackFunctionPtr = typename KWorkItemBase<TCONTEXT, KCoalescingWorkItem<TCONTEXT>>::CallbackFunctionPtr;
 
     PAGED KRepeatingWorkItem(_In_ TCONTEXT *context, _In_ CallbackFunctionPtr callback) :
         KWorkItemBase<TCONTEXT, KCoalescingWorkItem<TCONTEXT>>(context, callback),

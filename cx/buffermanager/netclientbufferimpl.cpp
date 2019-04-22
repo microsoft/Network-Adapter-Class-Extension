@@ -14,6 +14,10 @@ Abstract:
 #include "BufferPool.hpp"
 #include "KPtr.h"
 
+// xxx this api needs to be fixed
+#define NETCX_ADAPTER_2
+#include <net/fragment.h>
+
 #include "NetClientBufferImpl.tmh"
 
 EXTERN_C_START
@@ -40,7 +44,7 @@ _IRQL_requires_same_
 ULONG
 NetClientAllocateBuffers(
     _In_ NET_CLIENT_BUFFER_POOL BufferPool,
-    _Inout_updates_(NumBuffers) NET_PACKET_FRAGMENT Buffers[],
+    _Inout_updates_(NumBuffers) NET_FRAGMENT Buffers[],
     _In_ ULONG NumBuffers)
 {
     NxBufferPool* pool = reinterpret_cast<NxBufferPool *> (BufferPool);

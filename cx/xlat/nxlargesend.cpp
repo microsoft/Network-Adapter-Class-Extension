@@ -1,16 +1,18 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
+
 #include "NxXlatPrecomp.hpp"
 #include "NxXlatCommon.hpp"
-#include "NxLargeSend.tmh"
 
+#include "NxLargeSend.tmh"
 #include "NxLargeSend.hpp"
 
+#include <net/lso.h>
 
 NET_PACKET_LARGE_SEND_SEGMENTATION
 NxTranslateTxPacketLargeSendSegmentation(
     NET_PACKET const & packet,
     NDIS_TCP_LARGE_SEND_OFFLOAD_NET_BUFFER_LIST_INFO const & info
-    )
+)
 {
     ASSERT(packet.Layout.Layer4Type == NET_PACKET_LAYER4_TYPE_TCP);
     const USHORT layer4HeaderOffset =

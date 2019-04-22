@@ -12,23 +12,33 @@ Abstract:
 
 #include <FxObjectBase.hpp>
 
-typedef enum _NX_POWER_ENTRY_TYPE {
+typedef enum _NX_POWER_ENTRY_TYPE
+{
     NxPowerEntryTypeWakePattern,
     NxPowerEntryTypeProtocolOffload,
 } NX_POWER_ENTRY_TYPE;
 
-typedef struct _NX_NET_POWER_ENTRY {
+typedef struct _NX_NET_POWER_ENTRY
+{
     //
     // Size of the entry, including any patterns
     //
-    ULONG               Size;
-    SINGLE_LIST_ENTRY   ListEntry;
-    BOOLEAN             Enabled;
+    ULONG 
+        Size;
+
+    SINGLE_LIST_ENTRY 
+        ListEntry;
+
+    BOOLEAN
+        Enabled;
 
     union
     {
-        NDIS_PM_WOL_PATTERN         NdisWoLPattern;
-        NDIS_PM_PROTOCOL_OFFLOAD    NdisProtocolOffload;
+        NDIS_PM_WOL_PATTERN
+            NdisWoLPattern;
+
+        NDIS_PM_PROTOCOL_OFFLOAD
+            NdisProtocolOffload;
     };
     //
     // Dont add new members below the union
@@ -42,51 +52,66 @@ FORCEINLINE
 NxWake *
 GetNxWakeFromHandle(
     _In_ NETPOWERSETTINGS WakeListWdfHandle
-    );
+);
 
-class NxWake : public CFxObject<NETPOWERSETTINGS,
-                                    NxWake,
-                                    GetNxWakeFromHandle,
-                                    false>
+class NxWake
+    : public CFxObject<
+        NETPOWERSETTINGS,
+        NxWake,
+        GetNxWakeFromHandle,
+        false>
 {
 private:
     //
     // Pointer to the corresponding NxAdapter object
     //
-    NxAdapter *                  m_NxAdapter;
+    NxAdapter *
+        m_NxAdapter = nullptr;
 
     //
     // Head of the Wake patterns list
     //
-    SINGLE_LIST_ENTRY            m_WakeListHead;
-    ULONG                        m_WakeListCount;
+    SINGLE_LIST_ENTRY
+        m_WakeListHead = {};
+
+    ULONG
+        m_WakeListCount = 0;
 
     //
     // Head of the protocol offload list
     //
-    SINGLE_LIST_ENTRY            m_ProtocolOffloadListHead;
-    ULONG                        m_ProtocolOffloadListCount;
+    SINGLE_LIST_ENTRY
+        m_ProtocolOffloadListHead = {};
+
+    ULONG
+        m_ProtocolOffloadListCount = 0;
 
     //
     // A local copy of the PM Parameters reported by NDIS
     //
-    NDIS_PM_PARAMETERS           m_PMParameters;
+    NDIS_PM_PARAMETERS
+        m_PMParameters = {};
 
     //
     // Driver supplied callback to filter an incoming Wake Pattern
     //
-    PFN_NET_ADAPTER_PREVIEW_WAKE_PATTERN m_EvtPreviewWakePattern;
+    PFN_NET_ADAPTER_PREVIEW_WAKE_PATTERN
+        m_EvtPreviewWakePattern = nullptr;
 
     //
     // Driver supplied callback to filter an incoming protocol offload
     //
-    PFN_NET_ADAPTER_PREVIEW_PROTOCOL_OFFLOAD m_EvtPreviewProtocolOffload;
+    PFN_NET_ADAPTER_PREVIEW_PROTOCOL_OFFLOAD
+        m_EvtPreviewProtocolOffload = nullptr;
 
     //
     // Driver supplied cleanup and destory callbacks.
     //
-    PFN_WDF_OBJECT_CONTEXT_CLEANUP m_EvtCleanupCallback;
-    PFN_WDF_OBJECT_CONTEXT_DESTROY m_EvtDestroyCallback;
+    PFN_WDF_OBJECT_CONTEXT_CLEANUP
+        m_EvtCleanupCallback = nullptr;
+
+    PFN_WDF_OBJECT_CONTEXT_DESTROY
+        m_EvtDestroyCallback = nullptr;
 
     //
     // Object cleanup/destory callbacks remain disabled until NxAdapter
@@ -94,216 +119,177 @@ private:
     // That way driver doesnt have to deal with a callback on its
     // NETPOWERSETTINGS if NetAdapterCreate itself failed.
     //
-    BOOLEAN                        m_DriverObjectCallbacksEnabled;
+    bool
+        m_DriverObjectCallbacksEnabled = false;
 
     //
     // Controls when a driver is allowed to access the wake settings
     // Protects the settings from being accessed while they're in a window
     // where they can be modified
     //
-    BOOLEAN                        m_DriverCanAccessWakeSettings;
+    bool
+        m_DriverCanAccessWakeSettings = false;
 
     NxWake(
-        _In_ NETPOWERSETTINGS         NetPowerSettings,
-        _In_ NxAdapter *              NxAdapter
+        _In_ NETPOWERSETTINGS NetPowerSettings,
+        _In_ NxAdapter * NxAdapter
     );
 
-    PNX_NET_POWER_ENTRY
+    NX_NET_POWER_ENTRY *
     CreateWakePatternEntry(
-        _In_ PNDIS_PM_WOL_PATTERN Pattern,
-        _In_ UINT                 InformationBufferLength
+        _In_ NDIS_PM_WOL_PATTERN * Pattern,
+        _In_ UINT InformationBufferLength
     );
 
-    VOID
+    void
     AddWakePatternEntryToList(
-        _In_ PNX_NET_POWER_ENTRY Entry
+        _In_ NX_NET_POWER_ENTRY * Entry
     );
 
-    PNX_NET_POWER_ENTRY
+    NX_NET_POWER_ENTRY *
     RemovePowerEntryByID(
         _In_ ULONG PatternID,
-        _In_ NX_POWER_ENTRY_TYPE NxPowerEntryType
+        _In_ NX_POWER_ENTRY_TYPE PowerEntryType
     );
 
-    VOID
+    void
     UpdatePatternEntryEnabledField(
-        _In_ PNX_NET_POWER_ENTRY Entry
+        _In_ NX_NET_POWER_ENTRY * Entry
     );
 
     static
-    VOID
+    void
     _EvtDestroyCallbackWrapper(
         _In_ WDFOBJECT Object
     );
 
     static
-    VOID
+    void
     _EvtCleanupCallbackWrapper(
         _In_ WDFOBJECT Object
     );
 
     ULONG
     GetPowerEntryID(
-        _In_ PNX_NET_POWER_ENTRY NxEntry,
-        _In_ NX_POWER_ENTRY_TYPE NxEntryType
-        )
-    {
-        if (NxEntryType == NxPowerEntryTypeWakePattern) {
-            return NxEntry->NdisWoLPattern.PatternId;
-        }
-        else if (NxEntryType == NxPowerEntryTypeProtocolOffload) {
-            return NxEntry->NdisProtocolOffload.ProtocolOffloadId;
-        }
-        else {
-            NT_ASSERTMSG("Invalid NxEntryType", 0);
-            return ULONG_MAX;
-        }
-    }
+        _In_ NX_NET_POWER_ENTRY * Entry,
+        _In_ NX_POWER_ENTRY_TYPE EntryType
+    );
 
 public:
 
-    ~NxWake();
+    ~NxWake(
+        void
+    );
 
     static
     NTSTATUS
     _Create(
-        _In_   NxAdapter *              NxAdapter,
-        _In_   PWDF_OBJECT_ATTRIBUTES   NetPowerSettingsObjectAttributes,
-        _Out_  NxWake **                NxWakeObject
-        );
+        _In_ NxAdapter * NxAdapter,
+        _In_ WDF_OBJECT_ATTRIBUTES * NetPowerSettingsObjectAttributes,
+        _Out_ NxWake ** NxWakeObject
+    );
 
-    PNX_NET_POWER_ENTRY
+    NX_NET_POWER_ENTRY *
     CreateProtocolOffloadEntry(
-        _In_ PNDIS_PM_PROTOCOL_OFFLOAD ProtocolOffload,
-        _In_ UINT InformationBufferLength);
+        _In_ NDIS_PM_PROTOCOL_OFFLOAD * ProtocolOffload,
+        _In_ UINT InformationBufferLength
+    );
 
     NDIS_STATUS
     SetParameters(
-        _In_ PNDIS_PM_PARAMETERS PmParams
-        );
+        _In_ NDIS_PM_PARAMETERS * PmParams
+    );
 
-    VOID UpdateProtocolOffloadEntryEnabledField(
-        PNX_NET_POWER_ENTRY Entry
-        );
+    void
+    UpdateProtocolOffloadEntryEnabledField(
+        NX_NET_POWER_ENTRY * Entry
+    );
 
     NDIS_STATUS
     AddWakePattern(
         _In_ NETADAPTER AdapterWdfHandle,
-        _In_ NDIS_OID_REQUEST::_REQUEST_DATA::_SET const *Set
-        );
+        _In_ NDIS_OID_REQUEST::_REQUEST_DATA::_SET const * Set
+    );
 
     NDIS_STATUS
     RemoveWakePattern(
-        _In_ NDIS_OID_REQUEST::_REQUEST_DATA::_SET const *Set
-        );
+        _In_ NDIS_OID_REQUEST::_REQUEST_DATA::_SET const * Set
+    );
 
     NDIS_STATUS
     AddProtocolOffload(
         _In_ NETADAPTER AdapterWdfHandle,
-        _In_ NDIS_OID_REQUEST::_REQUEST_DATA::_SET const *Set
-        );
+        _In_ NDIS_OID_REQUEST::_REQUEST_DATA::_SET const * Set
+    );
 
     NDIS_STATUS
     RemoveProtocolOffload(
-        _In_ NDIS_OID_REQUEST::_REQUEST_DATA::_SET const *Set
-        );
+        _In_ NDIS_OID_REQUEST::_REQUEST_DATA::_SET const * Set
+    );
 
     RECORDER_LOG
     GetRecorderLog(
         void
-        );
+    );
 
-    VOID
+    void
     AdapterInitComplete(
-        VOID
+        void
     );
 
     ULONG
     GetEnabledWakeUpFlags(
-        VOID
-    )
-    {
-        return m_PMParameters.WakeUpFlags;
-    }
+        void
+    );
 
     ULONG
     GetEnabledMediaSpecificWakeUpEvents(
-        VOID
-    )
-    {
-        return m_PMParameters.MediaSpecificWakeUpEvents;
-    }
+        void
+    );
 
     ULONG
     GetEnabledProtocolOffloads(
-        VOID
-    )
-    {
-        return m_PMParameters.EnabledProtocolOffloads;
-    }
+        void
+    );
 
     ULONG
     GetEnabledWakePacketPatterns(
-        VOID
-    )
-    {
-        return m_PMParameters.EnabledWoLPacketPatterns;
-    }
+        void
+    );
 
     ULONG
     GetProtocolOffloadCount(
-        VOID
-    )
-    {
-        return m_ProtocolOffloadListCount;
-    }
+        void
+    );
 
     ULONG
     GetWakePatternCount(
-        VOID
-    )
-    {
-        return m_WakeListCount;
-    }
+        void
+    );
 
-    PNX_NET_POWER_ENTRY
+    NX_NET_POWER_ENTRY *
     GetEntryAtIndex(
         _In_ ULONG Index,
         _In_ NX_POWER_ENTRY_TYPE Type
     );
 
-    VOID
+    void
     SetPowerPreviewEvtCallbacks(
         _In_ PFN_NET_ADAPTER_PREVIEW_WAKE_PATTERN WakePatternCallback,
         _In_ PFN_NET_ADAPTER_PREVIEW_PROTOCOL_OFFLOAD ProtocolOffloadCallback
-    )
-    {
-        m_EvtPreviewWakePattern = WakePatternCallback;
-        m_EvtPreviewProtocolOffload = ProtocolOffloadCallback;
-    }
+    );
 
-    BOOLEAN
+    bool
     ArePowerSettingsAccessible(
-        VOID
-    );
-
-    ULONG
-    GetWakePatternCountForType(
-        _In_ NDIS_PM_WOL_PACKET WakePatternType
-    );
-
-    ULONG
-    GetProtocolOffloadCountForType(
-        _In_ NDIS_PM_PROTOCOL_OFFLOAD_TYPE OffloadType
+        void
     );
 };
-
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxWake, _GetNxWakeFromHandle);
 
 FORCEINLINE
 NxWake *
 GetNxWakeFromHandle(
-    _In_ NETPOWERSETTINGS     NetPowerSettingsWdfHandle
+    _In_ NETPOWERSETTINGS NetPowerSettingsWdfHandle
     )
 /*++
 Routine Description:

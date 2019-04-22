@@ -65,9 +65,12 @@ public:
         return m_VirtualAddress;
     }
 
-    PHYSICAL_ADDRESS GetLogicalAddress() const override
+    LOGICAL_ADDRESS
+    GetLogicalAddress(
+        void
+    ) const override
     {
-        return { 0, 0 };
+        return 0ULL;
     }
 
 private:
@@ -90,7 +93,7 @@ public:
         // Free the common buffer if one was allocated
         if (m_VirtualAddress != nullptr)
         {
-            NT_ASSERT(m_LogicalAddress.QuadPart != 0);
+            NT_ASSERT(m_LogicalAddress.QuadPart != 0LL);
 
             m_DmaAdapter->DmaOperations->FreeCommonBuffer(
                 m_DmaAdapter,
@@ -100,7 +103,7 @@ public:
                 m_CacheEnabled);
 
             m_VirtualAddress = nullptr;
-            m_LogicalAddress.QuadPart = 0;
+            m_LogicalAddress = { 0L, 0L };
         }
     }
 
@@ -114,15 +117,18 @@ public:
         return m_VirtualAddress;
     }
 
-    PHYSICAL_ADDRESS GetLogicalAddress() const override
+    LOGICAL_ADDRESS
+    GetLogicalAddress(
+        void
+    ) const override
     {
-        return m_LogicalAddress;
+        return m_LogicalAddress.QuadPart;
     }
 
 private:
 
     PVOID               m_VirtualAddress = nullptr;
-    PHYSICAL_ADDRESS    m_LogicalAddress = { 0 };
+    PHYSICAL_ADDRESS    m_LogicalAddress = { 0L, 0L };
     size_t              m_Length = 0;
     ULONG               m_AllocatedLength = 0;
     bool                m_CacheEnabled;

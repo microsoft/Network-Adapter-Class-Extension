@@ -48,7 +48,7 @@ NxReceiveScaling::NxReceiveScaling(
     NxTranslationApp & App,
     Rtl::KArray<wistd::unique_ptr<NxRxXlat>, NonPagedPoolNx> const & Queues,
     NET_CLIENT_ADAPTER_RECEIVE_SCALING_DISPATCH const & Dispatch
-    ) noexcept :
+) noexcept :
     m_app(App),
     m_queues(Queues),
     m_dispatch(Dispatch)
@@ -59,7 +59,7 @@ _Use_decl_annotations_
 size_t
 NxReceiveScaling::GetNumberOfQueues(
     void
-    ) const
+) const
 {
     return m_numberOfQueues;
 }
@@ -67,7 +67,7 @@ NxReceiveScaling::GetNumberOfQueues(
 _Use_decl_annotations_
 NTSTATUS
 NxReceiveScaling::Initialize(
-    )
+)
 {
     auto const capabilities = m_app.GetReceiveScalingCapabilities();
 #ifdef _KERNEL_MODE
@@ -95,7 +95,7 @@ NxReceiveScaling::Initialize(
         ULONG & ParameterValue,
         ULONG ParameterLimit,
         ULONG DefaultValue
-        )
+)
     {
         NDIS_STATUS status;
         NDIS_CONFIGURATION_PARAMETER * parameter;
@@ -186,7 +186,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxReceiveScaling::EvaluateEnable(
     NDIS_RECEIVE_SCALE_PARAMETERS_V2 const & Parameters
-    )
+)
 {
     NT_FRE_ASSERT(WI_IsFlagSet(Parameters.Flags, NDIS_RECEIVE_SCALE_PARAM_ENABLE_RSS));
 
@@ -234,7 +234,7 @@ _Use_decl_annotations_
 bool
 NxReceiveScaling::EvaluateDisable(
     NDIS_RECEIVE_SCALE_PARAMETERS_V2 const & Parameters
-    )
+)
 {
     if (! WI_IsFlagSet(Parameters.Flags, NDIS_RECEIVE_SCALE_PARAM_ENABLE_RSS))
     {
@@ -250,7 +250,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxReceiveScaling::EvaluateHashSecretKey(
     NDIS_RECEIVE_SCALE_PARAMETERS_V2 const & Parameters
-    )
+)
 {
     NT_FRE_ASSERT(WI_IsFlagSet(Parameters.Flags, NDIS_RECEIVE_SCALE_PARAM_ENABLE_RSS));
 
@@ -276,7 +276,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxReceiveScaling::SetParameters(
     NDIS_OID_REQUEST const & Request
-    )
+)
 {
     auto const buffer = static_cast<unsigned char const *>(Request.DATA.SET_INFORMATION.InformationBuffer);
     auto const length = Request.DATA.SET_INFORMATION.InformationBufferLength;
@@ -325,7 +325,7 @@ size_t
 NxReceiveScaling::EnumerateProcessor(
     UINT16 Group,
     UINT8 Number
-    ) const
+) const
 {
     return Group * m_maxGroupProcessorCount + Number;
 }
@@ -334,7 +334,7 @@ _Use_decl_annotations_
 size_t
 NxReceiveScaling::EnumerateProcessor(
     PROCESSOR_NUMBER const & Processor
-    ) const
+) const
 {
     return EnumerateProcessor(Processor.Group, Processor.Number) - m_minProcessorIndex;
 }
@@ -343,7 +343,7 @@ _Use_decl_annotations_
 NxRxXlat *
 NxReceiveScaling::GetAffinitizedQueue(
     size_t Index
-    ) const
+) const
 {
     return m_affinitizedQueues[Index].Queue;
 }
@@ -354,7 +354,7 @@ NxReceiveScaling::SetAffinitizedQueue(
     size_t Index,
     NxRxXlat * Queue,
     GROUP_AFFINITY const & Affinity
-    )
+)
 {
     Queue->SetGroupAffinity(Affinity);
     m_affinitizedQueues[Index] = { Queue, Queue->GetQueueId(), Affinity };
@@ -365,7 +365,7 @@ NxRxXlat *
 NxReceiveScaling::MapAffinitizedQueue(
     size_t Index,
     GROUP_AFFINITY const & Affinity
-    )
+)
 {
     KAcquireSpinLock lock(m_receiveScalingLock);
 
@@ -416,7 +416,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxReceiveScaling::SetEnabled(
     void
-    )
+)
 {
     CX_RETURN_IF_NOT_NT_SUCCESS(
         m_dispatch.Enable(m_app.GetAdapter(), m_hashFunction, m_hashType));
@@ -430,7 +430,7 @@ _Use_decl_annotations_
 void
 NxReceiveScaling::SetDisabled(
     void
-    )
+)
 {
     m_dispatch.Disable(m_app.GetAdapter());
 
@@ -441,7 +441,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxReceiveScaling::SetHashSecretKey(
     void
-    )
+)
 {
     NET_CLIENT_RECEIVE_SCALING_HASH_SECRET_KEY const hashSecretKey = {
         &m_hashSecretKey[0],
@@ -467,7 +467,7 @@ NxReceiveScaling::SetIndirectionEntries(
     size_t NumberOfEntries,
     size_t NumberOfRetries,
     TranslatedIndirectionEntries & TranslatedEntries
-    )
+)
 {
     NTSTATUS status = STATUS_SUCCESS;
     do {
@@ -536,7 +536,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxReceiveScaling::SetIndirectionEntries(
     NDIS_OID_REQUEST const & Request
-    )
+)
 {
     auto const buffer = static_cast<unsigned char const *>(Request.DATA.SET_INFORMATION.InformationBuffer);
     auto const length = Request.DATA.SET_INFORMATION.InformationBufferLength;
@@ -612,7 +612,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxReceiveScaling::Configure(
     void
-    )
+)
 {
     //
     // Affinitize all queues to the default group affinity if they aren't

@@ -7,7 +7,7 @@
 _Use_decl_annotations_
 NxAdapterExtension::NxAdapterExtension(
     AdapterExtensionInit const *ExtensionConfig
-    ) :
+) :
     m_oidPreprocessCallback(ExtensionConfig->NetRequestPreprocessCallback)
 {
 }
@@ -17,7 +17,7 @@ VOID
 NxAdapterExtension::InvokeOidPreprocessCallback(
     NETADAPTER Adapter,
     NETREQUEST Request
-    )
+)
 {
     if (m_oidPreprocessCallback)
     {

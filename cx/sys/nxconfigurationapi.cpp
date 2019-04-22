@@ -22,9 +22,9 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 VOID
 NETEXPORT(NetConfigurationClose)(
-    _In_ PNET_DRIVER_GLOBALS               Globals,
+    _In_ NET_DRIVER_GLOBALS *              Globals,
     _In_ NETCONFIGURATION                  Configuration
-    )
+)
 /*++
 Routine Description:
 
@@ -54,12 +54,12 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetConfigurationOpenSubConfiguration)(
-    _In_     PNET_DRIVER_GLOBALS        Globals,
+    _In_     NET_DRIVER_GLOBALS *       Globals,
     _In_     NETCONFIGURATION           Configuration,
     _In_     PCUNICODE_STRING           SubConfigurationName,
-    _In_opt_ PWDF_OBJECT_ATTRIBUTES     SubConfigurationAttributes,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES *    SubConfigurationAttributes,
     _Out_    NETCONFIGURATION*          SubConfiguration
-    )
+)
 /*++
 Routine Description:
 
@@ -137,12 +137,12 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetConfigurationQueryUlong)(
-    _In_  PNET_DRIVER_GLOBALS                   Globals,
+    _In_  NET_DRIVER_GLOBALS *                  Globals,
     _In_  NETCONFIGURATION                      Configuration,
     _In_  NET_CONFIGURATION_QUERY_ULONG_FLAGS   Flags,
     _In_  PCUNICODE_STRING                      ValueName,
     _Out_ PULONG                                Value
-    )
+)
 /*++
 Routine Description:
 
@@ -193,12 +193,12 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetConfigurationQueryString)(
-    _In_     PNET_DRIVER_GLOBALS                   Globals,
+    _In_     NET_DRIVER_GLOBALS *                  Globals,
     _In_     NETCONFIGURATION                      Configuration,
     _In_     PCUNICODE_STRING                      ValueName,
-    _In_opt_ PWDF_OBJECT_ATTRIBUTES                StringAttributes,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES *               StringAttributes,
     _Out_    WDFSTRING*                            WdfString
-    )
+)
 /*++
 Routine Description:
 
@@ -231,12 +231,12 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetConfigurationQueryMultiString)(
-    _In_     PNET_DRIVER_GLOBALS                   Globals,
+    _In_     NET_DRIVER_GLOBALS *                  Globals,
     _In_     NETCONFIGURATION                      Configuration,
     _In_     PCUNICODE_STRING                      ValueName,
-    _In_opt_ PWDF_OBJECT_ATTRIBUTES                StringsAttributes,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES *               StringsAttributes,
     _Inout_  WDFCOLLECTION                         Collection
-    )
+)
 /*++
 Routine Description:
 
@@ -273,14 +273,14 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetConfigurationQueryBinary)(
-    _In_     PNET_DRIVER_GLOBALS                   Globals,
+    _In_     NET_DRIVER_GLOBALS *                  Globals,
     _In_     NETCONFIGURATION                      Configuration,
     _In_     PCUNICODE_STRING                      ValueName,
     _Strict_type_match_ _In_
              POOL_TYPE                             PoolType,
-    _In_opt_ PWDF_OBJECT_ATTRIBUTES                MemoryAttributes,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES *               MemoryAttributes,
     _Out_    WDFMEMORY*                            WdfMemory
-    )
+)
 /*++
 Routine Description:
 
@@ -320,10 +320,10 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetConfigurationQueryLinkLayerAddress)(
-    _In_  PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_  NET_DRIVER_GLOBALS * DriverGlobals,
     _In_  NETCONFIGURATION Configuration,
-    _Out_ PNET_ADAPTER_LINK_LAYER_ADDRESS LinkLayerAddress
-    )
+    _Out_ NET_ADAPTER_LINK_LAYER_ADDRESS * LinkLayerAddress
+)
 /*++
 Routine Description:
 
@@ -361,11 +361,11 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetConfigurationAssignUlong)(
-    _In_  PNET_DRIVER_GLOBALS                   Globals,
+    _In_  NET_DRIVER_GLOBALS *                  Globals,
     _In_  NETCONFIGURATION                      Configuration,
     _In_  PCUNICODE_STRING                      ValueName,
     _In_  ULONG                                 Value
-    )
+)
 /*++
 Routine Description:
 
@@ -398,11 +398,11 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetConfigurationAssignUnicodeString)(
-    _In_  PNET_DRIVER_GLOBALS                   Globals,
+    _In_  NET_DRIVER_GLOBALS *                  Globals,
     _In_  NETCONFIGURATION                      Configuration,
     _In_  PCUNICODE_STRING                      ValueName,
     _In_  PCUNICODE_STRING                      Value
-    )
+)
 /*++
 Routine Description:
 
@@ -434,12 +434,12 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetConfigurationAssignBinary)(
-    _In_                               PNET_DRIVER_GLOBALS       Globals,
+    _In_                               NET_DRIVER_GLOBALS *      Globals,
     _In_                               NETCONFIGURATION          Configuration,
     _In_                               PCUNICODE_STRING          ValueName,
     _In_reads_bytes_(BufferLength)     PVOID                     Buffer,
     _In_                               ULONG                     BufferLength
-    )
+)
 /*++
 Routine Description:
 
@@ -471,11 +471,11 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetConfigurationAssignMultiString)(
-    _In_  PNET_DRIVER_GLOBALS                   Globals,
+    _In_  NET_DRIVER_GLOBALS *                  Globals,
     _In_  NETCONFIGURATION                      Configuration,
     _In_  PCUNICODE_STRING                      ValueName,
     _In_  WDFCOLLECTION                         StringsCollection
-    )
+)
 /*++
 Routine Description:
 

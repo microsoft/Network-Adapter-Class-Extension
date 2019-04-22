@@ -20,12 +20,12 @@ public:
     void
     Set(
         _In_ NTSTATUS Status
-        );
+    );
 
     NTSTATUS
     Wait(
         void
-        );
+    );
 
 private:
 
@@ -60,12 +60,12 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS
 NxWdfCollectionAddMultiSz(
     _Inout_  WDFCOLLECTION                         Collection,
-    _In_opt_ PWDF_OBJECT_ATTRIBUTES                StringsAttributes,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES *               StringsAttributes,
     _In_reads_bytes_(BufferLength)
              PWCHAR                                MultiSzBuffer,
     _In_     ULONG                                 BufferLength,
     _In_opt_ RECORDER_LOG                          RecorderLog
-    );
+);
 
 template<typename T>
 void
@@ -115,4 +115,20 @@ using unique_fx_ptr = wistd::unique_ptr<TFxObject, CFxObjectDeleter>;
 NET_ADAPTER_DATAPATH_CALLBACKS
 GetDefaultDatapathCallbacks(
     void
-    );
+);
+
+ULONG
+inline
+InterlockedIncrementU(
+    _In_ ULONG volatile *Addend)
+{
+    return static_cast<ULONG>(InterlockedIncrement(reinterpret_cast<LONG volatile*>(Addend)));
+}
+
+ULONG
+inline
+InterlockedDecrementU(
+    _In_ ULONG volatile *Addend)
+{
+    return static_cast<ULONG>(InterlockedDecrement(reinterpret_cast<LONG volatile*>(Addend)));
+}

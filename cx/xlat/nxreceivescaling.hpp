@@ -19,37 +19,37 @@ public:
         NxTranslationApp & App,
         Rtl::KArray<wistd::unique_ptr<NxRxXlat>, NonPagedPoolNx> const & Queues,
         NET_CLIENT_ADAPTER_RECEIVE_SCALING_DISPATCH const & Dispatch
-        ) noexcept;
+    ) noexcept;
 
     _IRQL_requires_(PASSIVE_LEVEL)
     size_t
     GetNumberOfQueues(
         void
-        ) const;
+    ) const;
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
     Initialize(
         void
-        );
+    );
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
     Configure(
         void
-        );
+    );
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
     SetParameters(
         _In_ NDIS_OID_REQUEST const & Request
-        );
+    );
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
     NTSTATUS
     SetIndirectionEntries(
         _In_ NDIS_OID_REQUEST const & Request
-        );
+    );
 
 private:
 
@@ -78,19 +78,19 @@ private:
     NTSTATUS
     SetEnabled(
         void
-        );
+    );
 
     _IRQL_requires_(PASSIVE_LEVEL)
     void
     SetDisabled(
         void
-        );
+    );
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
     SetHashSecretKey(
         void
-        );
+    );
 
     _IRQL_requires_(DISPATCH_LEVEL)
     NTSTATUS
@@ -98,26 +98,26 @@ private:
         _In_ size_t NumberOfEntries,
         _In_ size_t NumberOfRetries,
         _In_ TranslatedIndirectionEntries & TranslatedEntries
-        );
+    );
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
     size_t
     EnumerateProcessor(
         _In_ UINT16 Group,
         _In_ UINT8 Number
-        ) const;
+    ) const;
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
     size_t
     EnumerateProcessor(
         _In_ PROCESSOR_NUMBER const & Processor
-        ) const;
+    ) const;
 
     _IRQL_requires_(DISPATCH_LEVEL)
     NxRxXlat *
     GetAffinitizedQueue(
         size_t Index
-        ) const;
+    ) const;
 
     _Requires_lock_held_(this->m_receiveScalingLock)
     _IRQL_requires_(DISPATCH_LEVEL)
@@ -126,32 +126,32 @@ private:
         size_t Index,
         NxRxXlat * Queue,
         GROUP_AFFINITY const & Affinity
-        );
+    );
 
     _IRQL_requires_(DISPATCH_LEVEL)
     NxRxXlat *
     MapAffinitizedQueue(
         _In_ size_t Index,
         _In_ GROUP_AFFINITY const & Affinity
-        );
+    );
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
     EvaluateEnable(
         NDIS_RECEIVE_SCALE_PARAMETERS_V2 const & Parameters
-        );
+    );
 
     _IRQL_requires_(PASSIVE_LEVEL)
     bool
     EvaluateDisable(
         NDIS_RECEIVE_SCALE_PARAMETERS_V2 const & Parameters
-        );
+    );
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
     EvaluateHashSecretKey(
         NDIS_RECEIVE_SCALE_PARAMETERS_V2 const & Parameters
-        );
+    );
 
     KSpinLock
         m_receiveScalingLock;

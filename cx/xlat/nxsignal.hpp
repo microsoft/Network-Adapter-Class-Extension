@@ -4,7 +4,7 @@
 
 Abstract:
 
-    The NxRingBuffer wraps a NET_RING_BUFFER, providing simple accessor methods
+    The NxRingBuffer wraps a NET_RING, providing simple accessor methods
     for inserting and removing items into the ring buffer.
 
 --*/

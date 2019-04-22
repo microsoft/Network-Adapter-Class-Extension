@@ -4,10 +4,13 @@
 #include "NxOffload.tmh"
 #include "NxOffload.hpp"
 
+#include <net/checksumtypes_p.h>
+#include <net/lsotypes_p.h>
+
 _Use_decl_annotations_
 NxOffloadBase::NxOffloadBase(
     OffloadType OffloadType
-    ) : m_OffloadType(OffloadType)
+) : m_OffloadType(OffloadType)
 {
 }
 
@@ -15,7 +18,7 @@ _Use_decl_annotations_
 OffloadType
 NxOffloadBase::GetOffloadType(
     void
-    ) const
+) const
 {
     return this->m_OffloadType;
 }
@@ -25,18 +28,18 @@ template <typename T>
 NxOffload<T>::NxOffload(
     OffloadType OffloadType,
     T const &DefaultHardwareCapabilities
-    ) : NxOffloadBase(OffloadType)
+) : NxOffloadBase(OffloadType)
 {
     RtlCopyMemory(&m_HardwareCapabilities, &DefaultHardwareCapabilities, sizeof(DefaultHardwareCapabilities));
 }
 
 _Use_decl_annotations_
 template <typename T>
-void 
+void
 NxOffload<T>::SetHardwareCapabilities(
-    T *HardwareCapabilities,
+    T const * HardwareCapabilities,
     NxOffloadCallBack<T> OffloadCallback
-    )
+)
 {
     RtlCopyMemory(&m_HardwareCapabilities, HardwareCapabilities, sizeof(*HardwareCapabilities));
     m_NxOffloadCallback = OffloadCallback;
@@ -54,7 +57,7 @@ template <typename T>
 NxOffloadCallBack<T>
 NxOffload<T>::GetOffloadCallback(
     void
-    ) const
+) const
 {
     return m_NxOffloadCallback;
 }
@@ -64,7 +67,7 @@ template <typename T>
 T const *
 NxOffload<T>::GetHardwareCapabilities(
     void
-    ) const
+) const
 {
     return &m_HardwareCapabilities;
 }
@@ -74,7 +77,7 @@ template <typename T>
 bool
 NxOffload<T>::HasHardwareSupport(
     void
-    ) const
+) const
 {
     return m_HardwareSupport;
 }
@@ -82,7 +85,7 @@ NxOffload<T>::HasHardwareSupport(
 _Use_decl_annotations_
 NxOffloadFacade::NxOffloadFacade(
     NxAdapter& nxAdapter
-    ) : m_NxAdapter(nxAdapter)
+) : m_NxAdapter(nxAdapter)
 {
 }
 
@@ -91,7 +94,7 @@ NTSTATUS
 NxOffloadFacade::QueryStandardizedKeywordSetting(
     PCUNICODE_STRING Keyword,
     PULONG Value
-    )
+)
 {
 
 
@@ -126,7 +129,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxOffloadFacade::RegisterPacketExtension(
     OffloadType type
-    )
+)
 {
     NET_PACKET_EXTENSION_PRIVATE extensionPrivate = {};
 
@@ -154,7 +157,7 @@ _Use_decl_annotations_
 NETADAPTER
 NxOffloadFacade::GetNetAdapter(
     void
-    ) const
+) const
 {
     return m_NxAdapter.GetFxObject();
 }
@@ -162,7 +165,7 @@ NxOffloadFacade::GetNetAdapter(
 _Use_decl_annotations_
 NxOffloadManager::NxOffloadManager(
     INxOffloadFacade *NxOffloadFacade
-    )
+)
 {
     m_NxOffloadFacade = wistd::unique_ptr<INxOffloadFacade>{NxOffloadFacade};
 }
@@ -171,7 +174,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxOffloadManager::Initialize(
     void
-    )
+)
 {
     const NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES checksumCapabilities = {
         sizeof(NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES),
@@ -181,7 +184,7 @@ NxOffloadManager::Initialize(
     };
 
     auto checksumOffload = wil::make_unique_nothrow<NxOffload<NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES>>(OffloadType::Checksum, checksumCapabilities);
-    
+
     CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !checksumOffload);
 
     CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !m_NxOffloads.append(wistd::move(checksumOffload)));
@@ -207,10 +210,10 @@ _Use_decl_annotations_
 template <typename T>
 void
 NxOffloadManager::SetHardwareCapabilities(
-    T * HardwareCapabilities, 
-    OffloadType OffloadType, 
+    T const * HardwareCapabilities,
+    OffloadType OffloadType,
     NxOffloadCallBack<T> OffloadCallback
-    ) 
+)
 {
     auto nxOffload = static_cast<NxOffload<T> *>(FindNxOffload(OffloadType));
 
@@ -222,7 +225,7 @@ template <typename T>
 T const *
 NxOffloadManager::GetHardwareCapabilities(
     OffloadType OffloadType
-    ) const
+) const
 {
     auto nxOffload = static_cast<NxOffload<T> *>(FindNxOffload(OffloadType));
 
@@ -231,11 +234,11 @@ NxOffloadManager::GetHardwareCapabilities(
 
 _Use_decl_annotations_
 template <typename T>
-void 
+void
 NxOffloadManager::SetActiveCapabilities(
-    T &ActiveCapabilities,
+    T const & ActiveCapabilities,
     OffloadType OffloadType
-    )
+)
 {
     auto nxOffload = FindNxOffload(OffloadType);
 
@@ -247,9 +250,10 @@ NxOffloadManager::SetActiveCapabilities(
 
     auto offloadCallback = static_cast<NxOffload<T> *>(nxOffload)->GetOffloadCallback();
 
-    if (offloadCallback) 
+    if (offloadCallback)
     {
-        offloadCallback(m_NxOffloadFacade->GetNetAdapter(), &ActiveCapabilities);
+        offloadCallback(m_NxOffloadFacade->GetNetAdapter(),
+            reinterpret_cast<NETOFFLOAD>(const_cast<T *>(&ActiveCapabilities)));
     }
 }
 
@@ -257,14 +261,13 @@ _Use_decl_annotations_
 NxOffloadBase *
 NxOffloadManager::FindNxOffload(
     OffloadType OffloadType
-    ) const
+) const
 {
-    for (auto const &offload : this->m_NxOffloads)
+    for (auto const & offload : this->m_NxOffloads)
     {
-        NxOffloadBase *offloadptr = offload.get();
-        if (offloadptr->GetOffloadType() == OffloadType)
+        if (offload->GetOffloadType() == OffloadType)
         {
-            return offloadptr;
+            return offload.get();
         }
     }
 
@@ -272,10 +275,10 @@ NxOffloadManager::FindNxOffload(
 }
 
 _Use_decl_annotations_
-bool 
+bool
 NxOffloadManager::IsKeywordSettingDisabled(
     NDIS_STRING Keyword
-    ) const
+) const
 {
     ULONG value = 0;
     NTSTATUS status = m_NxOffloadFacade->QueryStandardizedKeywordSetting((PCUNICODE_STRING)&Keyword, &value);
@@ -294,18 +297,17 @@ NxOffloadManager::IsKeywordSettingDisabled(
 _Use_decl_annotations_
 void
 NxOffloadManager::SetChecksumHardwareCapabilities(
-    PNET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES hardwareCapabilities,
-    PFN_NET_ADAPTER_OFFLOAD_SET_CHECKSUM Callback
-    )
+    NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES const * hardwareCapabilities
+)
 {
-    SetHardwareCapabilities<NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES>(hardwareCapabilities, OffloadType::Checksum, Callback);
+    SetHardwareCapabilities(hardwareCapabilities, OffloadType::Checksum, hardwareCapabilities->EvtAdapterOffloadSetChecksum);
 }
 
 _Use_decl_annotations_
-void 
+void
 NxOffloadManager::GetChecksumHardwareCapabilities(
     NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES * HardwareCapabilities
-    ) const
+) const
 {
     auto const capabilities = GetHardwareCapabilities<NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES>(OffloadType::Checksum);
 
@@ -318,7 +320,7 @@ _Use_decl_annotations_
 void
 NxOffloadManager::GetChecksumDefaultCapabilities(
     NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES * DefaultCapabilities
-    ) const
+) const
 {
     //
     // Initialize the default capabilities to the hardware capabilities
@@ -358,33 +360,33 @@ _Use_decl_annotations_
 void
 NxOffloadManager::SetChecksumActiveCapabilities(
     NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES const * ActiveCapabilities
-    )
+)
 {
     NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES netAdapterCapabilities = {
-        ActiveCapabilities->Size,
+        sizeof(NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES),
         ActiveCapabilities->IPv4,
         ActiveCapabilities->Tcp,
-        ActiveCapabilities->Udp
+        ActiveCapabilities->Udp,
+        nullptr,
     };
 
-    SetActiveCapabilities<NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES>(netAdapterCapabilities, OffloadType::Checksum);
+    SetActiveCapabilities(netAdapterCapabilities, OffloadType::Checksum);
 }
 
 _Use_decl_annotations_
 void
 NxOffloadManager::SetLsoHardwareCapabilities(
-    PNET_ADAPTER_OFFLOAD_LSO_CAPABILITIES offloadCapabilities,
-    PFN_NET_ADAPTER_OFFLOAD_SET_LSO Callback
-    )
+    NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES const * offloadCapabilities
+)
 {
-    SetHardwareCapabilities<NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES>(offloadCapabilities, OffloadType::Lso, Callback);
+    SetHardwareCapabilities(offloadCapabilities, OffloadType::Lso, offloadCapabilities->EvtAdapterOffloadSetLso);
 }
 
 _Use_decl_annotations_
-void 
+void
 NxOffloadManager::GetLsoHardwareCapabilities(
     NET_CLIENT_OFFLOAD_LSO_CAPABILITIES * HardwareCapabilities
-    ) const
+) const
 {
     auto const capabilities = GetHardwareCapabilities<NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES>(OffloadType::Lso);
 
@@ -395,10 +397,10 @@ NxOffloadManager::GetLsoHardwareCapabilities(
 }
 
 _Use_decl_annotations_
-void 
+void
 NxOffloadManager::GetLsoDefaultCapabilities(
     NET_CLIENT_OFFLOAD_LSO_CAPABILITIES * DefaultCapabilities
-    ) const
+) const
 {
 
     //
@@ -437,24 +439,25 @@ _Use_decl_annotations_
 void
 NxOffloadManager::SetLsoActiveCapabilities(
     NET_CLIENT_OFFLOAD_LSO_CAPABILITIES const * ActiveCapabilities
-    )
+)
 {
     NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES netAdapterCapabilities = {
-        ActiveCapabilities->Size,
+        sizeof(NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES),
         ActiveCapabilities->IPv4,
         ActiveCapabilities->IPv6,
         ActiveCapabilities->MaximumOffloadSize,
-        ActiveCapabilities->MinimumSegmentCount
-        };
+        ActiveCapabilities->MinimumSegmentCount,
+        nullptr,
+    };
 
-    SetActiveCapabilities<NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES>(netAdapterCapabilities, OffloadType::Lso);
+    SetActiveCapabilities(netAdapterCapabilities, OffloadType::Lso);
 }
 
 _Use_decl_annotations_
 NTSTATUS
 NxOffloadManager::RegisterPacketExtensions(
     void
-    )
+)
 {
     for (auto const &offload : this->m_NxOffloads)
     {
@@ -466,3 +469,4 @@ NxOffloadManager::RegisterPacketExtensions(
 
     return STATUS_SUCCESS;
 }
+

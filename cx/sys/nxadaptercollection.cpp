@@ -9,82 +9,26 @@
 
 NxAdapterCollection::NxAdapterCollection(
     void
-    )
+)
 {
     InitializeListHead(&m_ListHead);
-}
-
-NTSTATUS
-NxAdapterCollection::Initialize(
-    void
-    )
-{
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        WdfWaitLockCreate(
-            WDF_NO_OBJECT_ATTRIBUTES,
-            &m_ListLock),
-        "Failed to create NxAdapterCollection wait lock");
-
-    return STATUS_SUCCESS;
-}
-
-bool
-NxAdapterCollection::Empty(
-    void
-    ) const
-{
-    return m_Count == 0;
 }
 
 ULONG
 NxAdapterCollection::Count(
     void
-    ) const
+) const
 {
     return m_Count;
-}
-
-void
-NxAdapterCollection::Clear(
-    void
-    )
-{
-    auto lock = wil::acquire_wdf_wait_lock(m_ListLock);
-    while (!IsListEmpty(&m_ListHead))
-    {
-        RemoveHeadList(&m_ListHead);
-    }
-}
-
-NxAdapter *
-NxAdapterCollection::GetDefaultAdapter(
-    void
-    ) const
-{
-    auto lock = wil::acquire_wdf_wait_lock(m_ListLock);
-
-    for (
-        LIST_ENTRY *link = m_ListHead.Flink;
-        link != &m_ListHead;
-        link = link->Flink
-        )
-    {
-        NxAdapter *nxAdapter = CONTAINING_RECORD(link, NxAdapter, m_Linkage);
-
-        if (nxAdapter->IsDefault())
-            return nxAdapter;
-    }
-
-    return nullptr;
 }
 
 _Use_decl_annotations_
 void
 NxAdapterCollection::AddAdapter(
     NxAdapter * Adapter
-    )
+)
 {
-    auto lock = wil::acquire_wdf_wait_lock(m_ListLock);
+    KLockThisExclusive lock(m_ListLock);
 
     InsertTailList(&m_ListHead, &Adapter->m_Linkage);
     m_Count++;
@@ -94,7 +38,7 @@ _Use_decl_annotations_
 bool
 NxAdapterCollection::RemoveAdapter(
     NxAdapter * Adapter
-    )
+)
 /*
 
 Description:
@@ -108,7 +52,7 @@ Return value:
 
 */
 {
-    auto lock = wil::acquire_wdf_wait_lock(m_ListLock);
+    KLockThisExclusive lock(m_ListLock);
 
     //
     // Check if this adapter is in the adapter collection
@@ -147,4 +91,50 @@ NxAdapterCollection::GetTriageInfo(
 )
 {
     g_NetAdapterCxTriageBlock.NxAdapterCollectionCountOffset = FIELD_OFFSET(NxAdapterCollection, m_Count);
+}
+
+_Use_decl_annotations_
+NxAdapter *
+NxAdapterCollection::FindAndReferenceAdapterByInstanceName(
+    UNICODE_STRING const * InstanceName
+) const
+{
+    KLockThisShared lock(m_ListLock);
+
+    for (LIST_ENTRY *link = m_ListHead.Flink;
+        link != &m_ListHead;
+        link = link->Flink)
+    {
+        auto nxAdapter = CONTAINING_RECORD(link, NxAdapter, m_Linkage);
+
+        if (RtlEqualUnicodeString(&nxAdapter->m_InstanceName, InstanceName, TRUE))
+        {
+            return NdisWdfMiniportTryReference(nxAdapter->GetNdisHandle()) ? nxAdapter : nullptr;
+        }
+    }
+
+    return nullptr;
+}
+
+_Use_decl_annotations_
+NxAdapter *
+NxAdapterCollection::FindAndReferenceAdapterByBaseName(
+    UNICODE_STRING const * BaseName
+) const
+{
+    KLockThisShared lock(m_ListLock);
+
+    for (LIST_ENTRY *link = m_ListHead.Flink;
+        link != &m_ListHead;
+        link = link->Flink)
+    {
+        auto nxAdapter = CONTAINING_RECORD(link, NxAdapter, m_Linkage);
+
+        if (RtlEqualUnicodeString(&nxAdapter->m_BaseName, BaseName, TRUE))
+        {
+            return NdisWdfMiniportTryReference(nxAdapter->GetNdisHandle()) ? nxAdapter : nullptr;
+        }
+    }
+
+    return nullptr;
 }

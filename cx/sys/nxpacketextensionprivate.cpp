@@ -13,7 +13,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxPacketExtensionPrivate::Initialize(
     NET_PACKET_EXTENSION_PRIVATE const * Extension
-    )
+)
 {
     CX_RETURN_NTSTATUS_IF(
         STATUS_INVALID_PARAMETER,

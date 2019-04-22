@@ -2,15 +2,17 @@
 
 #include "NxXlatPrecomp.hpp"
 #include "NxXlatCommon.hpp"
-#include "NxChecksumInfo.tmh"
 
+#include "NxChecksumInfo.tmh"
 #include "NxChecksumInfo.hpp"
+
+#include <net/checksum.h>
 
 static
 bool
 IsIPv4(
     NET_PACKET_LAYOUT const &layout
-    )
+)
 {
     return
         layout.Layer3Type >= NET_PACKET_LAYER3_TYPE_IPV4_UNSPECIFIED_OPTIONS &&
@@ -21,7 +23,7 @@ static
 bool
 IsIPv6(
     NET_PACKET_LAYOUT const &layout
-    )
+)
 {
     return
         layout.Layer3Type >= NET_PACKET_LAYER3_TYPE_IPV6_UNSPECIFIED_EXTENSIONS &&
@@ -32,7 +34,7 @@ NET_PACKET_CHECKSUM
 NxTranslateTxPacketChecksum(
     NET_PACKET const & packet,
     NDIS_TCP_IP_CHECKSUM_NET_BUFFER_LIST_INFO const & info
-    )
+)
 {
     NET_PACKET_CHECKSUM checksum = {};
 
@@ -62,11 +64,12 @@ NxTranslateTxPacketChecksum(
 NDIS_TCP_IP_CHECKSUM_NET_BUFFER_LIST_INFO
 NxTranslateRxPacketChecksum(
     NET_PACKET const* packet,
-    size_t checksumOffset
-    )
+    NET_EXTENSION const* checksumExtension,
+    UINT32 packetIndex
+)
 {
     NDIS_TCP_IP_CHECKSUM_NET_BUFFER_LIST_INFO checksumInfo = {};
-    NET_PACKET_CHECKSUM* checksumExt = NetPacketGetPacketChecksum(packet, checksumOffset);
+    auto const checksumExt = NetExtensionGetPacketChecksum(checksumExtension, packetIndex);
 
     if (checksumExt->Layer3 == NET_PACKET_RX_CHECKSUM_VALID)
     {

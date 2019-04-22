@@ -30,7 +30,7 @@ FORCEINLINE
 NxRequest *
 GetNxRequestFromHandle(
     _In_ NETREQUEST Request
-    );
+);
 
 class NxRequest : public CFxObject<NETREQUEST,
                                              NxRequest,
@@ -90,7 +90,7 @@ private:
         _In_ UINT                     InputBufferLength,
         _In_ UINT                     OutputBufferLength,
         _In_ PVOID                    InputOutputBuffer
-        );
+    );
 
 public:
 
@@ -103,41 +103,41 @@ public:
         _In_     NxAdapter *              NxAdatper,
         _In_     PNDIS_OID_REQUEST        NdisOidRequest,
         _Out_    NxRequest **             Request
-        );
+    );
 
     DispatchContext *
     GetDispatchContext(
         void
-        );
+    );
 
     RECORDER_LOG
     GetRecorderLog(
         void
-        );
+    );
 
     VOID
     Complete(
         _In_ NTSTATUS CompletionStatus
-        );
+    );
 
     VOID
     SetDataRequestSetInformation(
         _In_ ULONG BytesRead,
         _In_ ULONG BytesNeeded
-        );
+    );
 
     VOID
     QueryDataRequestSetInformation(
         _In_ ULONG BytesWritten,
         _In_ ULONG BytesNeeded
-        );
+    );
 
     VOID
     MethodRequestSetInformation(
         _In_ ULONG BytesRead,
         _In_ ULONG BytesWritten,
         _In_ ULONG BytesNeeded
-        );
+    );
 
     NxAdapter *
     GetNxAdapter() const;

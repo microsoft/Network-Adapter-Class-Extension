@@ -13,6 +13,7 @@ Abstract:
 #include "NxXlatCommon.hpp"
 
 #include <ndisoidtypes.h>
+#include <ntddndis_p.h>
 
 #include "NxTranslationApp.tmh"
 
@@ -31,7 +32,7 @@ static
 void
 NetClientAdapterCreateDatapath(
     _In_ PVOID ClientContext
-    )
+)
 {
     auto app = reinterpret_cast<NxTranslationApp *>(ClientContext);
     NTSTATUS status = app->CreateDatapath();
@@ -47,7 +48,7 @@ static
 void
 NetClientAdapterDestroyDatapath(
     _In_ PVOID ClientContext
-    )
+)
 {
     reinterpret_cast<NxTranslationApp *>(ClientContext)->DestroyDatapath();
 }
@@ -57,7 +58,7 @@ static
 void
 NetClientAdapterStartDatapath(
     _In_ PVOID ClientContext
-    )
+)
 {
     reinterpret_cast<NxTranslationApp *>(ClientContext)->StartDatapath();
 }
@@ -67,7 +68,7 @@ static
 void
 NetClientAdapterStopDatapath(
     _In_ PVOID ClientContext
-    )
+)
 {
     reinterpret_cast<NxTranslationApp *>(ClientContext)->StopDatapath();
 }
@@ -79,7 +80,7 @@ NetClientAdapterNdisOidRequestHandler(
     _In_ PVOID ClientContext,
     _In_ NDIS_OID_REQUEST * Request,
     _Out_ NTSTATUS * Status
-    )
+)
 {
     auto app = reinterpret_cast<NxTranslationApp *>(ClientContext);
     bool handled = false;
@@ -106,6 +107,11 @@ NetClientAdapterNdisOidRequestHandler(
             *Status = app->OffloadSetActiveCapabilities(*Request);
             handled = true;
             break;
+
+        case OID_OFFLOAD_ENCAPSULATION:
+            *Status = app->OffloadSetEncapsulation(*Request);
+            handled = true;
+            break;
         }
         break;
 
@@ -130,7 +136,7 @@ static
 NTSTATUS
 NetClientAdapterOffloadInitialize(
     _In_ PVOID ClientContext
-    )
+)
 {
     return reinterpret_cast<NxTranslationApp *>(ClientContext)->OffloadInitialize();
 }
@@ -152,7 +158,7 @@ static const NET_CLIENT_CONTROL_DISPATCH ControlDispatch =
 _Use_decl_annotations_
 NxTranslationAppFactory::~NxTranslationAppFactory(
     void
-    )
+)
 {
     NxPerfTunerCleanup();
     TraceLoggingUnregister(g_hNetAdapterCxXlatProvider);
@@ -162,7 +168,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxTranslationAppFactory::Initialize(
     void
-    )
+)
 {
     NTSTATUS status = STATUS_UNSUCCESSFUL;
 
@@ -185,7 +191,7 @@ NxTranslationAppFactory::CreateApp(
     NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch,
     void ** ClientContext,
     NET_CLIENT_CONTROL_DISPATCH const ** ClientDispatch
-    )
+)
 {
     auto newApp = wil::make_unique_nothrow<NxTranslationApp>(Dispatch, Adapter, AdapterDispatch);
     CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !newApp);
@@ -201,7 +207,7 @@ NxTranslationApp::NxTranslationApp(
     NET_CLIENT_DISPATCH const * Dispatch,
     NET_CLIENT_ADAPTER Adapter,
     NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
-    ) noexcept :
+) noexcept :
     m_dispatch(Dispatch),
     m_adapter(Adapter),
     m_adapterDispatch(AdapterDispatch),
@@ -213,7 +219,7 @@ _Use_decl_annotations_
 NET_CLIENT_ADAPTER
 NxTranslationApp::GetAdapter(
     void
-    ) const
+) const
 {
     return m_adapter;
 }
@@ -222,7 +228,7 @@ _Use_decl_annotations_
 void
 NxTranslationApp::SetDeviceFailed(
     NTSTATUS Status
-    ) const
+) const
 {
     m_adapterDispatch->SetDeviceFailed(m_adapter, Status);
 }
@@ -231,7 +237,7 @@ _Use_decl_annotations_
 NET_CLIENT_ADAPTER_PROPERTIES
 NxTranslationApp::GetProperties(
     void
-    ) const
+) const
 {
     NET_CLIENT_ADAPTER_PROPERTIES properties;
     m_adapterDispatch->GetProperties(m_adapter, &properties);
@@ -243,7 +249,7 @@ _Use_decl_annotations_
 NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES
 NxTranslationApp::GetDatapathCapabilities(
     void
-    ) const
+) const
 {
     NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES capabilities;
     m_adapterDispatch->GetDatapathCapabilities(m_adapter, &capabilities);
@@ -255,7 +261,7 @@ _Use_decl_annotations_
 NET_CLIENT_ADAPTER_RECEIVE_SCALING_CAPABILITIES
 NxTranslationApp::GetReceiveScalingCapabilities(
     void
-    ) const
+) const
 {
     NET_CLIENT_ADAPTER_RECEIVE_SCALING_CAPABILITIES capabilities;
     m_adapterDispatch->GetReceiveScalingCapabilities(m_adapter, &capabilities);
@@ -267,7 +273,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxTranslationApp::ReceiveScalingInitialize(
     void
-    )
+)
 {
     NT_FRE_ASSERT(! m_receiveScaling);
     NT_FRE_ASSERT(! m_receiveScalingDatapath);
@@ -298,7 +304,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxTranslationApp::ReceiveScalingSetParameters(
     NDIS_OID_REQUEST const & Request
-    )
+)
 {
     CX_RETURN_NTSTATUS_IF(
         STATUS_NOT_SUPPORTED,
@@ -315,7 +321,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxTranslationApp::ReceiveScalingSetIndirectionEntries(
     NDIS_OID_REQUEST const & Request
-    )
+)
 {
     CX_RETURN_NTSTATUS_IF(
         STATUS_NOT_SUPPORTED,
@@ -333,7 +339,7 @@ PAGEDX
 NTSTATUS
 NxTranslationApp::CreateDefaultQueues(
     void
-    )
+)
 {
     auto txQueue = wil::make_unique_nothrow<NxTxXlat>(
         0,
@@ -380,7 +386,7 @@ PAGEDX
 void
 NxTranslationApp::StartDefaultQueues(
     void
-    )
+)
 {
     m_txQueue->Start();
     m_rxQueues[0]->Start();
@@ -411,7 +417,7 @@ PAGEDX
 NTSTATUS
 NxTranslationApp::CreateReceiveScalingQueues(
     void
-    )
+)
 {
     //
     // receive scaling is not initialized
@@ -468,7 +474,7 @@ PAGEDX
 void
 NxTranslationApp::StartReceiveScalingQueues(
     void
-    )
+)
 {
     if (m_datapathStarted && m_receiveScalingDatapath)
     {
@@ -483,7 +489,7 @@ _Use_decl_annotations_
 void
 NxTranslationApp::StartDatapath(
     void
-    )
+)
 {
     if (! m_datapathCreated)
     {
@@ -507,7 +513,7 @@ _Use_decl_annotations_
 void
 NxTranslationApp::StopDatapath(
     void
-    )
+)
 {
     if (! m_datapathCreated)
     {
@@ -537,7 +543,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxTranslationApp::CreateDatapath(
     void
-    )
+)
 {
     CX_RETURN_IF_NOT_NT_SUCCESS(
         CreateDefaultQueues());
@@ -553,7 +559,7 @@ _Use_decl_annotations_
 void
 NxTranslationApp::DestroyDatapath(
     void
-    )
+)
 {
     m_datapathCreated = false;
     m_receiveScalingDatapath = false;
@@ -566,7 +572,7 @@ _Use_decl_annotations_
 NTSTATUS
 NxTranslationApp::OffloadInitialize(
     void
-    )
+)
 {
     return m_offload.Initialize();
 }
@@ -575,7 +581,16 @@ _Use_decl_annotations_
 NTSTATUS
 NxTranslationApp::OffloadSetActiveCapabilities(
     NDIS_OID_REQUEST const & Request
-    )
+)
 {
    return  m_offload.SetActiveCapabilities(Request);
+}
+
+_Use_decl_annotations_
+NTSTATUS
+NxTranslationApp::OffloadSetEncapsulation(
+    NDIS_OID_REQUEST const & Request
+)
+{
+   return  m_offload.SetEncapsulation(Request);
 }

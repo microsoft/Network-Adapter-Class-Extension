@@ -6,6 +6,7 @@
 
 #define NETADAPTERCX_TAG 'xCdN'
 #define NETADAPTERCX_TAG_PTR ((PVOID)(PULONG_PTR) NDISCX_TAG)
+#define NX_WMI_TAG 'mWxN'
 
 #ifndef RTL_IS_POWER_OF_TWO
 #  define RTL_IS_POWER_OF_TWO(Value) \
@@ -377,3 +378,34 @@ public:
     }
 
 };
+
+inline
+NTSTATUS
+SetWmiBufferTooSmall(
+    _In_ ULONG BufferSize,
+    _In_ PVOID Wnode,
+    _In_ ULONG WnodeSize,
+    _Out_ PULONG PReturnSize
+    )
+/*++
+Routine Description: 
+    This method checks the buffer size of the WNODE to check if it is smaller than 
+    WNODE_TOO_SMALL and returns the status accordingly. Otherwise, it sets the 
+    WNODE_FLAG_TOO_SMALL flag on the WNODE header and updates the size needed in 
+    the WNODE.
+--*/
+{
+    if (BufferSize < sizeof(WNODE_TOO_SMALL))
+    {
+        *PReturnSize = sizeof(ULONG);
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    else 
+    {
+        ((PWNODE_TOO_SMALL)Wnode)->WnodeHeader.BufferSize = sizeof(WNODE_TOO_SMALL);
+        ((PWNODE_TOO_SMALL)Wnode)->WnodeHeader.Flags |= WNODE_FLAG_TOO_SMALL;
+        ((PWNODE_TOO_SMALL)Wnode)->SizeNeeded = WnodeSize;
+        *PReturnSize= sizeof(WNODE_TOO_SMALL);
+        return STATUS_SUCCESS;
+    }
+}

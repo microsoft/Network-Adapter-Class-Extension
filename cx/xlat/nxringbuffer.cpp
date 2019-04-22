@@ -4,7 +4,7 @@
 
 Abstract:
 
-    The NxRingBuffer wraps a NET_RING_BUFFER, providing simple accessor methods
+    The NxRingBuffer wraps a NET_RING, providing simple accessor methods
     for inserting and removing items into the ring buffer.
 
 --*/
@@ -24,8 +24,8 @@ NxRingBuffer::~NxRingBuffer()
 PAGED
 NTSTATUS
 NxRingBuffer::Initialize(
-    NET_RING_BUFFER * RingBuffer
-    )
+    NET_RING * RingBuffer
+)
 {
     m_rb = RingBuffer;
 
@@ -40,7 +40,7 @@ NxRingBuffer::GetNextPacketToGiveToNic()
     if (AvailablePackets().Count() == 0)
         return nullptr;
 
-    return NetRingBufferGetPacketAtIndex(m_rb, m_rb->EndIndex);
+    return NetRingGetPacketAtIndex(m_rb, m_rb->EndIndex);
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -49,7 +49,7 @@ NxRingBuffer::GiveNextPacketToNic()
 {
     WIN_ASSERT(AvailablePackets().Count() != 0);
 
-    m_rb->EndIndex = NetRingBufferIncrementIndex(m_rb, m_rb->EndIndex);
+    m_rb->EndIndex = NetRingIncrementIndex(m_rb, m_rb->EndIndex);
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -62,8 +62,8 @@ NxRingBuffer::TakeNextPacketFromNic()
     if (index == m_rb->BeginIndex)
         return nullptr;
 
-    auto packet = NetRingBufferGetPacketAtIndex(m_rb, index);
-    index = NetRingBufferIncrementIndex(m_rb, index);
+    auto packet = NetRingGetPacketAtIndex(m_rb, index);
+    index = NetRingIncrementIndex(m_rb, index);
 
     return packet;
 }
@@ -105,7 +105,7 @@ NxRingBuffer::UpdateRingbufferDepthCounters()
 void
 NxRingBuffer::UpdateRingbufferPacketCounters(
     _In_ NxRingBufferCounters const &Delta
-    )
+)
 {
     m_rbCounters.NumberOfNetPacketsProduced += Delta.NumberOfNetPacketsProduced;
     m_rbCounters.NumberOfNetPacketsConsumed += Delta.NumberOfNetPacketsConsumed;

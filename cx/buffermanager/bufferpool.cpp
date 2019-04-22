@@ -253,7 +253,6 @@ NxBufferPool::AddMemoryChunks(
         NT_FRE_ASSERT(IS_ALIGNED((size_t) MemoryChunks[i]->GetVirtualAddress(), PAGE_SIZE));
     }
 
-    NT_FRE_ASSERT(IS_ALIGNED(memoryChunkSize, PAGE_SIZE));
     NT_FRE_ASSERT(memoryChunkSize >= m_ChunkOffset + m_StrideSize);
 
     const size_t numBuffersPerChunk = (memoryChunkSize - m_ChunkOffset) / m_StrideSize;
@@ -300,14 +299,14 @@ NxBufferPool::FillBufferPool()
             NxBufferDescriptor buffer =
             {
                 (PVOID) (((ULONG_PTR) m_MemoryChunkBaseAddresses[chunkIndex].VirtualAddress) + bufferOffset),
-                { 0, 0 },
+                0ULL,
                 chunkIndex,
                 m_PopulatedPoolSize,
                 nullptr
             };
 
-            buffer.LogicalAddress.QuadPart =
-                m_MemoryChunkBaseAddresses[chunkIndex].LogicalAddress.QuadPart + bufferOffset;
+            buffer.LogicalAddress =
+                m_MemoryChunkBaseAddresses[chunkIndex].LogicalAddress + bufferOffset;
 
             m_Buffers.append(buffer);
 
@@ -319,7 +318,7 @@ NxBufferPool::FillBufferPool()
 NONPAGED
 NTSTATUS
 NxBufferPool::Allocate(_Out_ PVOID* VirtualAddress,
-                       _Out_ PHYSICAL_ADDRESS* PhysicalAddress,
+                       _Out_ LOGICAL_ADDRESS * LogicalAddress,
                        _Out_ size_t* Offset,
                        _Out_ size_t* AllocatedSize)
 {
@@ -332,7 +331,7 @@ NxBufferPool::Allocate(_Out_ PVOID* VirtualAddress,
     m_BuffersInUseFlag.SetBit(bufferIndex);
 
     *VirtualAddress = m_Buffers[m_NumBuffersInUse].VirtualAddress;
-    *PhysicalAddress = m_Buffers[m_NumBuffersInUse].LogicalAddress;
+    *LogicalAddress = m_Buffers[m_NumBuffersInUse].LogicalAddress;
     *Offset = m_AlignmentOffset;
     *AllocatedSize = m_StrideSize;
 
@@ -365,8 +364,8 @@ NxBufferPool::Free(_In_ PVOID VirtualAddress)
 
     size_t offsetFromChunk = offsetFromBaseVa - (buffer.ChunkIndex * m_MemoryChunkSize);
 
-    buffer.LogicalAddress.QuadPart =
-        m_MemoryChunkBaseAddresses[buffer.ChunkIndex].LogicalAddress.QuadPart + offsetFromChunk;
+    buffer.LogicalAddress =
+        m_MemoryChunkBaseAddresses[buffer.ChunkIndex].LogicalAddress + offsetFromChunk;
 
     buffer.BufferIndex =
         buffer.ChunkIndex * m_NumBuffersPerChunk +

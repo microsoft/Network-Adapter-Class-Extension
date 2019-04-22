@@ -8,8 +8,6 @@
 #include <NetClientQueue.h>
 #include <NetPacketExtensionPrivate.h>
 
-#include "NxBuffer.hpp"
-
 class NxAdapter;
 
 #define QUEUE_CREATION_CONTEXT_SIGNATURE 0x7840dd95
@@ -33,9 +31,6 @@ struct QUEUE_CREATION_CONTEXT
 
     NxAdapter *
         Adapter = nullptr;
-
-    Rtl::KArray<NET_PACKET_CONTEXT_ATTRIBUTES>
-        PacketContextAttributes;
 
     Rtl::KArray<NET_PACKET_EXTENSION_PRIVATE>
         NetAdapterAddedPacketExtensions;
@@ -69,38 +64,29 @@ public:
         _In_ ULONG QueueId,
         _In_ NET_PACKET_QUEUE_CONFIG const & QueueConfig,
         _In_ NxQueue::Type QueueType
-        );
+    );
 
     virtual
     ~NxQueue(
         void
-        ) = default;
+    ) = default;
 
     NTSTATUS
     Initialize(
         _In_ QUEUE_CREATION_CONTEXT & InitContext
-        );
-
-    static
-    NTSTATUS
-    NetQueueInitAddPacketContextAttributes(
-        _Inout_ QUEUE_CREATION_CONTEXT *CreationContext,
-        _In_ PNET_PACKET_CONTEXT_ATTRIBUTES ContextAttributes
-        );
+    );
 
     static
     NTSTATUS
     NetQueueInitAddPacketExtension(
         _Inout_ QUEUE_CREATION_CONTEXT *CreationContext,
         _In_ const NET_PACKET_EXTENSION_PRIVATE* PacketExtension
-        );
+    );
 
     void
     NotifyMorePacketsAvailable(
         void
-        );
-
-    Rtl::KArray<NET_PACKET_CONTEXT_TOKEN_INTERNAL, NonPagedPoolNx> m_clientContextInfo;
+    );
 
     size_t
         m_privateExtensionOffset = 0;
@@ -108,71 +94,51 @@ public:
     size_t
         m_privateExtensionSize = 0;
 
-    KPoolPtr<NET_RING_BUFFER>
-        m_packetRingBuffer;
-
-    KPoolPtr<NET_RING_BUFFER>
-        m_fragmentRingBuffer;
-
     void
     Start(
         void
-        );
+    );
 
     void
     Stop(
         void
-        );
+    );
 
     void
     Advance(
         void
-        );
+    );
 
     void
     Cancel(
         void
-        );
+    );
 
     void
     SetArmed(
         _In_ bool isArmed
-        );
+    );
 
     WDFOBJECT
     GetWdfObject(
         void
-        );
+    );
 
-    NET_DATAPATH_DESCRIPTOR*
-    GetPacketRingBufferSet(
+    NET_RING_COLLECTION const *
+    GetRingCollection(
         void
-        );
-
-    size_t
-    GetPrivateExtensionOffset(
-        void
-        ) const;
-
-    Rtl::KArray<NET_PACKET_CONTEXT_TOKEN_INTERNAL, NonPagedPoolNx> &
-    GetClientContextInfo(
-        void
-        );
-
-    NET_PACKET_CONTEXT_TOKEN *
-    GetPacketContextTokenFromTypeInfo(
-        _In_ PCNET_CONTEXT_TYPE_INFO ContextTypeInfo
-        );
+    ) const;
 
     NxAdapter *
     GetAdapter(
         void
-        );
+    );
 
-    size_t
-    GetPacketExtensionOffset(
-        _In_ const NET_PACKET_EXTENSION_PRIVATE* ExtensionToQuery
-        );
+    void
+    GetExtension(
+        _In_ const NET_PACKET_EXTENSION_PRIVATE* ExtensionToQuery,
+        _Out_ NET_EXTENSION* Extension
+    );
 
     ULONG const
         m_queueId = ~0U;
@@ -191,16 +157,22 @@ protected:
     NTSTATUS
     PrepareAndStorePacketExtensions(
         _In_ QUEUE_CREATION_CONTEXT & InitContext
-        );
+    );
 
     NTSTATUS
-    PrepareFragmentRingBuffer(
-        _In_ QUEUE_CREATION_CONTEXT & InitContext
-        );
-
+    CreateRing(
+        _In_ size_t ElementSize,
+        _In_ UINT32 ElementCount,
+        _In_ NET_RING_TYPE RingType
+    );
 
 private:
-    NET_DATAPATH_DESCRIPTOR m_descriptor;
+
+    KPoolPtr<NET_RING>
+        m_rings[NET_RING_TYPE_FRAGMENT + 1];
+
+    NET_RING_COLLECTION
+        m_ringCollection;
 
     PVOID
         m_clientQueue = nullptr;
@@ -236,17 +208,17 @@ public:
         _In_ QUEUE_CREATION_CONTEXT const & InitContext,
         _In_ ULONG QueueId,
         _In_ NET_PACKET_QUEUE_CONFIG const & QueueConfig
-        );
+    );
 
     virtual
     ~NxTxQueue(
         void
-        ) = default;
+    ) = default;
 
     NTSTATUS
     Initialize(
         _In_ QUEUE_CREATION_CONTEXT & InitContext
-        );
+    );
 };
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxTxQueue, _GetTxQueueFromHandle);
@@ -280,17 +252,17 @@ public:
         _In_ QUEUE_CREATION_CONTEXT const & InitContext,
         _In_ ULONG QueueId,
         _In_ NET_PACKET_QUEUE_CONFIG const & QueueConfig
-        );
+    );
 
     virtual
     ~NxRxQueue(
         void
-        ) = default;
+    ) = default;
 
     NTSTATUS
     Initialize(
         _In_ QUEUE_CREATION_CONTEXT & InitContext
-        );
+    );
 };
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxRxQueue, _GetRxQueueFromHandle);

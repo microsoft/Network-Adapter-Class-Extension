@@ -26,7 +26,7 @@ NxRequest::NxRequest(
     _In_ UINT                     InputBufferLength,
     _In_ UINT                     OutputBufferLength,
     _In_ PVOID                    InputOutputBuffer
-    ) :
+) :
     CFxObject(NetRequest),
     m_NdisOidRequest(NdisOidRequest),
     m_NxAdapter(NxAdapter),
@@ -49,7 +49,7 @@ Routine Description:
 
 NxRequest::~NxRequest(
     VOID
-    )
+)
 /*++
 Routine Description:
     D'tor for the NxRequest object.
@@ -211,7 +211,7 @@ Remarks:
 DispatchContext *
 NxRequest::GetDispatchContext(
     void
-    )
+)
 {
     return &m_dispatchContext;
 }
@@ -219,7 +219,7 @@ NxRequest::GetDispatchContext(
 RECORDER_LOG
 NxRequest::GetRecorderLog(
     void
-    )
+)
 {
     return m_NxAdapter->GetRecorderLog();
 }
@@ -227,7 +227,7 @@ NxRequest::GetRecorderLog(
 VOID
 NxRequest::Complete(
     _In_ NTSTATUS CompletionStatus
-    )
+)
 /*++
 Routine Description:
     This member function completes an oid request
@@ -254,7 +254,7 @@ Arguments:
         m_NxQueue->DisconnectRequest(this);
     }
 
-    NdisMOidRequestComplete(m_NxAdapter->m_NdisAdapterHandle,
+    NdisMOidRequestComplete(m_NxAdapter->GetNdisHandle(),
                             m_NdisOidRequest,
                             oidCompletionStatus);
 

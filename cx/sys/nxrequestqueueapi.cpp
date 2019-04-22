@@ -24,11 +24,11 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetRequestQueueCreate)(
-    _In_      PNET_DRIVER_GLOBALS       Globals,
-    _In_      PNET_REQUEST_QUEUE_CONFIG Configuration,
-    _In_opt_  PWDF_OBJECT_ATTRIBUTES    QueueAttributes,
+    _In_      NET_DRIVER_GLOBALS *      Globals,
+    _In_      NET_REQUEST_QUEUE_CONFIG * Configuration,
+    _In_opt_  WDF_OBJECT_ATTRIBUTES *   QueueAttributes,
     _Out_opt_ NETREQUESTQUEUE*          Queue
-    )
+)
 /*++
 Routine Description:
 
@@ -117,9 +117,9 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 NETADAPTER
 NETEXPORT(NetRequestQueueGetAdapter)(
-    _In_      PNET_DRIVER_GLOBALS    Globals,
+    _In_      NET_DRIVER_GLOBALS *   Globals,
     _In_      NETREQUESTQUEUE            NetRequestQueue
-    )
+)
 /*++
 Routine Description:
 

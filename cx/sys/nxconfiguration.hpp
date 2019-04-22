@@ -26,7 +26,7 @@ FORCEINLINE
 NxConfiguration *
 GetNxConfigurationFromHandle(
     _In_ NETCONFIGURATION Configuration
-    );
+);
 
 class NxConfiguration : public CFxObject<NETCONFIGURATION,
                                    NxConfiguration,
@@ -54,14 +54,14 @@ private:
         _In_ NETCONFIGURATION         Configuration,
         _In_ NxConfiguration *        ParentNxConfiguration,
         _In_ NxDevice *               NxDevice
-        );
+    );
 
     NxConfiguration(
         _In_ NX_PRIVATE_GLOBALS *     NxPrivateGlobals,
         _In_ NETCONFIGURATION         Configuration,
         _In_ NxConfiguration *        ParentNxConfiguration,
         _In_ NxAdapter *              NxAdapter
-        );
+    );
 
     PAGED
     NTSTATUS
@@ -79,7 +79,7 @@ public:
     _Create(
         _In_     NX_PRIVATE_GLOBALS *     PrivateGlobals,
         _In_     NxDevice *               NxDevice,
-        _In_opt_ PWDF_OBJECT_ATTRIBUTES   ConfigurationAttributes,
+        _In_opt_ WDF_OBJECT_ATTRIBUTES *  ConfigurationAttributes,
         _In_opt_ NxConfiguration *        ParentNxConfiguration,
         _Out_    NxConfiguration **       NxConfiguration
     );
@@ -91,43 +91,43 @@ public:
         _In_     NxAdapter *              NxAdapter,
         _In_opt_ NxConfiguration *        ParentNxConfiguration,
         _Out_    NxConfiguration **       NxConfiguration
-        );
+    );
 
     static
     VOID
     _EvtCleanup(
         _In_  WDFOBJECT Configuration
-        );
+    );
 
     NTSTATUS
     Open(
         VOID
-        );
+    );
 
     NTSTATUS
     OpenAsSubConfiguration(
         PCUNICODE_STRING  SubConfigurationName
-        );
+    );
 
     VOID
     DeleteFromFailedOpen(
         VOID
-        );
+    );
 
     VOID
     Close(
         VOID
-        );
+    );
 
     NTSTATUS
     AddAttributes(
-        _In_ PWDF_OBJECT_ATTRIBUTES Attributes
-        );
+        _In_ WDF_OBJECT_ATTRIBUTES * Attributes
+    );
 
     RECORDER_LOG
     GetRecorderLog(
         VOID
-        );
+    );
 
     _Must_inspect_result_
     _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -136,25 +136,25 @@ public:
         _In_  NET_CONFIGURATION_QUERY_ULONG_FLAGS   Flags,
         _In_  PCUNICODE_STRING                      ValueName,
         _Out_ PULONG                                Value
-        );
+    );
 
     _Must_inspect_result_
     _IRQL_requires_max_(PASSIVE_LEVEL)
     NTSTATUS
     QueryString(
         _In_     PCUNICODE_STRING                      ValueName,
-        _In_opt_ PWDF_OBJECT_ATTRIBUTES                StringAttributes,
+        _In_opt_ WDF_OBJECT_ATTRIBUTES *               StringAttributes,
         _Out_    WDFSTRING*                            WdfString
-        );
+    );
 
     _Must_inspect_result_
     _IRQL_requires_max_(PASSIVE_LEVEL)
     NTSTATUS
     QueryMultiString(
         _In_     PCUNICODE_STRING                      ValueName,
-        _In_opt_ PWDF_OBJECT_ATTRIBUTES                StringsAttributes,
+        _In_opt_ WDF_OBJECT_ATTRIBUTES *               StringsAttributes,
         _In_     WDFCOLLECTION                         Collection
-        );
+    );
 
     _Must_inspect_result_
     _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -163,7 +163,7 @@ public:
         _In_     PCUNICODE_STRING                      ValueName,
         _Strict_type_match_ _In_
                  POOL_TYPE                             PoolType,
-        _In_opt_ PWDF_OBJECT_ATTRIBUTES                MemoryAttributes,
+        _In_opt_ WDF_OBJECT_ATTRIBUTES *               MemoryAttributes,
         _Out_    WDFMEMORY*                            WdfMemory
     );
 
@@ -172,7 +172,7 @@ public:
     NTSTATUS
     QueryLinkLayerAddress(
         _Out_    NET_ADAPTER_LINK_LAYER_ADDRESS         *LinkLayerAddress
-        );
+    );
 
     _Must_inspect_result_
     _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -188,7 +188,7 @@ public:
     AssignUnicodeString(
         _In_  PCUNICODE_STRING                      ValueName,
         _In_  PCUNICODE_STRING                      Value
-        );
+    );
 
     _Must_inspect_result_
     _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -197,7 +197,7 @@ public:
         _In_                                PCUNICODE_STRING    ValueName,
         _In_reads_bytes_(BufferLength)      PVOID               Buffer,
         _In_                                ULONG               BufferLength
-        );
+    );
 
     _Must_inspect_result_
     _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -205,7 +205,7 @@ public:
     AssignMultiString(
         _In_  PCUNICODE_STRING                      ValueName,
         _In_  WDFCOLLECTION                         StringsCollection
-        );
+    );
 
 };
 

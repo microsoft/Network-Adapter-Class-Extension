@@ -23,19 +23,14 @@ Abstract:
 #include "verifier.hpp"
 #include "version.hpp"
 
-NTSTATUS
-AssignFdoName(
-    _Inout_ PWDFDEVICE_INIT DeviceInit
-    );
-
 _Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetAdapterDeviceInitConfig)(
-    _In_    PNET_DRIVER_GLOBALS             Globals,
-    _Inout_ PWDFDEVICE_INIT                 DeviceInit
-    )
+    _In_    NET_DRIVER_GLOBALS * Globals,
+    _Inout_ WDFDEVICE_INIT * DeviceInit
+)
 /*++
 Routine Description:
 
@@ -55,7 +50,7 @@ Return Value:
 {
     NTSTATUS status;
     WDF_REMOVE_LOCK_OPTIONS  removeLockOptions;
-    PWDFCXDEVICE_INIT cxDeviceInit;
+    WDFCXDEVICE_INIT * cxDeviceInit;
 
     //
     // Validate Parameters
@@ -81,27 +76,6 @@ Return Value:
     if (cxDeviceInit == NULL)
     {
         status = STATUS_INSUFFICIENT_RESOURCES;
-        goto Exit;
-    }
-
-    status = AssignFdoName(DeviceInit);
-
-    if (!NT_SUCCESS(status))
-    {
-        goto Exit;
-    }
-
-    //
-    // This SDDL is enough to let ndispnp.lib successfully open a handle to a network
-    // adapter (without changing their code).
-    //
-    // Note: If we want to give a more restrictive default SDDL to the FDO we need to find applications
-    // that open handles to NDIS and make sure they work with the new SDDL.
-    //
-    status = WdfDeviceInitAssignSDDLString(DeviceInit, &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RW_RES_R);
-
-    if (!NT_SUCCESS(status))
-    {
         goto Exit;
     }
 
@@ -151,11 +125,11 @@ Exit:
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
-PNETADAPTER_INIT
+NETADAPTER_INIT *
 NETEXPORT(NetAdapterInitAllocate)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ WDFDEVICE Device
-    )
+)
 /*++
 Routine Description:
 
@@ -193,64 +167,16 @@ Remarks
 
     adapterInit->Device = Device;
 
-    return reinterpret_cast<PNETADAPTER_INIT>(adapterInit.release());
-}
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-WDFAPI
-PNETADAPTER_INIT
-NETEXPORT(NetDefaultAdapterInitAllocate)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _In_ WDFDEVICE Device
-    )
-/*++
-Routine Description:
-
-    WDF client driver may call this API only from EvtDeviceAdd to allocate
-    an opaque init object for default adapters layered on top of a PnP device.
-
-Arguments:
-
-    Globals - Client driver's globals
-    Device - Device to which an adapter will be layered on top off
-
-Return Value:
-
-    An pointer to an init object.
-
-Remarks
-
-    The init object's lifetime is owned by the WDF client driver. After using it to create
-    an adapter it has to call NetAdapterInitFree.
-
---*/
-{
-    auto privateGlobals = GetPrivateGlobals(DriverGlobals);
-
-    Verifier_VerifyPrivateGlobals(privateGlobals);
-    Verifier_VerifyIrqlPassive(privateGlobals);
-    Verifier_VerifyNotNull(privateGlobals, Device);
-
-    auto adapterInit = wil::make_unique_nothrow<AdapterInit>();
-
-    if (!adapterInit)
-    {
-        return nullptr;
-    }
-
-    adapterInit->Device = Device;
-    adapterInit->Default = true;
-
-    return reinterpret_cast<PNETADAPTER_INIT>(adapterInit.release());
+    return reinterpret_cast<NETADAPTER_INIT *>(adapterInit.release());
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 VOID
 NETEXPORT(NetAdapterInitFree)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _In_ PNETADAPTER_INIT AdapterInit
-    )
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER_INIT * AdapterInit
+)
 /*++
 Routine Description:
 
@@ -283,10 +209,10 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 VOID
 NETEXPORT(NetAdapterInitSetDatapathCallbacks)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _Inout_ PNETADAPTER_INIT AdapterInit,
-    _In_ PNET_ADAPTER_DATAPATH_CALLBACKS DatapathCallbacks
-    )
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _Inout_ NETADAPTER_INIT * AdapterInit,
+    _In_ NET_ADAPTER_DATAPATH_CALLBACKS * DatapathCallbacks
+)
 /*++
 Routine Description:
 
@@ -309,6 +235,7 @@ Return Value:
     Verifier_VerifyPrivateGlobals(privateGlobals);
     Verifier_VerifyIrqlPassive(privateGlobals);
     Verifier_VerifyNotNull(privateGlobals, DatapathCallbacks);
+    Verifier_VerifyDatapathCallbacks(privateGlobals, DatapathCallbacks);
 
     auto adapterInit = GetAdapterInitFromHandle(privateGlobals, AdapterInit);
 
@@ -322,10 +249,10 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 VOID
 NETEXPORT(NetAdapterInitSetNetRequestAttributes)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _Inout_ PNETADAPTER_INIT AdapterInit,
-    _In_ PWDF_OBJECT_ATTRIBUTES NetRequestAttributes
-    )
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _Inout_ NETADAPTER_INIT * AdapterInit,
+    _In_ WDF_OBJECT_ATTRIBUTES * NetRequestAttributes
+)
 /*++
 Routine Description:
 
@@ -364,10 +291,10 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 VOID
 NETEXPORT(NetAdapterInitSetNetPowerSettingsAttributes)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _Inout_ PNETADAPTER_INIT AdapterInit,
-    _In_ PWDF_OBJECT_ATTRIBUTES NetPowerSettingsAttributes
-    )
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _Inout_ NETADAPTER_INIT * AdapterInit,
+    _In_ WDF_OBJECT_ATTRIBUTES * NetPowerSettingsAttributes
+)
 /*++
 Routine Description:
 
@@ -407,11 +334,11 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetAdapterCreate)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _In_ PNETADAPTER_INIT AdapterInit,
-    _In_opt_ PWDF_OBJECT_ATTRIBUTES AdapterAttributes,
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER_INIT * AdapterInit,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES * AdapterAttributes,
     _Out_ NETADAPTER* Adapter
-    )
+)
 /*++
 Routine Description:
     The client driver calls this method to create an NETADAPTER
@@ -449,9 +376,7 @@ Return Value:
 
 --*/
 {
-    NTSTATUS                 status;
-
-    *Adapter = NULL;
+    *Adapter = nullptr;
 
     auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
@@ -472,23 +397,24 @@ Return Value:
     auto nxDevice = GetNxDeviceFromHandle(adapterInit->Device);
     if (nxDevice == nullptr)
     {
-        status = NxDevice::_Create(pNxPrivateGlobals,
-            adapterInit->Device,
-            &nxDevice);
-
-        if (!NT_SUCCESS(status)) {
-            goto Exit;
-        }
+        CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+            NxDevice::_Create(
+                pNxPrivateGlobals,
+                adapterInit->Device,
+                &nxDevice),
+            "Failed to create the NxDevice context. WDFDEVICE=%p",
+            adapterInit->Device);
     }
 
     NxAdapter * nxAdapter;
-    status = NxAdapter::_Create(*pNxPrivateGlobals,
-                                *adapterInit,
-                                AdapterAttributes,
-                                &nxAdapter);
-    if (!NT_SUCCESS(status)) {
-        goto Exit;
-    }
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        NxAdapter::_Create(
+            *pNxPrivateGlobals,
+            *adapterInit,
+            AdapterAttributes,
+            &nxAdapter),
+        "Failed to create the NxAdapter context. WDFDEVICE=%p",
+        adapterInit->Device);
 
     //
     // Do not introduce failures after this point. See note at the end of
@@ -499,9 +425,7 @@ Return Value:
 
     adapterInit->CreatedAdapter = *Adapter;
 
-Exit:
-
-    return status;
+    return STATUS_SUCCESS;
 }
 
 _Must_inspect_result_
@@ -509,9 +433,9 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetAdapterStart)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETADAPTER Adapter
-    )
+)
 {
     NX_PRIVATE_GLOBALS *privateGlobals = GetPrivateGlobals(DriverGlobals);
 
@@ -529,9 +453,9 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 VOID
 NETEXPORT(NetAdapterStop)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETADAPTER Adapter
-    )
+)
 {
     NX_PRIVATE_GLOBALS *privateGlobals = GetPrivateGlobals(DriverGlobals);
 
@@ -545,9 +469,9 @@ NETEXPORT(NetAdapterStop)(
 WDFAPI
 NDIS_HANDLE
 NETEXPORT(NetAdapterWdmGetNdisHandle)(
-    _In_ PNET_DRIVER_GLOBALS               Globals,
+    _In_ NET_DRIVER_GLOBALS *              Globals,
     _In_ NETADAPTER                        Adapter
-    )
+)
 /*++
 Routine Description:
 
@@ -564,16 +488,16 @@ Return Value:
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
 
-    return GetNxAdapterFromHandle(Adapter)->m_NdisAdapterHandle;
+    return GetNxAdapterFromHandle(Adapter)->GetNdisHandle();
 }
 
 WDFAPI
 _IRQL_requires_(PASSIVE_LEVEL)
 NET_LUID
 NETEXPORT(NetAdapterGetNetLuid)(
-    _In_     PNET_DRIVER_GLOBALS                 Globals,
+    _In_     NET_DRIVER_GLOBALS *                Globals,
     _In_     NETADAPTER                          Adapter
-    )
+)
 /*++
 Routine Description:
 
@@ -600,11 +524,11 @@ _Must_inspect_result_
 _IRQL_requires_(PASSIVE_LEVEL)
 NTSTATUS
 NETEXPORT(NetAdapterOpenConfiguration)(
-    _In_     PNET_DRIVER_GLOBALS                 Globals,
+    _In_     NET_DRIVER_GLOBALS *                Globals,
     _In_     NETADAPTER                          Adapter,
-    _In_opt_ PWDF_OBJECT_ATTRIBUTES              ConfigurationAttributes,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES *             ConfigurationAttributes,
     _Out_    NETCONFIGURATION*                   Configuration
-    )
+)
 /*++
 Routine Description:
 
@@ -683,11 +607,11 @@ _IRQL_requires_(PASSIVE_LEVEL)
 WDFAPI
 VOID
 NETEXPORT(NetAdapterSetDataPathCapabilities)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETADAPTER Adapter,
-    _In_ PNET_ADAPTER_TX_CAPABILITIES TxCapabilities,
-    _In_ PNET_ADAPTER_RX_CAPABILITIES RxCapabilities
-    )
+    _In_ NET_ADAPTER_TX_CAPABILITIES * TxCapabilities,
+    _In_ NET_ADAPTER_RX_CAPABILITIES * RxCapabilities
+)
 {
     auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
@@ -723,10 +647,10 @@ WDFAPI
 _IRQL_requires_(PASSIVE_LEVEL)
 VOID
 NETEXPORT(NetAdapterSetReceiveScalingCapabilities)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETADAPTER Adapter,
     _In_ NET_ADAPTER_RECEIVE_SCALING_CAPABILITIES const * Capabilities
-    )
+)
 {
     auto const pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
@@ -745,10 +669,10 @@ WDFAPI
 _IRQL_requires_(PASSIVE_LEVEL)
 VOID
 NETEXPORT(NetAdapterSetLinkLayerMtuSize)(
-    _In_ PNET_DRIVER_GLOBALS                    DriverGlobals,
+    _In_ NET_DRIVER_GLOBALS *                   DriverGlobals,
     _In_ NETADAPTER                             Adapter,
     _In_ ULONG                                  MtuSize
-    )
+)
 /*++
 Routine Description:
 
@@ -788,10 +712,10 @@ WDFAPI
 _IRQL_requires_(PASSIVE_LEVEL)
 VOID
 NETEXPORT(NetAdapterSetLinkLayerCapabilities)(
-    _In_ PNET_DRIVER_GLOBALS                    DriverGlobals,
+    _In_ NET_DRIVER_GLOBALS *                   DriverGlobals,
     _In_ NETADAPTER                             Adapter,
-    _In_ PNET_ADAPTER_LINK_LAYER_CAPABILITIES   LinkLayerCapabilities
-    )
+    _In_ NET_ADAPTER_LINK_LAYER_CAPABILITIES *  LinkLayerCapabilities
+)
 /*++
 Routine Description:
 
@@ -841,10 +765,10 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 VOID
 NETEXPORT(NetAdapterSetPermanentLinkLayerAddress)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETADAPTER Adapter,
-    _In_ PNET_ADAPTER_LINK_LAYER_ADDRESS LinkLayerAddress
-    )
+    _In_ NET_ADAPTER_LINK_LAYER_ADDRESS * LinkLayerAddress
+)
 /*++
 Routine Description:
 
@@ -894,10 +818,10 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 VOID
 NETEXPORT(NetAdapterSetCurrentLinkLayerAddress)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETADAPTER Adapter,
-    _In_ PNET_ADAPTER_LINK_LAYER_ADDRESS LinkLayerAddress
-    )
+    _In_ NET_ADAPTER_LINK_LAYER_ADDRESS * LinkLayerAddress
+)
 /*++
 
 Routine Description:
@@ -949,10 +873,10 @@ WDFAPI
 _IRQL_requires_(PASSIVE_LEVEL)
 VOID
 NETEXPORT(NetAdapterSetPowerCapabilities)(
-    _In_ PNET_DRIVER_GLOBALS             DriverGlobals,
+    _In_ NET_DRIVER_GLOBALS *            DriverGlobals,
     _In_ NETADAPTER                      Adapter,
-    _In_ PNET_ADAPTER_POWER_CAPABILITIES PowerCapabilities
-    )
+    _In_ NET_ADAPTER_POWER_CAPABILITIES * PowerCapabilities
+)
 /*++
 Routine Description:
 
@@ -996,11 +920,11 @@ Remarks:
 WDFAPI
 _IRQL_requires_max_(DISPATCH_LEVEL)
 VOID
-NETEXPORT(NetAdapterSetCurrentLinkState)(
-    _In_ PNET_DRIVER_GLOBALS     DriverGlobals,
+NETEXPORT(NetAdapterSetLinkState)(
+    _In_ NET_DRIVER_GLOBALS *    DriverGlobals,
     _In_ NETADAPTER              Adapter,
-    _In_ PNET_ADAPTER_LINK_STATE CurrentLinkState
-    )
+    _In_ NET_ADAPTER_LINK_STATE * State
+)
 /*++
 Routine Description:
 
@@ -1010,7 +934,7 @@ Arguments:
 
     Adapter - Pointer to the Adapter created in a prior call to NetAdapterCreate
 
-    CurrentLinkState - Pointer to a initialized NET_ADAPTER_LINK_STATE structure
+    State - Pointer to a initialized NET_ADAPTER_LINK_STATE structure
     representing the current Link State.
 
 Returns:
@@ -1028,98 +952,19 @@ Remarks:
 
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
-    Verifier_VerifyTypeSize<NET_ADAPTER_LINK_STATE>(pNxPrivateGlobals, CurrentLinkState);
-    Verifier_VerifyCurrentLinkState(pNxPrivateGlobals, CurrentLinkState);
+    Verifier_VerifyTypeSize<NET_ADAPTER_LINK_STATE>(pNxPrivateGlobals, State);
+    Verifier_VerifyCurrentLinkState(pNxPrivateGlobals, State);
 
-    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
-
-    nxAdapter->SetCurrentLinkState(*CurrentLinkState);
-}
-
-NDIS_STRING ndisFdoDeviceStr = NDIS_STRING_CONST("\\Device\\NDMP");
-
-NTSTATUS
-AssignFdoName(
-    _Inout_ PWDFDEVICE_INIT DeviceInit
-    )
-/*++
-Routine Description:
-
-    NDIS.sys names its clients FDO in a specfic format.
-    This routine does the same for a WDF Ndis Client's FDO.
-    To determine the correct name to use, this routine calls into NDIS.sys
-    to get a unique FDO name index and then goes ahead and creates a
-    FDO name from it. It uses the same format that is used by ndis.sys.
-
---*/
-{
-    ULONG          uFdoIndex;
-    UNICODE_STRING fdoIndex;
-    WCHAR          fdoIndexBuffer[20] = { 0 };
-    UNICODE_STRING fdoName;
-    WCHAR          fdoNameBuffer[30] = { 0 };
-    NTSTATUS       status;
-
-    //
-    // Get a unique index from Ndis
-    //
-    uFdoIndex = NdisWdfGenerateFdoNameIndex();
-
-    fdoIndex.Length = 0;
-    fdoIndex.MaximumLength = sizeof(fdoIndexBuffer);
-    fdoIndex.Buffer = fdoIndexBuffer;
-
-    status = RtlIntegerToUnicodeString(uFdoIndex, 10, &fdoIndex);
-
-    if (!NT_SUCCESS(status))
-    {
-        LogError(NULL, FLAG_ADAPTER,
-            "RtlIntegerToUnicodeString failed for %d, %!STATUS!",
-            uFdoIndex, status);
-
-        goto Exit;
-    }
-
-    fdoName.Length = 0;
-    fdoName.MaximumLength = sizeof(fdoNameBuffer);
-    fdoName.Buffer = fdoNameBuffer;
-
-    RtlCopyUnicodeString(&fdoName, &ndisFdoDeviceStr);
-
-    status = RtlAppendUnicodeStringToString(&fdoName, &fdoIndex);
-
-    if (!NT_SUCCESS(status))
-    {
-        LogError(NULL, FLAG_ADAPTER,
-            "RtlAppendUnicodeStringToString failed to append %d \\Device\\NDMP, %!STATUS!",
-            uFdoIndex, status);
-
-        goto Exit;
-    }
-
-    status = WdfDeviceInitAssignName(DeviceInit, &fdoName);
-
-    if (!NT_SUCCESS(status))
-    {
-        LogError(NULL, FLAG_ADAPTER,
-            "WdfDeviceInitAssignName failed for \\Device\\NDMP%d, %!STATUS!",
-            uFdoIndex, status);
-
-        goto Exit;
-    }
-
-Exit:
-
-    return status;
+    GetNxAdapterFromHandle(Adapter)->SetCurrentLinkState(*State);
 }
 
 WDFAPI
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NETPOWERSETTINGS
 NETEXPORT(NetAdapterGetPowerSettings)(
-    _In_ PNET_DRIVER_GLOBALS    Globals,
+    _In_ NET_DRIVER_GLOBALS *   Globals,
     _In_ NETADAPTER             Adapter
-    )
+)
 /*++
 Routine Description:
     Returns the NETPOWERSETTINGS associated with the NETADAPTER.
@@ -1145,10 +990,10 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetAdapterRegisterPacketExtension)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETADAPTER Adapter,
-    _In_ const PNET_PACKET_EXTENSION ExtensionToRegister
-    )
+    _In_ NET_PACKET_EXTENSION const * ExtensionToRegister
+)
 {
     auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
@@ -1183,10 +1028,10 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetAdapterQueryRegisteredPacketExtension)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETADAPTER Adapter,
-    _In_ const PNET_PACKET_EXTENSION_QUERY ExtensionToQuery
-    )
+    _In_ NET_PACKET_EXTENSION_QUERY const * ExtensionToQuery
+)
 {
     auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
@@ -1205,36 +1050,36 @@ NETEXPORT(NetAdapterQueryRegisteredPacketExtension)(
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 VOID
-NETEXPORT(NetDeviceSetResetCallback)(
+NETEXPORT(NetDeviceSetResetConfig)(
     _In_
-    PNET_DRIVER_GLOBALS DriverGlobals,
+    NET_DRIVER_GLOBALS * DriverGlobals,
     _In_
     WDFDEVICE WdfDevice,
     _In_
-    PFN_NET_DEVICE_RESET NetDeviceReset
-    )
+    NET_DEVICE_RESET_CONFIG * ResetConfig
+)
 {
     auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
     Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
     Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyTypeSize(pNxPrivateGlobals, ResetConfig);
 
     auto nxDevice = GetNxDeviceFromHandle(WdfDevice);
-    nxDevice->SetEvtDeviceResetCallback(NetDeviceReset);
+    nxDevice->SetEvtDeviceResetCallback(ResetConfig->EvtDeviceReset);
 }
 
 WDFAPI
 _IRQL_requires_(PASSIVE_LEVEL)
 VOID
 NETEXPORT(NetAdapterOffloadSetChecksumCapabilities)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETADAPTER Adapter,
-    _In_ PNET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES HardwareCapabilities,
-    _In_ PFN_NET_ADAPTER_OFFLOAD_SET_CHECKSUM EvtAdapterOffloadSetChecksum
-    )
+    _In_ NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES * HardwareCapabilities
+)
 /*++
 Routine Description:
 
-    This routine sets the Checksum hardware capabilities of the Network Adapter and provides 
+    This routine sets the Checksum hardware capabilities of the Network Adapter and provides
     a callback to notify active checksum capabilities to the client driver.
 
     The client driver must call this method before calling NetAdapterStart
@@ -1245,9 +1090,6 @@ Arguments:
 
     HardwareCapabilities - Pointer to a initialized NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES
     structure representing the hardware capabilities of network adapter
-
-    EvtAdapterOffloadSetChecksum - A pointer to a client driver's implementation of 
-    EVT_NET_ADAPTER_OFFLOAD_SET_CHECKSUM callback to notify active capabilities
 
 Returns:
     VOID
@@ -1262,22 +1104,75 @@ Returns:
     auto nxAdapter = GetNxAdapterFromHandle(Adapter);
     Verifier_VerifyAdapterNotStarted(pNxPrivateGlobals, nxAdapter);
 
-    nxAdapter->m_NxOffloadManager->SetChecksumHardwareCapabilities(HardwareCapabilities, EvtAdapterOffloadSetChecksum);
+    nxAdapter->m_NxOffloadManager->SetChecksumHardwareCapabilities(HardwareCapabilities);
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+BOOLEAN
+NETEXPORT(NetOffloadIsChecksumIPv4Enabled)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETOFFLOAD Offload
+)
+{
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const capabilities = reinterpret_cast<NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES const *>(Offload);
+
+    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyTypeSize(pNxPrivateGlobals, capabilities);
+
+    return capabilities->IPv4;
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+BOOLEAN
+NETEXPORT(NetOffloadIsChecksumTcpEnabled)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETOFFLOAD Offload
+)
+{
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const capabilities = reinterpret_cast<NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES const *>(Offload);
+
+    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyTypeSize(pNxPrivateGlobals, capabilities);
+
+    return capabilities->Tcp;
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+BOOLEAN
+NETEXPORT(NetOffloadIsChecksumUdpEnabled)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETOFFLOAD Offload
+)
+{
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const capabilities = reinterpret_cast<NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES const *>(Offload);
+
+    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyTypeSize(pNxPrivateGlobals, capabilities);
+
+    return capabilities->Udp;
 }
 
 WDFAPI
 _IRQL_requires_(PASSIVE_LEVEL)
 VOID
 NETEXPORT(NetAdapterOffloadSetLsoCapabilities)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETADAPTER Adapter,
-    _In_ PNET_ADAPTER_OFFLOAD_LSO_CAPABILITIES HardwareCapabilities,
-    _In_ PFN_NET_ADAPTER_OFFLOAD_SET_LSO EvtAdapterOffloadSetLso
-    )
+    _In_ NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES * HardwareCapabilities
+)
 /*++
 Routine Description:
 
-    This routine sets the LSO hardware capabilities of the Network Adapter and provides 
+    This routine sets the LSO hardware capabilities of the Network Adapter and provides
     a callback to notify active LSO capabilities to the client driver.
 
     The client driver must call this method before calling NetAdapterStart
@@ -1288,9 +1183,6 @@ Arguments:
 
     HardwareCapabilities - Pointer to a initialized NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES
     structure representing the hardware capabilities of network adapter
-
-    EvtAdapterOffloadSetLso - A pointer to a client driver's implementation of 
-    EVT_NET_ADAPTER_OFFLOAD_SET_LSO callback to notify active capabilities
 
 Returns:
     VOID
@@ -1306,5 +1198,44 @@ Returns:
     auto nxAdapter = GetNxAdapterFromHandle(Adapter);
     Verifier_VerifyAdapterNotStarted(pNxPrivateGlobals, nxAdapter);
 
-    nxAdapter->m_NxOffloadManager->SetLsoHardwareCapabilities(HardwareCapabilities, EvtAdapterOffloadSetLso);
+    nxAdapter->m_NxOffloadManager->SetLsoHardwareCapabilities(HardwareCapabilities);
 }
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+BOOLEAN
+NETEXPORT(NetOffloadIsLsoIPv4Enabled)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETOFFLOAD Offload
+)
+{
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const capabilities = reinterpret_cast<NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES const *>(Offload);
+
+    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyTypeSize(pNxPrivateGlobals, capabilities);
+    Verifier_VerifyLsoCapabilities(pNxPrivateGlobals, capabilities);
+
+    return capabilities->IPv4;
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+BOOLEAN
+NETEXPORT(NetOffloadIsLsoIPv6Enabled)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETOFFLOAD Offload
+)
+{
+    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const capabilities = reinterpret_cast<NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES const *>(Offload);
+
+    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyTypeSize(pNxPrivateGlobals, capabilities);
+    Verifier_VerifyLsoCapabilities(pNxPrivateGlobals, capabilities);
+
+    return capabilities->IPv6;
+}
+

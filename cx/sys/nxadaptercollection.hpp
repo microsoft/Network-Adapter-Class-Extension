@@ -4,55 +4,41 @@
 
 #include "netadaptercx_triage.h"
 
+#include <KLockHolder.h>
+
 class NxAdapter;
 
 class NxAdapterCollection
 {
 public:
 
-    NxAdapterCollection();
-
-    NTSTATUS
-    Initialize(
+    NxAdapterCollection(
         void
-        );
-
-    bool
-    Empty(
-        void
-        ) const;
+    );
 
     ULONG
     Count(
         void
-        ) const;
-
-    void
-    Clear(
-        void
-        );
-
-    NxAdapter *
-    GetDefaultAdapter(
-        void
-        ) const;
+    ) const;
 
     void
     AddAdapter(
         _In_ NxAdapter * Adapter
-        );
+    );
 
     bool
     RemoveAdapter(
         _In_ NxAdapter * Adapter
-        );
+    );
 
     template <typename lambda>
     void
-    ForEachAdapterUnlocked(
+    ForEachAdapter(
         _In_ lambda f
-        )
+    )
     {
+        KLockThisShared lock(m_ListLock);
+
         for (
             LIST_ENTRY *link = m_ListHead.Flink;
             link != &m_ListHead;
@@ -64,29 +50,32 @@ public:
         }
     }
 
-    template <typename lambda>
-    void
-    ForEachAdapterLocked(
-        _In_ lambda f
-        )
-    {
-        auto lock = wil::acquire_wdf_wait_lock(m_ListLock);
-        ForEachAdapterUnlocked(f);
-    }
-
     static
     void
     GetTriageInfo(
         void
-        );
+    );
+
+    NxAdapter *
+    FindAndReferenceAdapterByInstanceName(
+        _In_ UNICODE_STRING const * InstanceName
+    ) const;
+
+    NxAdapter *
+    FindAndReferenceAdapterByBaseName(
+        _In_ UNICODE_STRING const * BaseName
+    ) const;
 
 private:
 
     _Guarded_by_(m_ListLock)
-    LIST_ENTRY m_ListHead;
+    LIST_ENTRY
+        m_ListHead = {};
 
     _Guarded_by_(m_ListLock)
-    ULONG m_Count = 0;
+    ULONG
+        m_Count = 0;
 
-    WDFWAITLOCK m_ListLock = nullptr;
+    mutable KPushLock
+        m_ListLock;
 };

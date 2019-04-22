@@ -21,8 +21,8 @@ NxRequestQueue::NxRequestQueue(
     _In_ NX_PRIVATE_GLOBALS *      NxPrivateGlobals,
     _In_ NETREQUESTQUEUE           NetRequestQueue,
     _In_ NxAdapter *               NxAdapter,
-    _In_ PNET_REQUEST_QUEUE_CONFIG Config
-    ) :
+    _In_ NET_REQUEST_QUEUE_CONFIG * Config
+) :
     CFxObject(NetRequestQueue),
     m_NxPrivateGlobals(NxPrivateGlobals),
     m_NxAdapter(NxAdapter)
@@ -65,7 +65,7 @@ Routine Description:
 VOID
 NxRequestQueue::ReferenceHandlers(
     VOID
-    )
+)
 /*++
 Routine Description:
     This routine references all the custom handlers.
@@ -73,9 +73,9 @@ Routine Description:
 --*/
 {
 
-    PNET_REQUEST_QUEUE_SET_DATA_HANDLER setDataHandler;
-    PNET_REQUEST_QUEUE_QUERY_DATA_HANDLER queryDataHandler;
-    PNET_REQUEST_QUEUE_METHOD_HANDLER methodHandler;
+    NET_REQUEST_QUEUE_SET_DATA_HANDLER * setDataHandler;
+    NET_REQUEST_QUEUE_QUERY_DATA_HANDLER * queryDataHandler;
+    NET_REQUEST_QUEUE_METHOD_HANDLER * methodHandler;
 
     setDataHandler = m_Config.SetDataHandlers;
     while (setDataHandler != NULL) {
@@ -98,8 +98,8 @@ Routine Description:
 
 VOID
 NxRequestQueue::_FreeHandlers(
-    _In_ PNET_REQUEST_QUEUE_CONFIG QueueConfig
-    )
+    _In_ NET_REQUEST_QUEUE_CONFIG * QueueConfig
+)
 /*++
 Routine Description:
     Static method
@@ -116,9 +116,12 @@ Arguments:
 --*/
 {
 
-    PNET_REQUEST_QUEUE_SET_DATA_HANDLER setDataHandler, nextSetDataHandler;
-    PNET_REQUEST_QUEUE_QUERY_DATA_HANDLER queryDataHandler, nextQueryDataHandler;
-    PNET_REQUEST_QUEUE_METHOD_HANDLER methodHandler, nextMethodHandler;
+    NET_REQUEST_QUEUE_SET_DATA_HANDLER * setDataHandler;
+    NET_REQUEST_QUEUE_SET_DATA_HANDLER * nextSetDataHandler;
+    NET_REQUEST_QUEUE_QUERY_DATA_HANDLER * queryDataHandler;
+    NET_REQUEST_QUEUE_QUERY_DATA_HANDLER * nextQueryDataHandler;
+    NET_REQUEST_QUEUE_METHOD_HANDLER * methodHandler;
+    NET_REQUEST_QUEUE_METHOD_HANDLER * nextMethodHandler;
 
     setDataHandler = QueueConfig->SetDataHandlers;
     while (setDataHandler != NULL) {
@@ -151,7 +154,7 @@ Arguments:
 RECORDER_LOG
 NxRequestQueue::GetRecorderLog(
     void
-    )
+)
 {
     return m_NxAdapter->GetRecorderLog();
 }
@@ -160,8 +163,8 @@ NTSTATUS
 NxRequestQueue::_Create(
     _In_     NX_PRIVATE_GLOBALS *      PrivateGlobals,
     _In_     NxAdapter *               NxAdapter,
-    _In_opt_ PWDF_OBJECT_ATTRIBUTES    ClientAttributes,
-    _In_     PNET_REQUEST_QUEUE_CONFIG Config,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES *   ClientAttributes,
+    _In_     NET_REQUEST_QUEUE_CONFIG * Config,
     _Out_    NxRequestQueue **         Queue
 )
 /*++
@@ -345,7 +348,7 @@ Arguments:
 VOID
 NxRequestQueue::DispatchRequest(
     _In_ NxRequest * NxRequest
-    )
+)
 /*++
 Routine Description:
     This routine dispatches a request to the client.
@@ -367,9 +370,9 @@ Remarks:
     routine fails the request using STATUS_NOT_SUPPORTED.
 --*/
 {
-    PNET_REQUEST_QUEUE_SET_DATA_HANDLER setDataHandler;
-    PNET_REQUEST_QUEUE_QUERY_DATA_HANDLER queryDataHandler;
-    PNET_REQUEST_QUEUE_METHOD_HANDLER methodHandler;
+    NET_REQUEST_QUEUE_SET_DATA_HANDLER * setDataHandler;
+    NET_REQUEST_QUEUE_QUERY_DATA_HANDLER * queryDataHandler;
+    NET_REQUEST_QUEUE_METHOD_HANDLER * methodHandler;
     NTSTATUS status;
 
     switch (NxRequest->m_NdisOidRequest->RequestType) {
@@ -570,7 +573,7 @@ Exit:
 VOID
 NxRequestQueue::QueueRequest(
     _In_ NETREQUEST Request
-    )
+)
 /*++
 Routine Description:
     This routine queues a NETREQUEST received from NDIS.sys to the
@@ -609,7 +612,7 @@ Remarks:
 VOID
 NxRequestQueue::DisconnectRequest(
     _In_ NxRequest * NxRequest
-    )
+)
 /*++
 Routine Description:
     This routine disassoicates an request from a Queue. This routine is called prior

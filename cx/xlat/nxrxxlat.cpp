@@ -11,11 +11,13 @@ Abstract:
 
 #include "NxXlatPrecomp.hpp"
 #include "NxXlatCommon.hpp"
+
 #include "NxRxXlat.tmh"
 #include "NxRxXlat.hpp"
 
-#include <NetRingBuffer.h>
-#include <NetPacket.h>
+#include <net/ring.h>
+#include <net/packet.h>
+#include <net/checksumtypes_p.h>
 
 #include "NxPerfTuner.hpp"
 #include "NxPacketLayout.hpp"
@@ -62,7 +64,7 @@ static
 void
 NetClientQueueNotify(
     PVOID Queue
-    )
+)
 {
     reinterpret_cast<NxRxXlat *>(Queue)->Notify();
 }
@@ -80,7 +82,7 @@ constexpr
 USHORT
 ByteSwap(
     _In_ USHORT in
-    )
+)
 {
     return (USHORT)((in >> 8) | (in << 8));
 }
@@ -159,45 +161,24 @@ NxRxXlat::NxRxXlat(
     NET_CLIENT_DISPATCH const * Dispatch,
     NET_CLIENT_ADAPTER Adapter,
     NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
-    ) noexcept :
+) noexcept :
     m_queueId(QueueId),
     m_dispatch(Dispatch),
     m_adapter(Adapter),
     m_adapterDispatch(AdapterDispatch),
-    m_contextBuffer(m_ringBuffer)
+    m_packetContext(m_rings, NET_RING_TYPE_PACKET),
+    m_fragmentContext(m_rings, NET_RING_TYPE_FRAGMENT)
 {
     m_adapterDispatch->GetProperties(m_adapter, &m_adapterProperties);
     m_nblDispatcher = static_cast<INxNblDispatcher *>(m_adapterProperties.NblDispatcher);
     ndisInitializeNblQueue(&m_discardedNbl);
-
-    m_shouldReportCounters = m_dispatch->NetClientQueryDriverConfigurationBoolean(RX_REPORT_PERF_COUNTERS);
-    m_counterReportInterval = m_dispatch->NetClientQueryDriverConfigurationUlong(RX_PERF_COUNTERS_ITERATION_INTERVAL);
-    m_shouldUpdateEcCounters = m_dispatch->NetClientQueryDriverConfigurationBoolean(EC_UPDATE_PERF_COUNTERS);
-
-    if (m_shouldReportCounters)
-    {
-#ifdef _KERNEL_MODE
-        LARGE_INTEGER timerDelay = {};
-        KeInitializeTimer(&m_CounterReportTimer);
-        KeInitializeDpc(&m_CounterReportDpc, NxRxXlat::CounterReportDpcRoutine, this);
-
-        // in 100ns
-        timerDelay.QuadPart = (-1 * MS_TO_100NS_CONVERSION * m_counterReportInterval);
-
-        KeSetTimerEx(&
-            m_CounterReportTimer,
-            timerDelay,
-            m_counterReportInterval,
-            &m_CounterReportDpc);
-#endif
-    }
 }
 
 _Use_decl_annotations_
 size_t
 NxRxXlat::GetQueueId(
     void
-    ) const
+) const
 {
     return m_queueId;
 }
@@ -205,7 +186,7 @@ NxRxXlat::GetQueueId(
 NET_CLIENT_QUEUE
 NxRxXlat::GetQueue(
     void
-    ) const
+) const
 {
     return m_queue;
 }
@@ -214,7 +195,7 @@ _Use_decl_annotations_
 bool
 NxRxXlat::IsGroupAffinitized(
     void
-    ) const
+) const
 {
     return m_groupAffinity.Mask;
 }
@@ -223,7 +204,7 @@ _Use_decl_annotations_
 void
 NxRxXlat::SetGroupAffinity(
     GROUP_AFFINITY const & GroupAffinity
-    )
+)
 {
     m_groupAffinity = GroupAffinity;
     (void)InterlockedExchange(&m_groupAffinityChanged, 1);
@@ -248,7 +229,7 @@ _Use_decl_annotations_
 void
 NxRxXlat::ArmNotifications(
     ArmedNotifications notifications
-    )
+)
 {
     if (notifications.Flags.ShouldArmNblReturned)
     {
@@ -273,29 +254,6 @@ NxRxXlat::ArmAdapterRxNotification()
     m_queueDispatch->SetArmed(m_queue, true);
 }
 
-_Use_decl_annotations_
-void
-NxRxXlat::ReinitializePacketExtensions(
-    NET_PACKET* netPacket
-    )
-{
-    RtlZeroMemory(netPacket + 1, m_ringBuffer.GetElementSize() - sizeof(NET_PACKET));
-}
-
-_Use_decl_annotations_
-void
-NxRxXlat::ReinitializePacket(
-    NET_PACKET* netPacket
-    )
-{
-    NetPacketReuseOne(m_descriptor, netPacket);
-
-    DetachFragmentsFromPacket(*netPacket, *m_descriptor);
-
-    netPacket->Layout = {};
-    ReinitializePacketExtensions(netPacket);
-}
-
 void
 NxRxXlat::EcReturnBuffers()
 {
@@ -312,10 +270,6 @@ NxRxXlat::EcReturnBuffers()
         ++m_returnedPackets;
         currNbl = FreeReceivedDataBuffer(currNbl);
     }
-
-    NxRingBufferCounters delta = {};
-    delta.NumberOfNetPacketsConsumed = m_returnedPackets;
-    m_ringBuffer.UpdateRingbufferPacketCounters(delta);
 }
 
 void
@@ -323,22 +277,48 @@ NxRxXlat::EcPrepareBuffersForNetAdapter()
 {
     m_returnedPackets = 0;
 
-    while (auto pCurrentPacket = m_ringBuffer.GetNextPacketToGiveToNic())
+    auto pr = NetRingCollectionGetPacketRing(&m_rings);
+    auto fr = NetRingCollectionGetFragmentRing(&m_rings);
+    auto const lastIndex = (pr->OSReserved0 - 1) & pr->ElementIndexMask;
+
+    NT_FRE_ASSERT(pr->EndIndex == fr->EndIndex);
+    NT_FRE_ASSERT(pr->OSReserved0 == fr->OSReserved0);
+
+    // 1:1 packet:fragment, iterate packet,fragment owned by framework
+    for (; ! NblStackIsEmpty() && pr->EndIndex != lastIndex;
+        fr->EndIndex = pr->EndIndex = NetRingIncrementIndex(pr, pr->EndIndex))
     {
-        NT_ASSERT(pCurrentPacket->FragmentCount == 0);
 
-        auto & packetContext = m_contextBuffer.GetPacketContext<PacketContext>(*pCurrentPacket);
-        NT_ASSERT(packetContext.NetBufferList == nullptr);
+        auto & context = m_packetContext.GetContext<PacketContext>(pr->EndIndex);
+        auto packet = NetRingGetPacketAtIndex(pr, pr->EndIndex);
+        auto fragment = NetRingGetFragmentAtIndex(fr, fr->EndIndex);
 
-        if (!NT_SUCCESS(AttachEmptyDataBufferToNetPacket(pCurrentPacket,
-                                                         &packetContext.NetBufferList)))
+        NT_FRE_ASSERT(context.NetBufferList == nullptr);
+
+        context.NetBufferList = NblStackPop();
+        context.NetBufferList->Next = nullptr;
+
+        // XXX we need to review whether we zero the entire packet + extension
+        RtlZeroMemory(packet, pr->ElementStride);
+
+        // XXX we need to review whether we zero the entire fragment
+        if (m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ALLOCATE_AND_ATTACH)
         {
-            break;
+            auto nb = NET_BUFFER_LIST_FIRST_NB(context.NetBufferList);
+            auto mdl = NET_BUFFER_CURRENT_MDL(nb);
+
+            fragment->VirtualAddress = MmGetMdlVirtualAddress(mdl);
+            fragment->Mapping.DmaLogicalAddress = GetRxContextFromNb(nb)->DmaLogicalAddress;
+            fragment->Capacity = MmGetMdlByteCount(mdl);
+            fragment->Offset = m_backfillSize;
+            fragment->Scratch = 0;
+        }
+        else
+        {
+            RtlZeroMemory(fragment, fr->ElementStride);
         }
 
         --m_outstandingPackets;
-
-        m_ringBuffer.GiveNextPacketToNic();
     }
 }
 
@@ -389,7 +369,7 @@ PrefetchNblForReceiveIndication(
 
 void
 PrefetchPacketPayloadForReceiveIndication(
-    _In_ NET_PACKET_FRAGMENT const *firstFragment)
+    _In_ NET_FRAGMENT const * firstFragment)
 {
     auto payload = (UCHAR*)firstFragment->VirtualAddress + firstFragment->Offset;
 
@@ -402,63 +382,39 @@ PrefetchPacketPayloadForReceiveIndication(
 void
 NxRxXlat::EcIndicateNblsToNdis()
 {
+    auto pr = NetRingCollectionGetPacketRing(&m_rings);
+    auto fr = NetRingCollectionGetFragmentRing(&m_rings);
+
+    NT_FRE_ASSERT(pr->OSReserved0 == fr->OSReserved0);
+    NT_FRE_ASSERT(pr->BeginIndex == fr->BeginIndex);
+
     NxNblSequence nblsToIndicate;
-
-    auto pRing = m_ringBuffer.Get();
-    auto packetIndex = m_ringBuffer.GetNextOSIndex();
-    auto isLastPacket = packetIndex == pRing->BeginIndex;
-
-    while (true)
+    for (; pr->OSReserved0 != pr->BeginIndex;
+        fr->OSReserved0 = pr->OSReserved0 = NetRingIncrementIndex(pr, pr->OSReserved0))
     {
-        if (isLastPacket)
+        auto & context = m_packetContext.GetContext<PacketContext>(pr->OSReserved0);
+        auto packet = NetRingGetPacketAtIndex(pr, pr->OSReserved0);
+
+        NT_FRE_ASSERT(context.NetBufferList != nullptr);
+        NT_FRE_ASSERT(context.NetBufferList->Next == nullptr);
+
+        if (! packet->Ignore &&
+            TransferDataBufferFromNetPacketToNbl(packet, context.NetBufferList, pr->OSReserved0))
         {
-            m_ringBuffer.GetNextOSIndex() = packetIndex;
-            break;
+            nblsToIndicate.AddNbl(context.NetBufferList);
+        }
+        else
+        {
+            ndisAppendSingleNblToNblQueue(&m_discardedNbl, context.NetBufferList);
         }
 
-        auto nextPacketIndex = NetRingBufferIncrementIndex(pRing, packetIndex);
-        isLastPacket = (nextPacketIndex == pRing->BeginIndex);
-
-        if (!isLastPacket)
-            PrefetchNblForReceiveIndication(m_contextBuffer.GetPacketContext<PacketContext>(nextPacketIndex).NetBufferList);
-
-        auto completed = NetRingBufferGetPacketAtIndex(pRing, packetIndex);
-
-        bool shouldIndicate = false;
-        PNET_BUFFER_LIST nbl = nullptr;
-
-        if (!completed->IgnoreThisPacket)
-        {
-            auto & packetContext = m_contextBuffer.GetPacketContext<PacketContext>(*completed);
-
-            nbl = packetContext.NetBufferList;
-            packetContext.NetBufferList = nullptr;
-
-            shouldIndicate = TransferDataBufferFromNetPacketToNbl(completed, nbl);
-        }
-
-        if (shouldIndicate)
-        {
-            nblsToIndicate.AddNbl(nbl);
-        }
-        else if (nbl)
-        {
-            ndisAppendNblChainToNblQueueFast(&m_discardedNbl, nbl, nbl);
-        }
-
-        ReinitializePacket(completed);
-
-        packetIndex = nextPacketIndex;
+        context.NetBufferList = nullptr;
     }
 
     m_postedPackets = nblsToIndicate.GetCount();
 
     if (!nblsToIndicate)
         return;
-
-    NxRingBufferCounters delta = {};
-    delta.NumberOfNetPacketsProduced = m_postedPackets;
-    m_ringBuffer.UpdateRingbufferPacketCounters(delta);
 
     m_outstandingPackets += nblsToIndicate.GetCount();
 
@@ -505,7 +461,7 @@ static
 EC_RETURN
 NetAdapterReceiveThread(
     PVOID StartContext
-    )
+)
 {
     reinterpret_cast<NxRxXlat*>(StartContext)->ReceiveThread();
     return EC_RETURN();
@@ -565,18 +521,7 @@ NxRxXlat::ReceiveThread()
 
             EcUpdateAffinity();
             EcYieldToNetAdapter();
-
-            // update ringbuffer counters;
-            m_ringBuffer.UpdateRingbufferDepthCounters();
-
             EcIndicateNblsToNdis();
-
-            if (m_shouldUpdateEcCounters)
-            {
-                // end of iteration, update execution context counters;
-                m_executionContext.UpdateCounters(
-                    m_postedPackets == 0 && m_returnedPackets == 0);
-            }
 
             WaitForWork();
 
@@ -597,7 +542,9 @@ NxRxXlat::ReceiveThread()
                 }
 
                 // The termination condition is that all packets have been returned from the NIC.
-                if (! m_ringBuffer.AnyNicPackets())
+                auto const pr = NetRingCollectionGetPacketRing(&m_rings);
+                auto const fr = NetRingCollectionGetFragmentRing(&m_rings);
+                if (pr->BeginIndex == pr->EndIndex && fr->BeginIndex == fr->EndIndex)
                 {
                     EcRecoverBuffers();
                     m_queueDispatch->Stop(m_queue);
@@ -612,7 +559,7 @@ NxRxXlat::ReceiveThread()
 NTSTATUS
 NxRxXlat::Initialize(
     void
-    )
+)
 {
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(CreateVariousPools(),
                                     "Failed to create pools");
@@ -649,18 +596,20 @@ NxRxXlat::Initialize(
     // once NET_CLIENT has it's own queue context.
 
     // checksum offset
-    m_checksumOffset = GetPacketExtensionOffsets(
-        NET_PACKET_EXTENSION_CHECKSUM_NAME, NET_PACKET_EXTENSION_CHECKSUM_VERSION_1);
+    GetPacketExtension(
+        NET_PACKET_EXTENSION_CHECKSUM_NAME,
+        NET_PACKET_EXTENSION_CHECKSUM_VERSION_1,
+        &m_checksumExtension);
 
-    m_descriptor = m_queueDispatch->GetNetDatapathDescriptor(m_queue);
-
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        m_ringBuffer.Initialize(NET_DATAPATH_DESCRIPTOR_GET_PACKET_RING_BUFFER(m_descriptor)),
-        "Failed to initialize packet ring buffer.");
+    RtlCopyMemory(&m_rings, m_queueDispatch->GetNetDatapathDescriptor(m_queue), sizeof(m_rings));
 
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        m_contextBuffer.Initialize(sizeof(PacketContext)),
-        "Failed to initialize private context.");
+        m_packetContext.Initialize(sizeof(PacketContext)),
+        "Failed to initialize private packet context.");
+
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        m_fragmentContext.Initialize(sizeof(FragmentContext)),
+        "Failed to initialize private fragment context.");
 
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         m_executionContext.Initialize(this, NetAdapterReceiveThread),
@@ -675,7 +624,7 @@ _Use_decl_annotations_
 void
 NxRxXlat::Start(
     void
-    )
+)
 {
     m_executionContext.Start();
 }
@@ -684,7 +633,7 @@ _Use_decl_annotations_
 void
 NxRxXlat::Cancel(
     void
-    )
+)
 {
     m_executionContext.Cancel();
 }
@@ -693,7 +642,7 @@ _Use_decl_annotations_
 void
 NxRxXlat::Stop(
     void
-    )
+)
 {
     m_executionContext.Stop();
 }
@@ -723,8 +672,6 @@ NxRxXlat::CreateVariousPools()
     NxPerfTunerCalculateRxParameters(&perfCharacteristics, &perfParameters);
     m_rxNumPackets = perfParameters.PacketRingElementCount;
     m_rxNumFragments = perfParameters.FragmentRingElementCount;
-    m_rxNumDataBuffers = perfParameters.NumberOfBuffers;
-    m_rxNumNbls = perfParameters.NumberOfNbls;
 
     m_backfillSize = 0;
     m_rxDataBufferSize = datapathCapabilities.MaximumRxFragmentSize + m_backfillSize;
@@ -741,15 +688,17 @@ NxRxXlat::CreateVariousPools()
     poolParameters.ContextSize = 0;
     poolParameters.DataSize = 0;
 
-    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !m_NblLookupTable.reserve(m_rxNumNbls));
+    CX_RETURN_NTSTATUS_IF(
+        STATUS_INSUFFICIENT_RESOURCES,
+        ! m_nblStack.resize(perfParameters.NumberOfNbls));
 
-    m_netBufferListPool.reset(NdisAllocateNetBufferListPool(m_adapterProperties.NdisAdapterHandle,
+    m_nblStorage.reset(NdisAllocateNetBufferListPool(m_adapterProperties.NdisAdapterHandle,
                                                             &poolParameters));
-    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !m_netBufferListPool);
+    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !m_nblStorage);
 
     size_t totalSize = 0;
     size_t mdlSize = ALIGN_UP(MmSizeOfMdl(DUMMY_VA, m_rxDataBufferSize), PVOID);
-    CX_RETURN_IF_NOT_NT_SUCCESS(RtlSizeTMult(mdlSize, m_rxNumDataBuffers, &totalSize));
+    CX_RETURN_IF_NOT_NT_SUCCESS(RtlSizeTMult(mdlSize, perfParameters.NumberOfBuffers, &totalSize));
 
     m_MdlPool = MakeSizedPoolPtrNP<MDL>('prxc', totalSize);
     CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !m_MdlPool);
@@ -760,7 +709,7 @@ NxRxXlat::CreateVariousPools()
         // create buffer pool if the driver wants the OS to allocate Rx buffer
         NET_CLIENT_BUFFER_POOL_CONFIG bufferPoolConfig = {
             &datapathCapabilities.RxMemoryConstraints,
-            m_rxNumDataBuffers,
+            perfParameters.NumberOfBuffers,
             m_rxDataBufferSize,
             m_backfillSize,
             0,
@@ -774,10 +723,10 @@ NxRxXlat::CreateVariousPools()
                                                   &m_bufferPoolDispatch));
     }
 
-    for (size_t i = 0; i < m_rxNumNbls; i++)
+    for (size_t i = 0; i < perfParameters.NumberOfNbls; i++)
     {
         PNET_BUFFER_LIST nbl =
-            NdisAllocateNetBufferAndNetBufferList(m_netBufferListPool.get(),
+            NdisAllocateNetBufferAndNetBufferList(m_nblStorage.get(),
                                                   0,
                                                   0,
                                                   nullptr,
@@ -806,7 +755,7 @@ NxRxXlat::CreateVariousPools()
 
 
 
-            NET_PACKET_FRAGMENT data;
+            NET_FRAGMENT data;
 
             CX_RETURN_NTSTATUS_IF(
                 STATUS_INSUFFICIENT_RESOURCES,
@@ -814,13 +763,13 @@ NxRxXlat::CreateVariousPools()
                                                                     &data,
                                                                     1));
 
-            GetRxContextFromNb(nb)->DmaLogicalAddress = data.Mapping.DmaLogicalAddress.QuadPart;
+            GetRxContextFromNb(nb)->DmaLogicalAddress = data.Mapping.DmaLogicalAddress;
 
             MmInitializeMdl(mdl, data.VirtualAddress, data.Capacity);
             MmBuildMdlForNonPagedPool(mdl);
         }
 
-        m_NblLookupTable.append(nbl);
+        NblStackPush(nbl);
     }
 
     return STATUS_SUCCESS;
@@ -832,22 +781,23 @@ NxRxXlat::Notify()
     m_executionContext.SignalWork();
 }
 
-size_t
-NxRxXlat::GetPacketExtensionOffsets(
+void
+NxRxXlat::GetPacketExtension(
     PCWSTR ExtensionName,
-    ULONG ExtensionVersion
-    ) const
+    ULONG ExtensionVersion,
+    NET_EXTENSION * Extension
+) const
 {
     NET_CLIENT_PACKET_EXTENSION extension = {};
     extension.Name = ExtensionName;
     extension.Version = ExtensionVersion;
-    return m_queueDispatch->GetPacketExtensionOffset(m_queue, &extension);
+    return m_queueDispatch->GetExtension(m_queue, &extension, Extension);
 }
 
 NTSTATUS
 NxRxXlat::PreparePacketExtensions(
     _Inout_ Rtl::KArray<NET_CLIENT_PACKET_EXTENSION>& addedPacketExtensions
-    )
+)
 {
     // checksum
     NET_CLIENT_PACKET_EXTENSION extension = {};
@@ -876,45 +826,53 @@ NxRxXlat::EcRecoverBuffers()
     // Return any packets come back from upper layer after the EC stops
     EcReturnBuffers();
 
-    while (auto completed = m_ringBuffer.TakeNextPacketFromNic())
+    auto pr = NetRingCollectionGetPacketRing(&m_rings);
+    auto fr = NetRingCollectionGetFragmentRing(&m_rings);
+
+    NT_FRE_ASSERT(pr->OSReserved0 == fr->OSReserved0);
+    NT_FRE_ASSERT(pr->BeginIndex == fr->BeginIndex);
+    NT_FRE_ASSERT(pr->EndIndex == fr->EndIndex);
+
+    for (; pr->OSReserved0 != pr->BeginIndex;
+        fr->OSReserved0 = pr->OSReserved0 = NetRingIncrementIndex(pr, pr->OSReserved0))
     {
-        if (!completed->IgnoreThisPacket &&
+
+        auto & context = m_packetContext.GetContext<PacketContext>(pr->OSReserved0);
+        auto packet = NetRingGetPacketAtIndex(pr, pr->OSReserved0);
+
+        NT_FRE_ASSERT(context.NetBufferList != nullptr);
+
+        NblStackPush(context.NetBufferList);
+        context.NetBufferList = nullptr;
+
+        if (! packet->Ignore &&
              m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_DRIVER)
         {
-            for (UINT32 i = 0; i < completed->FragmentCount; i++)
+            for (UINT32 i = 0; i < packet->FragmentCount; i++)
             {
-                auto fragment = NET_PACKET_GET_FRAGMENT(completed, m_descriptor, i);
-                m_adapterDispatch->ReturnRxBuffer(m_adapter, fragment->VirtualAddress, fragment->RxBufferReturnContext);
+                auto fragment = NetRingGetFragmentAtIndex(fr, fr->OSReserved0);
+
+                m_adapterDispatch->ReturnRxBuffer(
+                    m_adapter,
+                    fragment->VirtualAddress,
+                    fragment->RxBufferReturnContext);
                 fragment->RxBufferReturnContext = nullptr;
             }
         }
-
-        auto & packetContext = m_contextBuffer.GetPacketContext<PacketContext>(*completed);
-        ReturnNblToPool(packetContext.NetBufferList);
-        packetContext.NetBufferList = nullptr;
-        ReinitializePacket(completed);
     }
 
-    NT_ASSERT(!m_ringBuffer.AnyNicPackets());
-    NT_ASSERT(m_NumOfNblsInUse == 0);
+    NT_FRE_ASSERT(pr->BeginIndex == pr->EndIndex);
+    NT_FRE_ASSERT(m_nblStackIndex == m_nblStack.count());
 }
 
 NxRxXlat::~NxRxXlat()
 {
-#ifdef _KERNEL_MODE
-    if (m_shouldReportCounters)
-    {
-        KeCancelTimer(&m_CounterReportTimer);
-        KeFlushQueuedDpcs();
-    }
-#endif
-
     // stop the EC and wait for wind down.
     m_executionContext.Terminate();
 
-    for (size_t i = 0; i < m_NblLookupTable.count(); i++)
+    while (! NblStackIsEmpty())
     {
-        PNET_BUFFER_LIST nbl = m_NblLookupTable[i];
+        auto nbl = NblStackPop();
 
         if (m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ALLOCATE_AND_ATTACH)
         {
@@ -942,7 +900,7 @@ NxRxXlat::~NxRxXlat()
 void
 NxRxXlat::QueueReturnedNetBufferLists(
     _In_ NBL_QUEUE* NblChain
-    )
+)
 {
     NBL_COUNTED_QUEUE countedQueue;
     countedQueue.Queue.First = NblChain->First;
@@ -956,64 +914,12 @@ NxRxXlat::QueueReturnedNetBufferLists(
     }
 }
 
-NTSTATUS
-NxRxXlat::AttachEmptyDataBufferToNetPacket(
-    _Inout_ PNET_PACKET Packet,
-    _Out_ PNET_BUFFER_LIST* Nbl)
-{
-    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES,
-                          m_NumOfNblsInUse == m_rxNumDataBuffers);
-
-    if (Packet->FragmentCount == 0)
-    {
-        auto& fragmentRing = *NET_DATAPATH_DESCRIPTOR_GET_FRAGMENT_RING_BUFFER(m_descriptor);
-        auto availableFragments = NetRbFragmentRange::OsRange(fragmentRing);
-
-        CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, availableFragments.Count() == 0);
-
-        auto it = availableFragments.begin();
-
-        auto& fragmentToAttach = *it;
-        RtlZeroMemory(&fragmentToAttach, NetPacketFragmentGetSize());
-
-        // Update the packet with EndIndex and increment the availableFragments iterator
-        Packet->FragmentOffset = (it++).GetIndex();
-        Packet->FragmentCount = 1;
-
-        fragmentRing.EndIndex = it.GetIndex();
-    }
-
-    *Nbl = DrawNblFromPool();
-
-    auto fragment = NET_PACKET_GET_FRAGMENT(Packet, m_descriptor, 0);
-    NT_ASSERT(Packet->FragmentCount == 1);
-
-    if (m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ALLOCATE_AND_ATTACH)
-    {
-        PNET_BUFFER nb = NET_BUFFER_LIST_FIRST_NB(*Nbl);
-        PMDL mdl = NET_BUFFER_CURRENT_MDL(nb);
-        fragment->VirtualAddress = MmGetMdlVirtualAddress(mdl);
-        fragment->Mapping.DmaLogicalAddress.QuadPart = GetRxContextFromNb(nb)->DmaLogicalAddress;
-        fragment->Capacity = MmGetMdlByteCount(mdl);
-        fragment->Offset = m_backfillSize;
-    }
-    else
-    {
-        fragment->VirtualAddress = nullptr;
-        fragment->Mapping.DmaLogicalAddress.QuadPart = 0;
-        fragment->Capacity = 0;
-        fragment->Offset = 0;
-    }
-
-    return STATUS_SUCCESS;
-}
-
 static
 USHORT
 CalculateNblFrameTypeForEthernetPacket(
-    _In_ NET_DATAPATH_DESCRIPTOR const * descriptor,
+    _In_ NET_RING_COLLECTION const * descriptor,
     _In_ NET_PACKET const *packet
-    )
+)
 {
     NT_ASSERT(packet->Layout.Layer2HeaderLength >= sizeof(ETHERNET_HEADER));
 
@@ -1027,9 +933,9 @@ CalculateNblFrameTypeForEthernetPacket(
 static
 USHORT
 CalculateNblFrameTypeForPacket(
-    _In_ NET_DATAPATH_DESCRIPTOR const * descriptor,
+    _In_ NET_RING_COLLECTION const * descriptor,
     _In_ NET_PACKET const &packet
-    )
+)
 {
     switch (packet.Layout.Layer3Type)
     {
@@ -1067,36 +973,38 @@ CalculateNblFrameTypeForPacket(
 
 bool
 NxRxXlat::TransferDataBufferFromNetPacketToNbl(
-    _In_ PNET_PACKET Packet,
-    _In_ PNET_BUFFER_LIST Nbl)
+    _In_ NET_PACKET * Packet,
+    _In_ PNET_BUFFER_LIST Nbl,
+    _In_ UINT32 PacketIndex)
 {
     PNET_BUFFER nb = NET_BUFFER_LIST_FIRST_NB(Nbl);
     bool shouldIndicate = false;
     // ensure the NBL chain is broken
     Nbl->Next = nullptr;
 
-    const auto firstFragment = NET_PACKET_GET_FRAGMENT(Packet, m_descriptor, 0);
+    auto fr = NetRingCollectionGetFragmentRing(&m_rings);
+    const auto firstFragment = NetRingGetFragmentAtIndex(fr, Packet->FragmentIndex);
     PrefetchPacketPayloadForReceiveIndication(firstFragment);
 
-
-
-
+    //
+    //1. packet metadata
+    //
 
 
 
     // Always compute packet layout in software on RX path now.
-    Packet->Layout = NxGetPacketLayout(m_adapterProperties.MediaType, m_descriptor, Packet);
+    Packet->Layout = NxGetPacketLayout(m_adapterProperties.MediaType, &m_rings, Packet);
 
     Nbl->NetBufferListInfo[TcpIpChecksumNetBufferListInfo] = 0;
 
     if (IsPacketChecksumEnabled())
     {
-        Nbl->NetBufferListInfo[TcpIpChecksumNetBufferListInfo] = NxTranslateRxPacketChecksum(Packet, m_checksumOffset).Value;
+        Nbl->NetBufferListInfo[TcpIpChecksumNetBufferListInfo] = NxTranslateRxPacketChecksum(Packet, &m_checksumExtension, PacketIndex).Value;
     }
 
     Nbl->NblFlags = 0;
 
-    auto frameType = CalculateNblFrameTypeForPacket(m_descriptor, *Packet);
+    auto frameType = CalculateNblFrameTypeForPacket(&m_rings, *Packet);
     Nbl->NetBufferListInfo[NetBufferListFrameType] = (PVOID)frameType;
     switch (frameType)
     {
@@ -1131,9 +1039,10 @@ NxRxXlat::TransferDataBufferFromNetPacketToNbl(
     //
     //3. packet's additonal fragments
     //
+
     for (UINT32 i = 1; i < Packet->FragmentCount; ++i)
     {
-        auto currFragment = NET_PACKET_GET_FRAGMENT(Packet, m_descriptor, i);
+        auto currFragment = NetRingGetFragmentAtIndex(fr, (Packet->FragmentIndex + i) & fr->ElementIndexMask);
 
         NET_BUFFER_DATA_LENGTH(nb) += (ULONG)currFragment->ValidLength;
 
@@ -1156,7 +1065,7 @@ NxRxXlat::TransferDataBufferFromNetPacketToNbl(
 bool
 NxRxXlat::ReInitializeMdlForDataBuffer(
     _In_ PNET_BUFFER nb,
-    _In_ NET_PACKET_FRAGMENT const* fragment,
+    _In_ NET_FRAGMENT const * fragment,
     _In_ PMDL fragmentMdl,
     _In_ bool isFirstFragment)
 {
@@ -1274,84 +1183,42 @@ NxRxXlat::FreeReceivedDataBuffer(PNET_BUFFER_LIST nbl)
     }
 
     PNET_BUFFER_LIST next = nbl->Next;
-    ReturnNblToPool(nbl);
+    NblStackPush(nbl);
 
     return next;
 }
 
-PNET_BUFFER_LIST
-NxRxXlat::DrawNblFromPool()
+NET_BUFFER_LIST *
+NxRxXlat::NblStackPop(
+    void
+)
 {
-    return m_NblLookupTable[m_NumOfNblsInUse++];
+    NT_FRE_ASSERT(! NblStackIsEmpty());
+
+    return m_nblStack[--m_nblStackIndex];
 }
 
 void
-NxRxXlat::ReturnNblToPool(_In_ PNET_BUFFER_LIST nbl)
+NxRxXlat::NblStackPush(
+    _In_ NET_BUFFER_LIST * Nbl
+)
 {
-    nbl->Next = nullptr;
-    m_NblLookupTable[--m_NumOfNblsInUse] = nbl;
+    NT_FRE_ASSERT(m_nblStackIndex != m_nblStack.count());
+
+    m_nblStack[m_nblStackIndex++] = Nbl;
+}
+
+bool
+NxRxXlat::NblStackIsEmpty(
+    void
+) const
+{
+    return m_nblStackIndex == 0;
 }
 
 bool
 NxRxXlat::IsPacketChecksumEnabled() const
 {
-    return m_checksumOffset != NET_PACKET_EXTENSION_INVALID_OFFSET;
-}
-
-#ifdef _KERNEL_MODE
-_Use_decl_annotations_
-VOID
-NxRxXlat::CounterReportDpcRoutine(
-    _In_     struct _KDPC *Dpc,
-    _In_opt_ PVOID        DeferredContext,
-    _In_opt_ PVOID        SystemArgument1,
-    _In_opt_ PVOID        SystemArgument2
-    )
-{
-    UNREFERENCED_PARAMETER((Dpc, SystemArgument1, SystemArgument2));
-    NxRxXlat* rx = static_cast<NxRxXlat*>(DeferredContext);
-    rx->ReportCounters();
-}
-#endif
-
-void
-NxRxXlat::ReportCounters()
-{
-    NxRingBufferCounters localRBCounters;
-    NxExecutionContextCounters localECCounters;
-
-    localECCounters = m_executionContext.GetExecutionContextCounters();
-    localRBCounters = m_ringBuffer.GetRingbufferCounters();
-    m_ringBuffer.ResetRingbufferCounters();
-
-    ULONG64 totalRingbufferStateSamples =
-        localRBCounters.RingbufferEmptyCount +
-        localRBCounters.RingbufferFullyOccupiedCount +
-        localRBCounters.RingbufferPartiallyOccupiedCount;
-
-    ULONG64 usefulIterationCount =
-        localECCounters.IterationCount - localECCounters.BusyWaitIterationCount;
-
-    TraceLoggingWrite(
-        g_hNetAdapterCxXlatProvider,
-        "RxTranslationCounterUpdates",
-        TraceLoggingDescription("RX ETW performance counter event"),
-        TraceLoggingUInt32(m_executionContext.GetExecutionContextIdentifier(), "threadID"),
-        TraceLoggingUInt64(localRBCounters.IterationCountInLastInterval, "ringbufferUpdateIterationCount"),
-        TraceLoggingUInt64(localRBCounters.CumulativeRingBufferDepthInLastInterval, "cumulativeRingBufferDepth"),
-        TraceLoggingUInt64(totalRingbufferStateSamples, "totalNumberOfRingbufferStateSamples"),
-        TraceLoggingUInt64(localRBCounters.RingbufferEmptyCount, "numberOfRingbufferEmptySamples"),
-        TraceLoggingUInt64(localRBCounters.RingbufferFullyOccupiedCount, "numberOfRingbufferFullSamples"),
-        TraceLoggingUInt64(localRBCounters.RingbufferPartiallyOccupiedCount, "numberOfRingbufferPartiallyUsedSamples"),
-        TraceLoggingUInt64(localRBCounters.NumberOfNetPacketsProduced, "totalNumberOfNetpacketsProducedForReceive"),
-        TraceLoggingUInt64(localRBCounters.NumberOfNetPacketsConsumed, "totalNumberOfNetpacketsCompletedReceiving"),
-        TraceLoggingUInt64(localECCounters.IterationCount, "ecUpdateIterationCount"),
-        TraceLoggingUInt64(localECCounters.BusyWaitIterationCount, "numberOfIterationsPolledWithNoPackets"),
-        TraceLoggingUInt64(usefulIterationCount, "numberOfIterationsPolledWithPackets"),
-        TraceLoggingUInt64(localECCounters.TotalCpuCycleTime, "totalNumberOfCpuCyclesRecord"),
-        TraceLoggingUInt64(localECCounters.BusyWaitCycles, "numberOfCpuCyclesPolledWithNoPackets"),
-        TraceLoggingUInt64(localECCounters.ProcessingCycles, "numberOfCpuCyclesSpentProcessingPackets"),
-        TraceLoggingUInt64(localECCounters.IdleCycles, "numberOfCpuCyclesSleeping")
-    );
+    return m_checksumExtension.Enabled;
 }
 

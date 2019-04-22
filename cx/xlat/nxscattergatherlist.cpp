@@ -6,7 +6,7 @@
 
 NxScatterGatherList::NxScatterGatherList(
     _In_ NxDmaAdapter const &DmaAdapter
-    ) :
+) :
     m_dmaAdapter(DmaAdapter)
 {
 
@@ -14,7 +14,7 @@ NxScatterGatherList::NxScatterGatherList(
 
 NxScatterGatherList::~NxScatterGatherList(
     void
-    )
+)
 {
     if (m_scatterGatherList != nullptr)
     {
@@ -26,7 +26,7 @@ NxScatterGatherList::~NxScatterGatherList(
 SCATTER_GATHER_LIST *
 NxScatterGatherList::release(
     void
-    )
+)
 {
     auto sgl = m_scatterGatherList;
     m_scatterGatherList = nullptr;
@@ -36,7 +36,7 @@ NxScatterGatherList::release(
 SCATTER_GATHER_LIST *
 NxScatterGatherList::get(
     void
-    ) const
+) const
 {
     return m_scatterGatherList;
 }
@@ -44,7 +44,7 @@ NxScatterGatherList::get(
 SCATTER_GATHER_LIST ** const
 NxScatterGatherList::releaseAndGetAddressOf(
     void
-    )
+)
 {
     auto sgl = release();
     if (sgl != nullptr)
@@ -58,7 +58,7 @@ NxScatterGatherList::releaseAndGetAddressOf(
 SCATTER_GATHER_LIST const *
 NxScatterGatherList::operator->(
     void
-    ) const
+) const
 {
     return m_scatterGatherList;
 }
@@ -66,7 +66,7 @@ NxScatterGatherList::operator->(
 SCATTER_GATHER_LIST const &
 NxScatterGatherList::operator*(
     void
-    ) const
+) const
 {
     return *m_scatterGatherList;
 }

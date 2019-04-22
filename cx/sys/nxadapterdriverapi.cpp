@@ -23,9 +23,9 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NTSTATUS
 NETEXPORT(NetAdapterDriverRegister)(
-    _In_     PNET_DRIVER_GLOBALS         Globals,
+    _In_     NET_DRIVER_GLOBALS *        Globals,
     _In_     WDFDRIVER                   Driver
-    )
+)
 /*++
 Routine Description:
     The client driver calls this method to register itself as a NetAdapterDriver
@@ -75,9 +75,9 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
 NDIS_HANDLE
 NETEXPORT(NetAdapterDriverWdmGetHandle)(
-    _In_     PNET_DRIVER_GLOBALS         Globals,
+    _In_     NET_DRIVER_GLOBALS *        Globals,
     _In_     WDFDRIVER                   Driver
-    )
+)
 /*++
 Routine Description:
     The client driver calls this method to retrieve a NDIS_HANDLE corresponding

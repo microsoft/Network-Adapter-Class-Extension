@@ -2,7 +2,7 @@
 The Network Adapter Class Extension to WDF (NetAdapterCx) brings together the productivity of WDF with the networking performance of NDIS.
 The goal of NetAdpaterCx is to make it easy to write a great driver for your NIC.
 
-## Lastest Release - Windows 10 October 2018 Update (version 1809)
+## Lastest Release - Windows 10 May 2019 Update (version 1903)
 
 **Source Code to NetAdpaterCx.sys**: Right here
 

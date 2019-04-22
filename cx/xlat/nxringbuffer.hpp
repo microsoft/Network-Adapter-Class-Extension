@@ -4,7 +4,7 @@
 
 Abstract:
 
-    The NxRingBuffer wraps a NET_RING_BUFFER, providing simple accessor methods
+    The NxRingBuffer wraps a NET_RING, providing simple accessor methods
     for inserting and removing items into the ring buffer.
 
 --*/
@@ -24,7 +24,7 @@ struct NxRingBufferCounters
     ULONG64 RingbufferPartiallyOccupiedCount = 0;
 };
 
-/// Encapsulates a NET_RING_BUFFER
+/// Encapsulates a NET_RING
 class NxRingBuffer
 {
 public:
@@ -33,19 +33,19 @@ public:
 
     PAGED NTSTATUS
     Initialize(
-        NET_RING_BUFFER * RingBuffer
-        );
+        NET_RING * RingBuffer
+    );
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
-    NET_RING_BUFFER *Get() { return m_rb; }
+    NET_RING * Get() { return m_rb; }
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
-    NET_RING_BUFFER const *Get() const { return m_rb; }
+    NET_RING const * Get() const { return m_rb; }
 
-    NET_PACKET *GetPacketAtIndex(UINT32 i) { return reinterpret_cast<NET_PACKET*>(NetRingBufferGetElementAtIndex(Get(), i)); }
+    NET_PACKET *GetPacketAtIndex(UINT32 i) { return reinterpret_cast<NET_PACKET*>(NetRingGetElementAtIndex(Get(), i)); }
     NET_PACKET const *GetPacketAtIndex(UINT32 i) const
     {
-        return reinterpret_cast<NET_PACKET*>(NetRingBufferGetElementAtIndex(const_cast<NET_RING_BUFFER*>(Get()), i));
+        return reinterpret_cast<NET_PACKET*>(NetRingGetElementAtIndex(const_cast<NET_RING *>(Get()), i));
     }
 
     // Returns an iterable range of packets that are currently held by the NIC.
@@ -154,22 +154,22 @@ public:
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
     UINT16
-    GetElementSize()
+    GetElementSize() const
     {
         return m_rb->ElementStride;
     }
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
-    UINT32 &GetNextOSIndex() { return *reinterpret_cast<UINT32*>(&m_rb->OSReserved2[0]); }
+    UINT32 &GetNextOSIndex() { return m_rb->OSReserved0; }
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
-    UINT32 const &GetNextOSIndex() const { return *reinterpret_cast<UINT32 const*>(&m_rb->OSReserved2[0]); }
+    UINT32 const &GetNextOSIndex() const { return m_rb->OSReserved0; }
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
     void
     UpdateRingbufferPacketCounters(
         _In_ NxRingBufferCounters const &Delta
-        );
+    );
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
     void
@@ -188,6 +188,6 @@ private:
     UINT32
     GetRingbufferDepth() const;
 
-    NET_RING_BUFFER * m_rb = nullptr;
+    NET_RING * m_rb = nullptr;
     NxRingBufferCounters m_rbCounters;
 };

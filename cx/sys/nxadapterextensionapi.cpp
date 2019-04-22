@@ -15,9 +15,9 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 NETADAPTER
 NETEXPORT(NetAdapterInitGetCreatedAdapter)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _In_ PNETADAPTER_INIT AdapterInit
-    )
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER_INIT * AdapterInit
+)
 /*++
 Routine Description:
 
@@ -36,7 +36,7 @@ Return Value:
 {
     auto privateGlobals = GetPrivateGlobals(DriverGlobals);
 
-    Verifier_VerifyPrivateGlobals(privateGlobals);
+    Verifier_VerifyExtensionGlobals(privateGlobals);
     Verifier_VerifyIrqlPassive(privateGlobals);
     Verifier_VerifyNotNull(privateGlobals, AdapterInit);
 
@@ -47,9 +47,9 @@ Return Value:
 __inline
 AdapterExtensionInit *
 GetAdapterExtensionInitFromHandle(
-    _In_ NX_PRIVATE_GLOBALS *PrivateGlobals,
-    _In_ PNETADAPTEREXT_INIT Handle
-    )
+    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NETADAPTEREXT_INIT * Handle
+)
 {
     auto adapterExtensionInit = reinterpret_cast<AdapterExtensionInit *>(Handle);
 
@@ -60,11 +60,11 @@ GetAdapterExtensionInitFromHandle(
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
-PNETADAPTEREXT_INIT
+NETADAPTEREXT_INIT *
 NETEXPORT(NetAdapterExtensionInitAllocate)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _In_ PNETADAPTER_INIT AdapterInit
-    )
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER_INIT * AdapterInit
+)
 /*++
 Routine Description:
 
@@ -89,8 +89,11 @@ Remarks
     auto privateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(privateGlobals);
+    Verifier_VerifyIsMediaExtension(privateGlobals);
     Verifier_VerifyIrqlPassive(privateGlobals);
     Verifier_VerifyNotNull(privateGlobals, AdapterInit);
+
+    privateGlobals->IsMediaExtension = true;
 
     auto adapterInit = GetAdapterInitFromHandle(privateGlobals, AdapterInit);
 
@@ -106,17 +109,17 @@ Remarks
     NT_ASSERT(numberOfExtensions > 0);
     auto lastExtensionIndex = numberOfExtensions - 1;
 
-    return reinterpret_cast<PNETADAPTEREXT_INIT>(&adapterInit->AdapterExtensions[lastExtensionIndex]);
+    return reinterpret_cast<NETADAPTEREXT_INIT *>(&adapterInit->AdapterExtensions[lastExtensionIndex]);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 VOID
 NETEXPORT(NetAdapterExtensionInitSetNetRequestPreprocessCallback)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
-    _Inout_ PNETADAPTEREXT_INIT AdapterExtensionInit,
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _Inout_ NETADAPTEREXT_INIT * AdapterExtensionInit,
     _In_ PFN_NET_ADAPTER_PRE_PROCESS_NET_REQUEST PreprocessNetRequest
-    )
+)
 /*++
 Routine Description:
 
@@ -140,7 +143,7 @@ Remarks
 {
     auto privateGlobals = GetPrivateGlobals(DriverGlobals);
 
-    Verifier_VerifyPrivateGlobals(privateGlobals);
+    Verifier_VerifyExtensionGlobals(privateGlobals);
     Verifier_VerifyIrqlPassive(privateGlobals);
     Verifier_VerifyNotNull(privateGlobals, AdapterExtensionInit);
     Verifier_VerifyNotNull(privateGlobals, PreprocessNetRequest);
@@ -153,10 +156,10 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 VOID
 NETEXPORT(NetAdapterDispatchPreprocessedNetRequest)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETADAPTER Adapter,
     _In_ NETREQUEST Request
-    )
+)
 /*++
 Routine Description:
 
@@ -180,7 +183,7 @@ Remarks
 {
     auto privateGlobals = GetPrivateGlobals(DriverGlobals);
 
-    Verifier_VerifyPrivateGlobals(privateGlobals);
+    Verifier_VerifyExtensionGlobals(privateGlobals);
     Verifier_VerifyIrqlPassive(privateGlobals);
     Verifier_VerifyNotNull(privateGlobals, Adapter);
     Verifier_VerifyNotNull(privateGlobals, Request);
@@ -193,9 +196,9 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
 WDFOBJECT
 NETEXPORT(NetAdapterGetParent)(
-    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETADAPTER Adapter
-    )
+)
 /*++
 Routine Description:
 
@@ -214,7 +217,7 @@ Return Value:
 {
     auto privateGlobals = GetPrivateGlobals(DriverGlobals);
 
-    Verifier_VerifyPrivateGlobals(privateGlobals);
+    Verifier_VerifyExtensionGlobals(privateGlobals);
     Verifier_VerifyIrqlPassive(privateGlobals);
     Verifier_VerifyNotNull(privateGlobals, Adapter);
 
@@ -227,9 +230,9 @@ WDFAPI
 _IRQL_requires_(PASSIVE_LEVEL)
 ULONG
 NETEXPORT(NetAdapterGetLinkLayerMtuSize)(
-    _In_ PNET_DRIVER_GLOBALS                    DriverGlobals,
+    _In_ NET_DRIVER_GLOBALS *                   DriverGlobals,
     _In_ NETADAPTER                             Adapter
-    )
+)
 /*++
 Routine Description:
 
@@ -246,7 +249,7 @@ Returns:
 {
     auto privateGlobals = GetPrivateGlobals(DriverGlobals);
 
-    Verifier_VerifyPrivateGlobals(privateGlobals);
+    Verifier_VerifyExtensionGlobals(privateGlobals);
     Verifier_VerifyIrqlPassive(privateGlobals);
     Verifier_VerifyNotNull(privateGlobals, Adapter);
 
