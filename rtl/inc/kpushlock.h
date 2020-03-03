@@ -1,8 +1,8 @@
 
 #pragma once
 
-#include "KMacros.h"
-#include "KCriticalRegion.h"
+#include <KMacros.h>
+#include <KCriticalRegion.h>
 
 typedef struct _KTHREAD *PKTHREAD;
 

@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <net/packet.h>
 #include <net/checksumtypes.h>
 
 NET_PACKET_CHECKSUM

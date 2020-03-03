@@ -23,8 +23,6 @@ Abstract:
 
 #include "Driver.hpp"
 
-#include <netadapter.h>
-
 #else
 
 #include <KArray.h>
@@ -34,13 +32,15 @@ Abstract:
 
 #endif // _KERNEL_MODE
 
+#include <preview/netadapter.h>
+
 #include <FxObjectBase.hpp>
 #include <KWaitEvent.h>
 #include <smfx.h>
 
 #include "NxAdapterStateMachine.h"
 
-#include "NxPacketExtensionPrivate.hpp"
+#include "NxExtension.hpp"
 
 #include <NetClientApi.h>
 
@@ -48,13 +48,17 @@ Abstract:
 #include "NxUtility.hpp"
 
 #include "NxOffload.hpp"
+#include "NxCollection.hpp"
+#include "NxRequest.hpp"
+#include "powerpolicy/NxPowerPolicy.hpp"
 
 #include "netadaptercx_triage.h"
 
-#define PTR_TO_TAG(val) ((PVOID)(ULONG_PTR)(val))
+#define PTR_TO_TAG(val) ((void *)(ULONG_PTR)(val))
 
 #define MAX_IP_HEADER_SIZE 60
 #define MAX_TCP_HEADER_SIZE 60
+#define MAX_ETHERNET_PACKET_SIZE 1514
 
 #pragma warning(push)
 #pragma warning(disable:4201)
@@ -93,7 +97,10 @@ union AdapterFlags
             StopPending : 1;
 
         UINT32
-            Unused : 28;
+            PowerReferenceAcquired : 1;
+
+        UINT32
+            Unused : 27;
     };
 
     UINT32
@@ -113,54 +120,6 @@ enum class AdapterState
     Stopped,
 };
 
-//
-// The NxAdapter is an object that represents a NetAdapterCx Client Adapter
-//
-
-FORCEINLINE
-VOID
-NDIS_PM_CAPABILITIES_INIT_FROM_NET_ADAPTER_POWER_CAPABILITIES(
-    _Out_ PNDIS_PM_CAPABILITIES NdisPowerCaps,
-    _In_ NET_ADAPTER_POWER_CAPABILITIES * NxPowerCaps
-)
-{
-
-    RtlZeroMemory(NdisPowerCaps, sizeof(NDIS_PM_CAPABILITIES));
-
-    NdisPowerCaps->Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
-    NdisPowerCaps->Header.Size = NDIS_SIZEOF_NDIS_PM_CAPABILITIES_REVISION_2;
-    NdisPowerCaps->Header.Revision = NDIS_PM_CAPABILITIES_REVISION_2;
-
-    NdisPowerCaps->Flags = NxPowerCaps->Flags;
-    NdisPowerCaps->SupportedWoLPacketPatterns = NxPowerCaps->SupportedWakePatterns;
-    NdisPowerCaps->NumTotalWoLPatterns = NxPowerCaps->NumTotalWakePatterns;
-    NdisPowerCaps->MaxWoLPatternSize = NxPowerCaps->MaxWakePatternSize;
-    NdisPowerCaps->MaxWoLPatternOffset = NxPowerCaps->MaxWakePatternOffset;
-    NdisPowerCaps->MaxWoLPacketSaveBuffer = NxPowerCaps->MaxWakePacketSaveBuffer;
-    NdisPowerCaps->SupportedProtocolOffloads = NxPowerCaps->SupportedProtocolOffloads;
-    NdisPowerCaps->NumArpOffloadIPv4Addresses = NxPowerCaps->NumArpOffloadIPv4Addresses;
-    NdisPowerCaps->NumNSOffloadIPv6Addresses = NxPowerCaps->NumNSOffloadIPv6Addresses;
-    NdisPowerCaps->SupportedWakeUpEvents = NxPowerCaps->SupportedWakeUpEvents;
-    NdisPowerCaps->MediaSpecificWakeUpEvents = NxPowerCaps->SupportedMediaSpecificWakeUpEvents;
-
-    //
-    // WDF will request the D-IRPs. Doing this allows NDIS to treat this
-    // device as wake capable and send appropriate PM parameters.
-    //
-    if (NdisPowerCaps->SupportedWoLPacketPatterns & NDIS_PM_WOL_BITMAP_PATTERN_SUPPORTED)
-    {
-        NdisPowerCaps->MinPatternWakeUp = NdisDeviceStateD2;
-    }
-    if (NdisPowerCaps->SupportedWoLPacketPatterns & NDIS_PM_WOL_MAGIC_PACKET_ENABLED)
-    {
-        NdisPowerCaps->MinMagicPacketWakeUp = NdisDeviceStateD2;
-    }
-    if (NdisPowerCaps->SupportedWakeUpEvents & NDIS_PM_WAKE_ON_MEDIA_CONNECT_SUPPORTED)
-    {
-        NdisPowerCaps->MinLinkChangeWakeUp = NdisDeviceStateD2;
-    }
-}
-
 #define ADAPTER_INIT_SIGNATURE 'SIAN'
 
 struct PAGED AdapterInit : PAGED_OBJECT<'nIAN'>
@@ -176,7 +135,6 @@ struct PAGED AdapterInit : PAGED_OBJECT<'nIAN'>
 
     // For adapters layered on top of a WDFDEVICE
     WDFDEVICE Device = nullptr;
-    WDF_OBJECT_ATTRIBUTES NetPowerSettingsAttributes = {};
 
     // Used by other WDF class extensions that wish to hook NETADAPTER events
     Rtl::KArray<AdapterExtensionInit> AdapterExtensions;
@@ -195,7 +153,6 @@ class NxAdapter;
 class NxDriver;
 class NxQueue;
 class NxRequestQueue;
-class NxWake;
 
 FORCEINLINE
 NxAdapter *
@@ -208,6 +165,7 @@ class NxAdapter
     : public CFxObject<NETADAPTER, NxAdapter, GetNxAdapterFromHandle, false>
     , public NxAdapterStateMachine<NxAdapter>
 {
+    friend class NxCollection<NxAdapter>;
     friend class NxAdapterCollection;
 
 private:
@@ -324,8 +282,8 @@ private:
     WDFWAITLOCK
         m_ExtensionCollectionLock = WDF_NO_HANDLE;
 
-    Rtl::KArray<NxPacketExtensionPrivate>
-        m_SharedPacketExtensions;
+    Rtl::KArray<NxExtension>
+        m_packetExtensions;
 
     // Receive scaling capabilities
     NET_ADAPTER_RECEIVE_SCALING_CAPABILITIES
@@ -336,6 +294,9 @@ private:
 
     UNICODE_STRING
         m_InstanceName = {};
+
+    WDFMEMORY
+        m_WakeReasonMemory = WDF_NO_HANDLE;
 
 private:
 
@@ -361,9 +322,6 @@ private:
         NdisHalt;
 
     SyncOperationDispatch
-        AdapterPause;
-
-    SyncOperationDispatch
         DatapathCreate;
 
     SyncOperationDispatch
@@ -387,6 +345,7 @@ private:
     SyncOperationDispatch
         DatapathRestartComplete;
 
+
 public:
 
     //
@@ -394,9 +353,6 @@ public:
     //
     NET_ADAPTER_LINK_LAYER_CAPABILITIES
         m_LinkLayerCapabilities = {};
-
-    NET_ADAPTER_POWER_CAPABILITIES
-        m_PowerCapabilities = {};
 
     NET_ADAPTER_LINK_STATE
         m_CurrentLinkState = {};
@@ -422,6 +378,12 @@ public:
     NET_ADAPTER_LINK_LAYER_ADDRESS
         m_CurrentLinkLayerAddress = {};
 
+    NET_ADAPTER_PACKET_FILTER_CAPABILITIES
+        m_PacketFilter = {};
+
+    NET_ADAPTER_MULTICAST_CAPABILITIES
+        m_MulticastList = {};
+
     //
     // A copy of the datapath callbacks structure that client passed to NetAdapterCx.
     //
@@ -443,9 +405,6 @@ public:
     WDF_OBJECT_ATTRIBUTES
         m_NetRequestObjectAttributes = {};
 
-    WDF_OBJECT_ATTRIBUTES
-        m_NetPowerSettingsObjectAttributes = {};
-
     //
     // Pointer to the Default and Default Direct Oid Queus
     //
@@ -462,15 +421,14 @@ public:
     LIST_ENTRY
         m_ListHeadAllOids = {};
 
-#ifdef _KERNEL_MODE
-    //
-    // WakeList is used to manage wake patterns, WakeUpFlags and
-    // MediaSpecificWakeUpEvents
-    //
-    NxWake *
-        m_NxWake = nullptr;
+    NxPowerPolicy
+        m_powerPolicy;
 
-#endif // _KERNEL_MODE
+    //
+    // Used when calling WDF APIs that support tag tracking
+    //
+    void *
+        m_tag = 0;
 
     //
     // Pointer to instance which manages hardware offloads like
@@ -572,7 +530,7 @@ public:
 
     NTSTATUS
     CreateTxQueue(
-        _In_ PVOID ClientQueue,
+        _In_ void * ClientQueue,
         _In_ NET_CLIENT_QUEUE_NOTIFY_DISPATCH const * ClientDispatch,
         _In_ NET_CLIENT_QUEUE_CONFIG const * ClientQueueConfig,
         _Out_ NET_CLIENT_QUEUE * AdapterQueue,
@@ -581,7 +539,7 @@ public:
 
     NTSTATUS
     CreateRxQueue(
-        _In_ PVOID ClientQueue,
+        _In_ void * ClientQueue,
         _In_ NET_CLIENT_QUEUE_NOTIFY_DISPATCH const * ClientDispatch,
         _In_ NET_CLIENT_QUEUE_CONFIG const * ClientQueueConfig,
         _Out_ NET_CLIENT_QUEUE * AdapterQueue,
@@ -599,20 +557,7 @@ public:
     NONPAGED
     void
     ReturnRxBuffer(
-        _In_ PVOID RxBufferVa,
-        _In_ PVOID RxBufferReturnContext
-    );
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    NTSTATUS
-    QueryRegisteredPacketExtension(
-        _In_ NET_PACKET_EXTENSION_PRIVATE const * ExtensionToQuery
-    );
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    NTSTATUS
-    RegisterPacketExtension(
-        _In_ NET_PACKET_EXTENSION_PRIVATE const * ExtensionToAdd
+        _In_ NET_FRAGMENT_RETURN_CONTEXT_HANDLE RxBufferReturnContext
     );
 
     NTSTATUS
@@ -634,6 +579,16 @@ public:
     NTSTATUS
     ReceiveScalingSetHashSecretKey(
         _In_ NET_CLIENT_RECEIVE_SCALING_HASH_SECRET_KEY const * HashSecretKey
+    );
+
+    NTSTATUS
+    PowerReference(
+        _In_ bool WaitForD0
+    );
+
+    void
+    PowerDereference(
+        void
     );
 
 private:
@@ -669,6 +624,28 @@ private:
         _In_ DeviceState DeviceState
     );
 
+    void
+    FrameworkOidHandler(
+        _In_ NDIS_OID_REQUEST * NdisOidRequest,
+        _In_ DispatchContext * Context
+    );
+
+    void
+    FrameworkSetOidHandler(
+        _In_ NDIS_OID_REQUEST * NdisOidRequest,
+        _In_ DispatchContext * Context
+    );
+
+    void
+    DispatchOidRequestToAdapter(
+        _In_ NDIS_OID_REQUEST * NdisOidRequest
+    );
+
+    ULONG
+    GetCombinedMediaSpecificWakeUpEvents(
+        void
+    ) const;
+
 public:
 
     ~NxAdapter(
@@ -688,11 +665,6 @@ public:
     void
     EnqueueEventSync(
         _In_ NxAdapter::Event Event
-    );
-
-    NTSTATUS
-    ValidatePowerCapabilities(
-        void
     );
 
     void
@@ -731,7 +703,7 @@ public:
 
     NDIS_HANDLE
     GetNdisHandle(
-        VOID
+        void
     ) const;
 
     void
@@ -740,7 +712,7 @@ public:
     );
 
     static
-    VOID
+    void
     _EvtCleanup(
         _In_ WDFOBJECT NetAdatper
     );
@@ -767,7 +739,7 @@ public:
     );
 
     static
-    VOID
+    void
     _EvtStopIdleWorkItem(
         _In_ WDFWORKITEM WorkItem
     );
@@ -807,18 +779,18 @@ public:
         _In_ NET_ADAPTER_LINK_LAYER_ADDRESS * LinkLayerAddress
     );
 
-    VOID
+    void
     SetCurrentLinkLayerAddress(
         _In_ NET_ADAPTER_LINK_LAYER_ADDRESS * LinkLayerAddress
     );
 
-    VOID
+    void
     SetDatapathCapabilities(
         _In_ NET_ADAPTER_TX_CAPABILITIES const * TxCapabilities,
         _In_ NET_ADAPTER_RX_CAPABILITIES const * RxCapabilities
     );
 
-    VOID
+    void
     SetReceiveScalingCapabilities(
         _In_ NET_ADAPTER_RECEIVE_SCALING_CAPABILITIES const & Capabilities
     );
@@ -829,8 +801,43 @@ public:
     );
 
     void
-    SetPowerCapabilities(
-        _In_ NET_ADAPTER_POWER_CAPABILITIES const & PowerCapabilities
+    SetPacketFilterCapabilities(
+        _In_ NET_ADAPTER_PACKET_FILTER_CAPABILITIES const & PacketFilter
+    );
+
+    void
+    SetMulticastCapabilities(
+        _In_ NET_ADAPTER_MULTICAST_CAPABILITIES const & MulticastList
+    );
+
+    void
+    SetPowerOffloadArpCapabilities(
+        _In_ NET_ADAPTER_POWER_OFFLOAD_ARP_CAPABILITIES const * Capabilities
+    );
+
+    void
+    SetPowerOffloadNSCapabilities(
+        _In_ NET_ADAPTER_POWER_OFFLOAD_NS_CAPABILITIES const * Capabilities
+    );
+
+    void
+    SetWakeBitmapCapabilities(
+        _In_ NET_ADAPTER_WAKE_BITMAP_CAPABILITIES const * Capabilities
+    );
+
+    void
+    SetMagicPacketCapabilities(
+        _In_ NET_ADAPTER_WAKE_MAGIC_PACKET_CAPABILITIES const * Capabilities
+    );
+
+    void
+    SetWakeMediaChangeCapabilities(
+        _In_ NET_ADAPTER_WAKE_MEDIA_CHANGE_CAPABILITIES const * Capabilities
+    );
+
+    void
+    SetWakePacketFilterCapabilities(
+        _In_ NET_ADAPTER_WAKE_PACKET_FILTER_CAPABILITIES const * Capabilities
     );
 
     void
@@ -838,12 +845,12 @@ public:
         _In_ NET_ADAPTER_LINK_STATE const & CurrentLinkState
     );
 
-    VOID
+    void
     ClearGeneralAttributes(
         void
     );
 
-    VOID
+    void
     SetMtuSize(
         _In_ ULONG mtuSize
     );
@@ -853,22 +860,22 @@ public:
         void
     ) const;
 
-    VOID
+    void
     IndicatePowerCapabilitiesToNdis(
         void
     );
 
-    VOID
+    void
     IndicateCurrentLinkStateToNdis(
         void
     );
 
-    VOID
+    void
     IndicateMtuSizeChangeToNdis(
         void
     );
 
-    VOID
+    void
     IndicateCurrentLinkLayerAddressToNdis(
         void
     );
@@ -878,29 +885,41 @@ public:
         void
     );
 
-    VOID
-    InitializeSelfManagedIO(
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    InitializePowerManagement1(
         void
     );
 
     _IRQL_requires_(PASSIVE_LEVEL)
-    NTSTATUS
-    InitializePowerManagement(
+    void
+    InitializePowerManagement2(
         void
     );
 
+    _IRQL_requires_(PASSIVE_LEVEL)
     void
-    SuspendSelfManagedIo(
-        _In_ POWER_ACTION SystemPowerAction,
-        _In_ SYSTEM_POWER_STATE TargetSystemPowerState,
-        _In_ DEVICE_POWER_STATE TargetDevicePowerState
+    SelfManagedIoStart(
+        void
     );
 
+    _IRQL_requires_(PASSIVE_LEVEL)
     void
-    RestartSelfManagedIo(
+    SelfManagedIoStop(
+        void
+    );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    SelfManagedIoRestart(
+        _In_ POWER_ACTION SystemPowerAction
+    );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    SelfManagedIoSuspend(
         _In_ POWER_ACTION SystemPowerAction,
-        _In_ SYSTEM_POWER_STATE TargetSystemPowerState,
-        _In_ DEVICE_POWER_STATE TargetDevicePowerState
+        _In_ WDF_POWER_DEVICE_STATE TargetDevicePowerState
     );
 
     bool
@@ -913,15 +932,25 @@ public:
         void
     );
 
-    NET_PACKET_EXTENSION_PRIVATE *
-    QueryAndGetNetPacketExtensionWithLock(
-        _In_ const NET_PACKET_EXTENSION_PRIVATE * ExtensionToQuery
-    );
-
     _Requires_lock_held_(m_ExtensionCollectionLock)
-    NET_PACKET_EXTENSION_PRIVATE *
-    QueryAndGetNetPacketExtension(
-        _In_ const NET_PACKET_EXTENSION_PRIVATE * ExtensionToQuery
+    NET_EXTENSION_PRIVATE const *
+    QueryExtension(
+        PCWSTR Name,
+        ULONG Version,
+        NET_EXTENSION_TYPE Type
+    ) const;
+
+    NET_EXTENSION_PRIVATE const *
+    QueryExtensionLocked(
+        PCWSTR Name,
+        ULONG Version,
+        NET_EXTENSION_TYPE Type
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    RegisterExtension(
+        _In_ NET_EXTENSION_PRIVATE const & Extension
     );
 
     const NET_ADAPTER_TX_CAPABILITIES &
@@ -941,8 +970,9 @@ public:
     );
 
     void
-    DispatchRequest(
-        _In_ NETREQUEST Request
+    DispatchOidRequest(
+        _In_ NDIS_OID_REQUEST * NdisOidRequest,
+        _In_ DispatchContext * Context
     );
 
     NDIS_MEDIUM
@@ -950,6 +980,13 @@ public:
         void
     ) const;
 
+    void ReportWakeReasonPacket(
+        _In_ const NET_ADAPTER_WAKE_REASON_PACKET * Reason
+    ) const;
+
+    void ReportWakeReasonMediaChange(
+        _In_ NET_IF_MEDIA_CONNECT_STATE MediaEvent
+    ) const;
 };
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxAdapter, _GetNxAdapterFromHandle);

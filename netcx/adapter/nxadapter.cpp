@@ -14,18 +14,23 @@ Abstract:
 #include <NetClientBufferImpl.h>
 #include <NetClientDriverConfigurationImpl.hpp>
 
+#include <net/logicaladdresstypes_p.h>
+#include <net/mdltypes_p.h>
+#include <net/returncontexttypes_p.h>
+#include <net/virtualaddresstypes_p.h>
+
 #include "NxAdapter.tmh"
 #include "NxAdapter.hpp"
 
 #include "NxDevice.hpp"
 #include "NxDriver.hpp"
 #include "NxMacros.hpp"
-#include "NxPacketExtensionPrivate.hpp"
+#include "NxExtension.hpp"
 #include "NxQueue.hpp"
 #include "NxRequest.hpp"
 #include "NxRequestQueue.hpp"
 #include "NxUtility.hpp"
-#include "NxWake.hpp"
+#include "powerpolicy/NxPowerPolicy.hpp"
 #include "verifier.hpp"
 #include "version.hpp"
 
@@ -205,7 +210,7 @@ static
 NTSTATUS
 NetClientAdapterCreateTxQueue(
     _In_ NET_CLIENT_ADAPTER Adapter,
-    _In_ PVOID ClientContext,
+    _In_ void * ClientContext,
     _In_ NET_CLIENT_QUEUE_NOTIFY_DISPATCH const * ClientDispatch,
     _In_ NET_CLIENT_QUEUE_CONFIG const * ClientQueueConfig,
     _Out_ NET_CLIENT_QUEUE * AdapterQueue,
@@ -224,7 +229,7 @@ static
 NTSTATUS
 NetClientAdapterCreateRxQueue(
     _In_ NET_CLIENT_ADAPTER Adapter,
-    _In_ PVOID ClientContext,
+    _In_ void * ClientContext,
     _In_ NET_CLIENT_QUEUE_NOTIFY_DISPATCH const * ClientDispatch,
     _In_ NET_CLIENT_QUEUE_CONFIG const * ClientQueueConfig,
     _Out_ NET_CLIENT_QUEUE * AdapterQueue,
@@ -254,46 +259,45 @@ _IRQL_requires_min_(PASSIVE_LEVEL)
 _IRQL_requires_max_(DISPATCH_LEVEL)
 _IRQL_requires_same_
 static
-VOID
+void
 NetClientReturnRxBuffer(
     _In_ NET_CLIENT_ADAPTER Adapter,
-    _In_ PVOID RxBufferVirtualAddress,
-    _In_ PVOID RxBufferReturnContext
+    _In_ NET_FRAGMENT_RETURN_CONTEXT_HANDLE RxBufferReturnContext
 )
 {
-    reinterpret_cast<NxAdapter*>(Adapter)->ReturnRxBuffer(RxBufferVirtualAddress, RxBufferReturnContext);
+    reinterpret_cast<NxAdapter*>(Adapter)->ReturnRxBuffer(RxBufferReturnContext);
 }
 
 static
 NTSTATUS
-NetClientAdapterRegisterPacketExtension(
+NetClientAdapterRegisterExtension(
     _In_ NET_CLIENT_ADAPTER Adapter,
-    _In_ NET_CLIENT_PACKET_EXTENSION const * Extension
+    _In_ NET_CLIENT_EXTENSION const * Extension
 )
 {
-    NET_PACKET_EXTENSION_PRIVATE extenstionPrivate = {};
+    NET_EXTENSION_PRIVATE extenstionPrivate = {};
     extenstionPrivate.Name = Extension->Name;
     extenstionPrivate.Version = Extension->Version;
     extenstionPrivate.Size = Extension->ExtensionSize;
-
-    // Expect NET_CLIENT to use alignment boundary 2,4, etc values
     extenstionPrivate.NonWdfStyleAlignment = Extension->Alignment;
+    extenstionPrivate.Type = Extension->Type;
 
-    return reinterpret_cast<NxAdapter *>(Adapter)->RegisterPacketExtension(&extenstionPrivate);
+    return reinterpret_cast<NxAdapter *>(Adapter)->RegisterExtension(extenstionPrivate);
 }
 
 static
 NTSTATUS
-NetClientAdapterQueryRegisteredPacketExtension(
+NetClientAdapterQueryExtension(
     _In_ NET_CLIENT_ADAPTER Adapter,
-    _In_ NET_CLIENT_PACKET_EXTENSION const * Extension
+    _In_ NET_CLIENT_EXTENSION const * Extension
 )
 {
-    NET_PACKET_EXTENSION_PRIVATE extenstionPrivate = {};
-    extenstionPrivate.Name = Extension->Name;
-    extenstionPrivate.Version = Extension->Version;
+    auto const extension = reinterpret_cast<NxAdapter *>(Adapter)->QueryExtensionLocked(
+        Extension->Name,
+        Extension->Version,
+        Extension->Type);
 
-    return reinterpret_cast<NxAdapter *>(Adapter)->QueryRegisteredPacketExtension(&extenstionPrivate);
+    return extension != nullptr ?  STATUS_SUCCESS : STATUS_NOT_FOUND;
 }
 
 static
@@ -367,7 +371,7 @@ NetClientAdapterReceiveScalingSetHashSecretKey(
 }
 
 static
-VOID
+void
 NetClientAdapterGetChecksumHardwareCapabilities(
     _In_ NET_CLIENT_ADAPTER ClientAdapter,
     _Out_ NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES * HardwareCapabilities
@@ -377,7 +381,7 @@ NetClientAdapterGetChecksumHardwareCapabilities(
 }
 
 static
-VOID
+void
 NetClientAdapterGetChecksumDefaultCapabilities(
     _In_ NET_CLIENT_ADAPTER ClientAdapter,
     _Out_ NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES * DefaultCapabilities
@@ -387,7 +391,7 @@ NetClientAdapterGetChecksumDefaultCapabilities(
 }
 
 static
-VOID
+void
 NetClientAdapterSetChecksumActiveCapabilities(
     _In_ NET_CLIENT_ADAPTER ClientAdapter,
     _In_ NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES const * ActiveCapabilities
@@ -397,7 +401,7 @@ NetClientAdapterSetChecksumActiveCapabilities(
 }
 
 static
-VOID
+void
 NetClientAdapterGetLsoHardwareCapabilities(
     _In_ NET_CLIENT_ADAPTER ClientAdapter,
     _Out_ NET_CLIENT_OFFLOAD_LSO_CAPABILITIES * HardwareCapabilities
@@ -407,7 +411,7 @@ NetClientAdapterGetLsoHardwareCapabilities(
 }
 
 static
-VOID
+void
 NetClientAdapterGetLsoDefaultCapabilities(
     _In_ NET_CLIENT_ADAPTER ClientAdapter,
     _Out_ NET_CLIENT_OFFLOAD_LSO_CAPABILITIES * DefaultCapabilities
@@ -417,13 +421,88 @@ NetClientAdapterGetLsoDefaultCapabilities(
 }
 
 static
-VOID
+void
 NetClientAdapterSetLsoActiveCapabilities(
     _In_ NET_CLIENT_ADAPTER ClientAdapter,
     _In_ NET_CLIENT_OFFLOAD_LSO_CAPABILITIES const * ActiveCapabilities
 )
 {
      reinterpret_cast<NxAdapter *>(ClientAdapter)->m_NxOffloadManager->SetLsoActiveCapabilities(ActiveCapabilities);
+}
+
+static
+void
+NetClientAdapterGetRscHardwareCapabilities(
+    _In_ NET_CLIENT_ADAPTER ClientAdapter,
+    _Out_ NET_CLIENT_OFFLOAD_RSC_CAPABILITIES * HardwareCapabilities
+)
+{
+     reinterpret_cast<NxAdapter *>(ClientAdapter)->m_NxOffloadManager->GetRscHardwareCapabilities(HardwareCapabilities);
+}
+
+static
+void
+NetClientAdapterGetRscDefaultCapabilities(
+    _In_ NET_CLIENT_ADAPTER ClientAdapter,
+    _Out_ NET_CLIENT_OFFLOAD_RSC_CAPABILITIES * DefaultCapabilities
+)
+{
+     reinterpret_cast<NxAdapter *>(ClientAdapter)->m_NxOffloadManager->GetRscDefaultCapabilities(DefaultCapabilities);
+}
+
+static
+void
+NetClientAdapterSetMulticastList(
+    _In_ NET_CLIENT_ADAPTER ClientAdapter,
+    _In_ ULONG MulticastAddressCount,
+    _In_ IF_PHYSICAL_ADDRESS * MulticastAddressList
+)
+{
+    auto const adapter = reinterpret_cast<NxAdapter *>(ClientAdapter);
+
+    adapter->m_MulticastList.EvtSetMulticastList(
+        adapter->GetFxObject(),
+        MulticastAddressCount,
+        reinterpret_cast<NET_ADAPTER_LINK_LAYER_ADDRESS *>(MulticastAddressList));
+}
+
+static
+VOID
+NetClientAdapterSetRscActiveCapabilities(
+    _In_ NET_CLIENT_ADAPTER ClientAdapter,
+    _In_ NET_CLIENT_OFFLOAD_RSC_CAPABILITIES const * ActiveCapabilities
+)
+{
+     reinterpret_cast<NxAdapter *>(ClientAdapter)->m_NxOffloadManager->SetRscActiveCapabilities(ActiveCapabilities);
+}
+
+static
+NTSTATUS
+NetClientAdapterSetPacketFilter(
+    _In_ NET_CLIENT_ADAPTER ClientAdapter,
+    _In_ ULONG PacketFilter
+)
+{
+    auto const adapter = reinterpret_cast<NxAdapter *>(ClientAdapter);
+
+    // When the adapter does not have any SupportedPacketFilters,  we cannot
+    // set any packet filters.
+    if (adapter->m_PacketFilter.SupportedPacketFilters == 0)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    // Do not support requests to set unsupported packet filters.
+    if (PacketFilter & ~(adapter->m_PacketFilter.SupportedPacketFilters))
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    adapter->m_PacketFilter.EvtSetPacketFilter(
+        adapter->GetFxObject(),
+        static_cast<NET_PACKET_FILTER_FLAGS>(PacketFilter));
+
+    return STATUS_SUCCESS;
 }
 
 static const NET_CLIENT_ADAPTER_DISPATCH AdapterDispatch =
@@ -437,8 +516,10 @@ static const NET_CLIENT_ADAPTER_DISPATCH AdapterDispatch =
     &NetClientAdapterCreateRxQueue,
     &NetClientAdapterDestroyQueue,
     &NetClientReturnRxBuffer,
-    &NetClientAdapterRegisterPacketExtension,
-    &NetClientAdapterQueryRegisteredPacketExtension,
+    &NetClientAdapterRegisterExtension,
+    &NetClientAdapterQueryExtension,
+    &NetClientAdapterSetPacketFilter,
+    &NetClientAdapterSetMulticastList,
     {
         &NetClientAdapterReceiveScalingEnable,
         &NetClientAdapterReceiveScalingDisable,
@@ -452,6 +533,9 @@ static const NET_CLIENT_ADAPTER_DISPATCH AdapterDispatch =
         &NetClientAdapterGetLsoHardwareCapabilities,
         &NetClientAdapterGetLsoDefaultCapabilities,
         &NetClientAdapterSetLsoActiveCapabilities,
+        &NetClientAdapterGetRscHardwareCapabilities,
+        &NetClientAdapterGetRscDefaultCapabilities,
+        &NetClientAdapterSetRscActiveCapabilities,
     }
 };
 
@@ -502,6 +586,7 @@ NxAdapter::NxAdapter(
     NETADAPTER Adapter
 )
     : CFxObject(Adapter)
+    , m_powerPolicy(m_Device, GetNxDeviceFromHandle(m_Device)->GetPowerPolicyEventCallbacks(), Adapter, NxPrivateGlobals.NxDriver->GetRecorderLog())
     , m_Device(AdapterInit.Device)
     , m_NxDriver(NxPrivateGlobals.NxDriver)
 {
@@ -529,14 +614,6 @@ NxAdapter::NxAdapter(
             &AdapterInit.NetRequestAttributes,
             AdapterInit.NetRequestAttributes.Size);
     }
-
-    if (AdapterInit.NetPowerSettingsAttributes.Size != 0)
-    {
-        RtlCopyMemory(
-            &m_NetPowerSettingsObjectAttributes,
-            &AdapterInit.NetPowerSettingsAttributes,
-            AdapterInit.NetPowerSettingsAttributes.Size);
-    }
 }
 
 _Use_decl_annotations_
@@ -552,13 +629,6 @@ NxAdapter::Init(
     WDF_WORKITEM_CONFIG   stopIdleWorkItemConfig;
     PNX_STOP_IDLE_WORKITEM_CONTEXT workItemContext;
 
-    NTSTATUS status;
-
-    status = NxWake::_Create(this, &m_NetPowerSettingsObjectAttributes, &m_NxWake);
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
-
     auto offloadFacade = wil::make_unique_nothrow<NxOffloadFacade>(*this);
     CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !offloadFacade);
 
@@ -570,7 +640,7 @@ NxAdapter::Init(
     WDF_OBJECT_ATTRIBUTES_INIT(&objectAttributes);
     objectAttributes.ParentObject = GetFxObject();
 
-    status = WdfWaitLockCreate(&objectAttributes, &m_DataPathControlLock);
+    NTSTATUS status = WdfWaitLockCreate(&objectAttributes, &m_DataPathControlLock);
     if (!NT_SUCCESS(status)) {
         return status;
     }
@@ -623,6 +693,9 @@ NxAdapter::Init(
             "StateMachineEngine_Init failed %!STATUS!", status);
         return status;
     }
+
+    // Clear the initial state machine transition
+    m_TransitionComplete.Clear();
 
     status = InitializeDatapath();
     if (!NT_SUCCESS(status)) {
@@ -811,10 +884,6 @@ Routine Description:
     // Dont Fail after this point or else the client's Cleanup / Destroy
     // callbacks can get called.
     //
-    // Inform the wake object that initialization has succeeded so it can
-    // enable driver provided WDF_OBJECT_ATTRIBUTES cleanup callbacks
-    //
-    nxAdapter->m_NxWake->AdapterInitComplete();
 
     nxAdapter->m_NblDatapath.SetNdisHandle(nxAdapter->GetNdisHandle());
 
@@ -833,22 +902,145 @@ NxAdapter::GetMediaType(
 
 _Use_decl_annotations_
 void
-NxAdapter::DispatchRequest(
-    NETREQUEST Request
+NxAdapter::DispatchOidRequest(
+    NDIS_OID_REQUEST * NdisOidRequest,
+    DispatchContext * Context
 )
 {
-    auto nxRequest = GetNxRequestFromHandle(Request);
-    auto dispatchContext = nxRequest->GetDispatchContext();
+    auto const nextHandler = Context->NextHandlerIndex++;
+    auto const frameworkHandlerIndex = m_adapterExtensions.count();
 
-    // First see if there are extensions that want to see this request before the adapter
-    if (dispatchContext->CurrentExtensionIndex < m_adapterExtensions.count())
+    //
+    // Note: It is not safe to use 'NdisOidRequest' or 'Context' after either one of
+    // InvokeOidPreprocessCallback, FrameworkOidHandler or DispatchOidRequestToAdapter
+    // has returned, since those calls might complete the OID request before returning
+    //
+
+    if (nextHandler < frameworkHandlerIndex)
     {
-        auto& extension = m_adapterExtensions[dispatchContext->CurrentExtensionIndex++];
-        extension.InvokeOidPreprocessCallback(GetFxObject(), Request);
+        auto const & extension = m_adapterExtensions[nextHandler];
+        extension.InvokeOidPreprocessCallback(GetFxObject(), NdisOidRequest, Context);
+    }
+    else if (nextHandler == frameworkHandlerIndex)
+    {
+        FrameworkOidHandler(NdisOidRequest, Context);
+    }
+    else
+    {
+        NT_ASSERT(nextHandler == frameworkHandlerIndex + 1);
+        DispatchOidRequestToAdapter(NdisOidRequest);
+    }
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::FrameworkOidHandler(
+    NDIS_OID_REQUEST * NdisOidRequest,
+    DispatchContext * Context
+)
+{
+    switch (NdisOidRequest->RequestType)
+    {
+        case NdisRequestSetInformation:
+            FrameworkSetOidHandler(NdisOidRequest, Context);
+            break;
+
+        default:
+            //
+            // Others types of OID requests are not handled by the framework,
+            // dispatch to the next handler
+            //
+            DispatchOidRequest(NdisOidRequest, Context);
+            break;
+    }
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::FrameworkSetOidHandler(
+    NDIS_OID_REQUEST * NdisOidRequest,
+    DispatchContext * Context
+)
+{
+    auto Set = &NdisOidRequest->DATA.SET_INFORMATION;
+
+    //
+    // All internal OID handling is synchronous, we must either complete the request
+    // (NdisMOidRequestComplete) or let the framework keep processing it (DispatchOidRequest)
+    //
+
+    switch(Set->Oid)
+    {
+        case OID_PM_PARAMETERS:
+        {
+            auto ndisStatus = m_powerPolicy.SetParameters(Set);
+            NdisMOidRequestComplete(GetNdisHandle(), NdisOidRequest, ndisStatus);
+            break;
+        }
+        case OID_PM_ADD_WOL_PATTERN:
+        {
+            auto ndisStatus = m_powerPolicy.AddWakePattern(Set);
+            NdisMOidRequestComplete(GetNdisHandle(), NdisOidRequest, ndisStatus);
+            break;
+        }
+
+        case OID_PM_REMOVE_WOL_PATTERN:
+        {
+            auto ndisStatus = m_powerPolicy.RemoveWakePattern(Set);
+            NdisMOidRequestComplete(GetNdisHandle(), NdisOidRequest, ndisStatus);
+            break;
+        }
+
+        case OID_PM_ADD_PROTOCOL_OFFLOAD:
+        {
+            auto ndisStatus = m_powerPolicy.AddProtocolOffload(Set);
+            NdisMOidRequestComplete(GetNdisHandle(), NdisOidRequest, ndisStatus);
+            break;
+        }
+        case OID_PM_REMOVE_PROTOCOL_OFFLOAD:
+        {
+            auto ndisStatus = m_powerPolicy.RemoveProtocolOffload(Set);
+            NdisMOidRequestComplete(GetNdisHandle(), NdisOidRequest, ndisStatus);
+            break;
+        }
+        default:
+        {
+            DispatchOidRequest(NdisOidRequest, Context);
+            break;
+        }
+    }
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::DispatchOidRequestToAdapter(
+    NDIS_OID_REQUEST * NdisOidRequest
+)
+{
+    //
+    // Create the NxRequest object from the tranditional NDIS_OID_REQUEST
+    //
+    NxRequest * nxRequest;
+    auto ndisStatus = NdisConvertNtStatusToNdisStatus(
+        NxRequest::_Create(
+            GetPrivateGlobals(),
+            this,
+            NdisOidRequest,
+            &nxRequest));
+
+    if (ndisStatus != NDIS_STATUS_SUCCESS)
+    {
+        //
+        // _Create failed, so fail the NDIS request.
+        //
+        NdisMOidRequestComplete(GetNdisHandle(), NdisOidRequest, ndisStatus);
         return;
     }
 
-    // Dispatch to the client driver
+    //
+    // Dispatch the OID to the client driver
+    //
+
     if (m_DefaultRequestQueue == nullptr)
     {
         LogWarning(GetRecorderLog(), FLAG_ADAPTER,
@@ -858,7 +1050,7 @@ NxAdapter::DispatchRequest(
         return;
     }
 
-    m_DefaultRequestQueue->QueueRequest(Request);
+    m_DefaultRequestQueue->QueueRequest(nxRequest->GetFxObject());
 }
 
 NDIS_HANDLE
@@ -1063,7 +1255,6 @@ Arguments:
                 !(WaitForD0 && InvokeCompletionCallback));
 
     auto nxAdapter = static_cast<NxAdapter *>(Adapter);
-    auto nxDevice = GetNxDeviceFromHandle(nxAdapter->GetDevice());
 
     if (InvokeCompletionCallback)
     {
@@ -1075,13 +1266,11 @@ Arguments:
     }
     else
     {
-        return nxDevice->PowerReference(
-            WaitForD0,
-            PTR_TO_TAG(EvtNdisPowerReference));
+        return nxAdapter->PowerReference(WaitForD0);
     }
 }
 
-VOID
+void
 NxAdapter::_EvtStopIdleWorkItem(
     _In_ WDFWORKITEM WorkItem
 )
@@ -1099,11 +1288,8 @@ Arguments:
     PNX_STOP_IDLE_WORKITEM_CONTEXT pWorkItemContext = GetStopIdleWorkItemObjectContext(WorkItem);
     WDFOBJECT nxAdapterWdfHandle = WdfWorkItemGetParentObject(WorkItem);
     auto nxAdapter = GetNxAdapterFromHandle((NETADAPTER)nxAdapterWdfHandle);
-    auto nxDevice = GetNxDeviceFromHandle(nxAdapter->GetDevice());
 
-    status = nxDevice->PowerReference(
-        TRUE,
-        PTR_TO_TAG(_EvtStopIdleWorkItem));
+    status = nxAdapter->PowerReference(true);
 
     NdisWdfAsyncPowerReferenceCompleteNotification(nxAdapter->m_NdisAdapterHandle,
                                                 status,
@@ -1279,16 +1465,14 @@ Routine Description:
     caller can call EvtNdisPowerDereference without having to keep track of
     failures from calls to EvtNdisPowerReference.
 
-
+    
 
 Arguments:
     Adapter - The NxAdapter object reported as context to NDIS
 --*/
 {
     auto nxAdapter = static_cast<NxAdapter *>(Adapter);
-    auto nxDevice = GetNxDeviceFromHandle(nxAdapter->GetDevice());
-
-    nxDevice->PowerDereference(PTR_TO_TAG(EvtNdisPowerDereference));
+    nxAdapter->PowerDereference();
 }
 
 _Use_decl_annotations_
@@ -1307,7 +1491,7 @@ EvtNdisGetWmiEventGuid(
 
 NTSTATUS
 NxAdapter::SetRegistrationAttributes(
-    VOID
+    void
 )
 {
     NDIS_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES adapterRegistration = {0};
@@ -1350,7 +1534,7 @@ Exit:
 }
 
 
-VOID
+void
 NxAdapter::SetPermanentLinkLayerAddress(
     _In_ NET_ADAPTER_LINK_LAYER_ADDRESS *LinkLayerAddress
 )
@@ -1363,7 +1547,7 @@ NxAdapter::SetPermanentLinkLayerAddress(
         sizeof(m_PermanentLinkLayerAddress));
 }
 
-VOID
+void
 NxAdapter::SetCurrentLinkLayerAddress(
     _In_ NET_ADAPTER_LINK_LAYER_ADDRESS *LinkLayerAddress
 )
@@ -1382,7 +1566,7 @@ NxAdapter::SetCurrentLinkLayerAddress(
 }
 
 _Use_decl_annotations_
-VOID
+void
 NxAdapter::SetReceiveScalingCapabilities(
     NET_ADAPTER_RECEIVE_SCALING_CAPABILITIES const & Capabilities
 )
@@ -1462,7 +1646,7 @@ RecvScaleCapabilitiesInit(
 
 NTSTATUS
 NxAdapter::SetGeneralAttributes(
-    VOID
+    void
 )
 {
     NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES adapterGeneral = {0};
@@ -1543,9 +1727,11 @@ NxAdapter::SetGeneralAttributes(
     // Specify the Mac Capabilities
     //
 
-    adapterGeneral.SupportedPacketFilters = m_LinkLayerCapabilities.SupportedPacketFilters;
-    adapterGeneral.MaxMulticastListSize = m_LinkLayerCapabilities.MaxMulticastListSize;
-    adapterGeneral.SupportedStatistics = m_LinkLayerCapabilities.SupportedStatistics;
+    adapterGeneral.SupportedPacketFilters = m_PacketFilter.SupportedPacketFilters;
+    adapterGeneral.MaxMulticastListSize = m_MulticastList.MaxMulticastAddresses;
+    adapterGeneral.SupportedStatistics =  NDIS_STATISTICS_XMIT_OK_SUPPORTED |
+        NDIS_STATISTICS_RCV_OK_SUPPORTED |
+        NDIS_STATISTICS_GEN_STATISTICS_SUPPORTED;
 
     // Set the MacAddressLength to be the length of the permanent link layer address,
     // this is fine since we require that both the permanent and current addresses
@@ -1576,8 +1762,7 @@ NxAdapter::SetGeneralAttributes(
     //
     // Set the power management capabilities.
     //
-    NDIS_PM_CAPABILITIES_INIT_FROM_NET_ADAPTER_POWER_CAPABILITIES(&pmCapabilities,
-                                                                  &m_PowerCapabilities);
+    m_powerPolicy.InitializeNdisCapabilities(GetCombinedMediaSpecificWakeUpEvents(), &pmCapabilities);
 
     adapterGeneral.PowerManagementCapabilitiesEx = &pmCapabilities;
 
@@ -1628,69 +1813,6 @@ Exit:
     return status;
 }
 
-NTSTATUS
-NxAdapter::ValidatePowerCapabilities(
-    VOID
-)
-/*++
-Routine Description:
-    This routine returns a failure status if a driver's power capabilities are
-    invalid based on its power policy ownership.
-
-    We should ideally call this during PnP start (set capbilities/attribs) itself
-    but we do not because there is no good WDF API at the moment that a Cx can
-    use to determine power policy ownership at that time. So we use WdfDeviceStopIdle
-    which can only be used starting D0Entry.
-
-Return Value:
-    NTSTATUS
-
-Arguments:
-    VOID
---*/
-{
-    NTSTATUS status = STATUS_SUCCESS;
-
-    auto wdfDevice = GetDevice();
-
-    // If this is a software adapter there is nothing to validate
-    if (wdfDevice == nullptr)
-    {
-        return STATUS_SUCCESS;
-    }
-
-    auto nxDevice = GetNxDeviceFromHandle(wdfDevice);
-
-    if (!nxDevice->IsPowerPolicyOwner()) {
-        if (m_PowerCapabilities.NumTotalWakePatterns != 0        ||
-            m_PowerCapabilities.SupportedWakeUpEvents != 0      ||
-            m_PowerCapabilities.SupportedWakePatterns != 0 ||
-            m_PowerCapabilities.Flags & NET_ADAPTER_POWER_SELECTIVE_SUSPEND ||
-            m_PowerCapabilities.Flags & NET_ADAPTER_POWER_WAKE_PACKET_INDICATION ||
-            m_PowerCapabilities.ManageS0IdlePowerReferences == WdfTrue)
-        {
-            status = STATUS_INVALID_PARAMETER;
-            LogError(GetRecorderLog(), FLAG_DEVICE,
-                "Error %!STATUS! WDFDEVICE is not the power policy owner. Power capabilities "
-                "reported by NetAdapterSetPowerCapabilities require ownership", status);
-        }
-    }
-
-    if (m_PowerCapabilities.ManageS0IdlePowerReferences == WdfUseDefault) {
-        //
-        // Evaluate the Cx's default role in taking power references
-        //
-        if (nxDevice->IsPowerPolicyOwner()) {
-            m_PowerCapabilities.ManageS0IdlePowerReferences = WdfTrue;
-        }
-        else {
-            m_PowerCapabilities.ManageS0IdlePowerReferences = WdfFalse;
-        }
-    }
-
-    return status;
-}
-
 void
 NxAdapter::QueuePowerReferenceWorkItem(
     void
@@ -1705,11 +1827,9 @@ NxAdapter::EngageAoAc(
     void
 )
 {
-    auto nxDevice = GetNxDeviceFromHandle(GetDevice());
-
     ASSERT(!m_AoAcEngaged);
 
-    nxDevice->PowerDereference(PTR_TO_TAG(EvtNdisAoAcEngage));
+    PowerDereference();
 
     m_AoAcEngaged = TRUE;
 }
@@ -1720,8 +1840,6 @@ NxAdapter::DisengageAoAc(
     bool WaitForD0
 )
 {
-    auto nxDevice = GetNxDeviceFromHandle(GetDevice());
-
     NTSTATUS status;
 
     ASSERT(m_AoAcEngaged);
@@ -1732,9 +1850,7 @@ NxAdapter::DisengageAoAc(
     //
     if (WaitForD0)
     {
-        status = nxDevice->PowerReference(
-            WaitForD0,
-            PTR_TO_TAG(EvtNdisAoAcDisengage));
+        status = PowerReference(WaitForD0);
 
         if (!NT_SUCCESS(status))
         {
@@ -1752,9 +1868,9 @@ NxAdapter::DisengageAoAc(
     return status;
 }
 
-VOID
+void
 NxAdapter::ClearGeneralAttributes(
-    VOID
+    void
 )
 {
     //
@@ -1762,15 +1878,16 @@ NxAdapter::ClearGeneralAttributes(
     //
     RtlZeroMemory(&m_LinkLayerCapabilities,     sizeof(NET_ADAPTER_LINK_LAYER_CAPABILITIES));
     m_MtuSize = 0;
+    m_PacketFilter = {};
+    m_MulticastList = {};
 
     //
     // Initialize the optional capabilities to defaults.
     //
-    NET_ADAPTER_POWER_CAPABILITIES_INIT(&m_PowerCapabilities);
     NET_ADAPTER_LINK_STATE_INIT_DISCONNECTED(&m_CurrentLinkState);
 }
 
-VOID
+void
 NxAdapter::SetMtuSize(
     _In_ ULONG mtuSize
 )
@@ -1801,9 +1918,24 @@ Returns:
     return m_MtuSize;
 }
 
-VOID
+ULONG
+NxAdapter::GetCombinedMediaSpecificWakeUpEvents(
+    void
+) const
+{
+    ULONG mediaSpecificWakeUpEvents = 0;
+
+    for (auto const & extension : m_adapterExtensions)
+    {
+        mediaSpecificWakeUpEvents |= extension.GetNdisPmCapabilities().MediaSpecificWakeUpEvents;
+    }
+
+    return mediaSpecificWakeUpEvents;
+}
+
+void
 NxAdapter::IndicatePowerCapabilitiesToNdis(
-    VOID
+    void
 )
 /*++
 Routine Description:
@@ -1812,10 +1944,8 @@ Routine Description:
 
 --*/
 {
-    NDIS_PM_CAPABILITIES   pmCapabilities;
-
-    NDIS_PM_CAPABILITIES_INIT_FROM_NET_ADAPTER_POWER_CAPABILITIES(
-        &pmCapabilities, &m_PowerCapabilities);
+    NDIS_PM_CAPABILITIES pmCapabilities;
+    m_powerPolicy.InitializeNdisCapabilities(GetCombinedMediaSpecificWakeUpEvents(), &pmCapabilities);
 
     auto statusIndication =
         MakeNdisStatusIndication(
@@ -1824,9 +1954,9 @@ Routine Description:
     NdisMIndicateStatusEx(m_NdisAdapterHandle, &statusIndication);
 }
 
-VOID
+void
 NxAdapter::IndicateCurrentLinkStateToNdis(
-    VOID
+    void
 )
 /*++
 Routine Description:
@@ -1856,9 +1986,9 @@ Routine Description:
     NdisMIndicateStatusEx(m_NdisAdapterHandle, &statusIndication);
 }
 
-VOID
+void
 NxAdapter::IndicateMtuSizeChangeToNdis(
-    VOID
+    void
 )
 {
     auto statusIndication =
@@ -1868,9 +1998,9 @@ NxAdapter::IndicateMtuSizeChangeToNdis(
     NdisMIndicateStatusEx(m_NdisAdapterHandle, &statusIndication);
 }
 
-VOID
+void
 NxAdapter::IndicateCurrentLinkLayerAddressToNdis(
-    VOID
+    void
 )
 {
     auto statusIndication = MakeNdisStatusIndication(
@@ -2016,7 +2146,7 @@ Routine Description:
 
 NET_LUID
 NxAdapter::GetNetLuid(
-    VOID
+    void
 )
 {
     return m_NetLuid;
@@ -2190,8 +2320,6 @@ EvtNdisOidRequest(
 {
     NDIS_STATUS ndisStatus;
 
-    struct _NDIS_OID_REQUEST::_REQUEST_DATA::_SET *Set;
-
     auto nxAdapter = static_cast<NxAdapter *>(Adapter);
 
     // intercept and forward to the NDIS translator.
@@ -2200,118 +2328,10 @@ EvtNdisOidRequest(
         return ndisStatus;
     }
 
-    switch (NdisOidRequest->RequestType) {
-    case NdisRequestSetInformation:
+    auto dispatchContext = new (&NdisOidRequest->MiniportReserved[0]) DispatchContext();
+    nxAdapter->DispatchOidRequest(NdisOidRequest, dispatchContext);
 
-        Set = &NdisOidRequest->DATA.SET_INFORMATION;
-
-        switch(Set->Oid)
-        {
-
-        case OID_PNP_SET_POWER:
-
-            //
-            // A Wdf Client has no need to handle the OID_PNP_SET_POWER
-            // request. It leverages standard Wdf power callbacks.
-            //
-
-            //
-            // NOTE: NDIS Contract: After this is completed successfully for a Dx transition
-            // client must not indicate any packets, issues status indications, or
-            // generally interact with NDIS.
-
-
-
-            LogVerbose(nxAdapter->GetRecorderLog(), FLAG_ADAPTER, "Ignoring OID_PNP_SET_POWER");
-            return NDIS_STATUS_SUCCESS;
-
-        case OID_PM_PARAMETERS:
-            //
-            // Cx processes this on behalf of the client.
-            // It maintains a NxWake object that tracks the OID_PM_PARAMETERS
-            //
-            if (Set->InformationBufferLength < sizeof(NDIS_PM_PARAMETERS))
-            {
-                NT_ASSERTMSG("Bad OID_PM_PARAMETERS size", FALSE);
-                return NDIS_STATUS_INVALID_PARAMETER;
-            }
-            return nxAdapter->m_NxWake->SetParameters((PNDIS_PM_PARAMETERS)Set->InformationBuffer);
-
-        case OID_PM_ADD_WOL_PATTERN:
-            ASSERT(Set->InformationBufferLength >= sizeof(NDIS_PM_WOL_PATTERN));
-
-            if (Set->InformationBufferLength < sizeof(NDIS_PM_WOL_PATTERN))
-            {
-                return NDIS_STATUS_INVALID_PARAMETER;
-            }
-
-            return nxAdapter->m_NxWake->AddWakePattern(nxAdapter->GetFxObject(), Set);
-
-        case OID_PM_REMOVE_WOL_PATTERN:
-            ASSERT(Set->InformationBufferLength >= sizeof(ULONG));
-
-            if (Set->InformationBufferLength < sizeof(ULONG))
-            {
-                return NDIS_STATUS_INVALID_PARAMETER;
-            }
-
-            return nxAdapter->m_NxWake->RemoveWakePattern(Set);
-
-        case OID_PM_ADD_PROTOCOL_OFFLOAD:
-            ASSERT(Set->InformationBufferLength >= sizeof(NDIS_PM_PROTOCOL_OFFLOAD));
-
-            if (Set->InformationBufferLength < sizeof(NDIS_PM_PROTOCOL_OFFLOAD))
-            {
-                return NDIS_STATUS_INVALID_PARAMETER;
-            }
-
-            return nxAdapter->m_NxWake->AddProtocolOffload(nxAdapter->GetFxObject(), Set);
-
-        case OID_PM_REMOVE_PROTOCOL_OFFLOAD:
-            ASSERT(Set->InformationBufferLength >= sizeof(ULONG));
-
-            if (Set->InformationBufferLength < sizeof(ULONG))
-            {
-                return NDIS_STATUS_INVALID_PARAMETER;
-            }
-
-            return nxAdapter->m_NxWake->RemoveProtocolOffload(Set);
-
-        } // switch(Set->Oid)
-        break;
-
-    default:
-        break;
-
-    } //switch (NdisOidRequest->RequestType)
-
-    //
-    // Create the NxRequest object from the tranditional NDIS_OID_REQUEST
-    //
-    NxRequest * nxRequest;
-    ndisStatus = NdisConvertNtStatusToNdisStatus(
-        NxRequest::_Create(
-            nxAdapter->GetPrivateGlobals(),
-            nxAdapter,
-            NdisOidRequest,
-            &nxRequest));
-
-    if (ndisStatus != NDIS_STATUS_SUCCESS)
-    {
-        //
-        // _Create failed, so fail the NDIS request.
-        //
-        return ndisStatus;
-    }
-
-    //
-    // Dispatch the OID
-    //
-    nxAdapter->DispatchRequest(nxRequest->GetFxObject());
-
-    ndisStatus = NDIS_STATUS_PENDING;
-
-    return ndisStatus;
+    return NDIS_STATUS_PENDING;
 }
 
 _Use_decl_annotations_
@@ -2460,6 +2480,20 @@ NxAdapter::NdisMiniportCreationComplete(
     // deep copy here
     m_BaseName = Parameters.BaseName;
     m_InstanceName = Parameters.AdapterInstanceName;
+
+    if (m_BaseName.Length >= (sizeof(m_tag) + 1) * sizeof(wchar_t))
+    {
+        // Build a tag based on the first sizeof(void *) chars of the interface GUID
+        const auto baseNameBytes = reinterpret_cast<uint8_t *>(&m_BaseName.Buffer[1]);
+
+        auto tagBytes = reinterpret_cast<uint8_t *>(&m_tag);
+
+        for (size_t i = 0; i < sizeof(m_tag); i++)
+        {
+            // Copy every other byte from the base name Unicode string
+            tagBytes[i] = baseNameBytes[i * 2];
+        }
+    }
 }
 
 _Use_decl_annotations_
@@ -2525,8 +2559,10 @@ NxAdapter::NetClientDirectOidPreProcess(
     NDIS_STATUS & NdisStatus
 ) const
 {
-    for (auto & app : m_Apps)
+    for (size_t i = 0; i < m_Apps.count(); i++)
     {
+        auto & app = m_Apps[i];
+
         if (m_ClientDispatch->NdisDirectOidRequestHandler)
         {
             NTSTATUS status;
@@ -2555,8 +2591,10 @@ NxAdapter::NetClientSynchrohousOidPreProcess(
     NDIS_STATUS & NdisStatus
 ) const
 {
-    for (auto & app : m_Apps)
+    for (size_t i = 0; i < m_Apps.count(); i++)
     {
+        auto & app = m_Apps[i];
+
         if (m_ClientDispatch->NdisSynchronousOidRequestHandler)
         {
             NTSTATUS status;
@@ -2587,6 +2625,70 @@ NxAdapter::ClientStart(
 
     m_Flags.StartCalled = TRUE;
     m_Flags.StartPending = true;
+
+    NET_EXTENSION_PRIVATE const mdlExtension = {
+        NET_FRAGMENT_EXTENSION_MDL_NAME,
+        NET_FRAGMENT_EXTENSION_MDL_VERSION_1_SIZE,
+        NET_FRAGMENT_EXTENSION_MDL_VERSION_1,
+        alignof(NET_FRAGMENT_MDL),
+        NetExtensionTypeFragment,
+    };
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        RegisterExtension(mdlExtension));
+
+    NET_EXTENSION_PRIVATE const virtualExtension = {
+        NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_NAME,
+        NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_VERSION_1_SIZE,
+        NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_VERSION_1,
+        alignof(NET_FRAGMENT_VIRTUAL_ADDRESS),
+        NetExtensionTypeFragment,
+    };
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        RegisterExtension(virtualExtension));
+
+    if (m_RxCapabilities.AllocationMode == NetRxFragmentBufferAllocationModeDriver &&
+        m_RxCapabilities.AttachmentMode == NetRxFragmentBufferAttachmentModeDriver)
+    {
+        NET_EXTENSION_PRIVATE const returnExtension = {
+            NET_FRAGMENT_EXTENSION_RETURN_CONTEXT_NAME,
+            NET_FRAGMENT_EXTENSION_RETURN_CONTEXT_VERSION_1_SIZE,
+            NET_FRAGMENT_EXTENSION_RETURN_CONTEXT_VERSION_1,
+            alignof(NET_FRAGMENT_RETURN_CONTEXT),
+            NetExtensionTypeFragment,
+        };
+        CX_RETURN_IF_NOT_NT_SUCCESS(
+            RegisterExtension(returnExtension));
+    }
+
+    if (m_TxCapabilities.DmaCapabilities != nullptr || m_RxCapabilities.DmaCapabilities != nullptr)
+    {
+        NET_EXTENSION_PRIVATE const logicalExtension = {
+            NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_NAME,
+            NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_VERSION_1_SIZE,
+            NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_VERSION_1,
+            alignof(NET_FRAGMENT_LOGICAL_ADDRESS),
+            NetExtensionTypeFragment,
+        };
+        CX_RETURN_IF_NOT_NT_SUCCESS(
+            RegisterExtension(logicalExtension));
+    }
+
+    ULONG wakeReasonSize =
+        ALIGN_UP_BY(NDIS_SIZEOF_PM_WAKE_REASON_REVISION_1, 8) +
+        ALIGN_UP_BY(NDIS_SIZEOF_PM_WAKE_PACKET_REVISION_1, 8) +
+        ALIGN_UP_BY(MAX_ETHERNET_PACKET_SIZE, 8);
+
+    WDF_OBJECT_ATTRIBUTES objectAttributes;
+    WDF_OBJECT_ATTRIBUTES_INIT(&objectAttributes);
+    objectAttributes.ParentObject = GetFxObject();
+
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        WdfMemoryCreate(&objectAttributes,
+            NonPagedPoolNx,
+            NETADAPTERCX_TAG,
+            wakeReasonSize,
+            &m_WakeReasonMemory,
+            nullptr));
 
     auto nxDevice = GetNxDeviceFromHandle(m_Device);
     nxDevice->EnqueueEvent(NxDevice::Event::RefreshAdapterList);
@@ -2629,11 +2731,11 @@ NxAdapter::StartForClientInner(
 
     if (DeviceState == DeviceState::SelfManagedIoInitialized)
     {
-        InitializeSelfManagedIO();
+        SelfManagedIoStart();
     }
     else if (DeviceState == DeviceState::Started)
     {
-        InitializeSelfManagedIO();
+        SelfManagedIoStart();
         PnPStartComplete();
     }
 
@@ -2715,6 +2817,10 @@ Routine description:
             NdisWdfActionPostReleaseHardware,
             NdisWdfActionPowerNone);
 
+        // At this point no NDIS initiated IO is possible. Drop the power reference
+        // acquired during initialization
+        PowerDereference();
+
         m_State = AdapterState::Stopped;
     }
 }
@@ -2741,10 +2847,7 @@ Routine description:
             __fallthrough;
 
         case DeviceState::Started:
-            SuspendSelfManagedIo(
-                PowerActionNone,
-                PowerSystemUnspecified,
-                PowerDeviceUnspecified);
+            SelfManagedIoStop();
             __fallthrough;
 
         case DeviceState::Initialized:
@@ -2766,6 +2869,21 @@ Routine description:
             NT_ASSERT(m_State == AdapterState::Stopped);
             break;
     }
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::SelfManagedIoStop(
+    void
+)
+{
+    if (m_State != AdapterState::Started)
+    {
+        return;
+    }
+
+    EnqueueEvent(NxAdapter::Event::DatapathDestroy);
+    m_TransitionComplete.Wait();
 }
 
 _Use_decl_annotations_
@@ -2867,17 +2985,21 @@ NxAdapter::GetDatapathCapabilities(
     NET_CLIENT_OFFLOAD_LSO_CAPABILITIES lsoHardwareCapabilities = {};
     m_NxOffloadManager->GetLsoHardwareCapabilities(&lsoHardwareCapabilities);
 
+    size_t const maxL2HeaderSize =
+        m_MediaType == NdisMedium802_3
+            ? 22 // sizeof(ETHERNET_HEADER) + sizeof(SNAP_HEADER)
+            : 0;
+
     if (lsoHardwareCapabilities.MaximumOffloadSize > 0)
     {
         //
         // MaximumTxFragmentSize = Max LSO offload size + Max TCP header size + Max IP header size + Ethernet overhead
         //
-
-        DatapathCapabilities->MaximumTxFragmentSize = lsoHardwareCapabilities.MaximumOffloadSize + MAX_IP_HEADER_SIZE + MAX_TCP_HEADER_SIZE + txCap.MaximumFrameSize - GetMtuSize();
+        DatapathCapabilities->MaximumTxFragmentSize = txCap.PayloadBackfill + maxL2HeaderSize + lsoHardwareCapabilities.MaximumOffloadSize + MAX_IP_HEADER_SIZE + MAX_TCP_HEADER_SIZE;
     }
     else
     {
-        DatapathCapabilities->MaximumTxFragmentSize = txCap.MaximumFrameSize;
+        DatapathCapabilities->MaximumTxFragmentSize = txCap.PayloadBackfill + maxL2HeaderSize + GetMtuSize();
     }
 
     DatapathCapabilities->MaximumRxFragmentSize = rxCap.MaximumFrameSize;
@@ -2910,8 +3032,8 @@ NxAdapter::GetDatapathCapabilities(
     DatapathCapabilities->NominalMaxTxLinkSpeed = m_LinkLayerCapabilities.MaxTxLinkSpeed;
     DatapathCapabilities->NominalMaxRxLinkSpeed = m_LinkLayerCapabilities.MaxRxLinkSpeed;
     DatapathCapabilities->NominalMtu = m_MtuSize;
-    DatapathCapabilities->MtuWithLso = m_MtuSize;
-    DatapathCapabilities->MtuWithRsc = m_MtuSize;
+    DatapathCapabilities->MtuWithLso = m_MtuSize; 
+    DatapathCapabilities->MtuWithRsc = m_MtuSize; 
 
     DatapathCapabilities->RxMemoryConstraints.MappingRequirement = static_cast<NET_CLIENT_MEMORY_MAPPING_REQUIREMENT> (rxCap.MappingRequirement);
     DatapathCapabilities->RxMemoryConstraints.AlignmentRequirement = rxCap.FragmentBufferAlignment;
@@ -2974,27 +3096,27 @@ NxAdapter::AddNetClientPacketExtensionsToQueueCreationContext(
 )
 {
     //
-    // convert queue config's NET_CLIENT_PACKET_EXTENSION to NET_PACKET_EXTENSION_PRIVATE
+    // convert queue config's NET_CLIENT_EXTENSION to NET_EXTENSION_PRIVATE
     // since we passed API boundary, CX should use private throughout.
     // CX needs to use the stored extension within the adapter object at this point
     // so that the object holding info about packet extension is owned by CX.
     //
-    for (size_t i = 0; i < ClientQueueConfig->NumberOfPacketExtensions; i++)
+    for (size_t i = 0; i < ClientQueueConfig->NumberOfExtensions; i++)
     {
-        NET_PACKET_EXTENSION_PRIVATE extensionPrivate = {};
-        extensionPrivate.Name = ClientQueueConfig->PacketExtensions[i].Name;
-        extensionPrivate.Version = ClientQueueConfig->PacketExtensions[i].Version;
+        auto const extension = QueryExtensionLocked(
+            ClientQueueConfig->Extensions[i].Name,
+            ClientQueueConfig->Extensions[i].Version,
+            ClientQueueConfig->Extensions[i].Type);
 
-        NET_PACKET_EXTENSION_PRIVATE* storedExtension =
-            QueryAndGetNetPacketExtensionWithLock(&extensionPrivate);
-
-        CX_RETURN_NTSTATUS_IF(
-            STATUS_INVALID_PARAMETER,
-            !storedExtension);
-
-        CX_RETURN_NTSTATUS_IF(
-            STATUS_INSUFFICIENT_RESOURCES,
-            !QueueCreationContext.NetClientAddedPacketExtensions.append(*storedExtension));
+        // protocol will ask for any extensions it supports but if
+        // the driver has not advertised capability it will not be
+        // registered and we do not add it to the creation context
+        if (extension)
+        {
+            CX_RETURN_NTSTATUS_IF(
+                STATUS_INSUFFICIENT_RESOURCES,
+                ! QueueCreationContext.Extensions.append(*extension));
+        }
     }
 
     return STATUS_SUCCESS;
@@ -3003,7 +3125,7 @@ NxAdapter::AddNetClientPacketExtensionsToQueueCreationContext(
 _Use_decl_annotations_
 NTSTATUS
 NxAdapter::CreateTxQueue(
-    PVOID ClientQueue,
+    void * ClientQueue,
     NET_CLIENT_QUEUE_NOTIFY_DISPATCH const * ClientDispatch,
     NET_CLIENT_QUEUE_CONFIG const * ClientQueueConfig,
     NET_CLIENT_QUEUE * AdapterQueue,
@@ -3049,7 +3171,7 @@ NxAdapter::CreateTxQueue(
 _Use_decl_annotations_
 NTSTATUS
 NxAdapter::CreateRxQueue(
-    PVOID ClientQueue,
+    void * ClientQueue,
     NET_CLIENT_QUEUE_NOTIFY_DISPATCH const * ClientDispatch,
     NET_CLIENT_QUEUE_CONFIG const * ClientQueueConfig,
     NET_CLIENT_QUEUE * AdapterQueue,
@@ -3124,14 +3246,13 @@ _Use_decl_annotations_
 NONPAGEDX
 void
 NxAdapter::ReturnRxBuffer(
-    PVOID RxBufferVa,
-    PVOID RxBufferReturnContext
+    NET_FRAGMENT_RETURN_CONTEXT_HANDLE RxBufferReturnContext
 )
 {
-    m_EvtReturnRxBuffer(GetFxObject(), RxBufferVa, RxBufferReturnContext);
+    m_EvtReturnRxBuffer(GetFxObject(), RxBufferReturnContext);
 }
 
-VOID
+void
 NxAdapter::_EvtCleanup(
     _In_  WDFOBJECT NetAdapter
 )
@@ -3166,13 +3287,13 @@ Routine Description:
 
     if (nxAdapter->m_DefaultRequestQueue) {
         WdfObjectDereferenceWithTag(nxAdapter->m_DefaultRequestQueue->GetFxObject(),
-            (PVOID)NxAdapter::_EvtCleanup);
+            (void *)NxAdapter::_EvtCleanup);
         nxAdapter->m_DefaultRequestQueue = NULL;
     }
 
     if (nxAdapter->m_DefaultDirectRequestQueue) {
         WdfObjectDereferenceWithTag(nxAdapter->m_DefaultDirectRequestQueue->GetFxObject(),
-            (PVOID)NxAdapter::_EvtCleanup);
+            (void *)NxAdapter::_EvtCleanup);
         nxAdapter->m_DefaultDirectRequestQueue = NULL;
     }
 
@@ -3198,8 +3319,8 @@ Routine Description:
     miniport Adapter handle.
 --*/
 {
-    // It does not make sense to get an adapter handle from a DEVICE_OBJECT.
-
+    
+    
     UNREFERENCED_PARAMETER(DeviceObject);
     return nullptr;
 }
@@ -3213,8 +3334,8 @@ EvtNdisUpdatePMParameters(
 /*++
 Routine Description:
 
-
-
+    
+    
 
     This routine is called whenever the Miniport->PMCurrentParameters structure
     maintained by Ndis.sys is updated.
@@ -3236,7 +3357,7 @@ Arguments
 
 RECORDER_LOG
 NxAdapter::GetRecorderLog(
-    VOID
+    void
 )
 {
     return m_NxDriver->GetRecorderLog();
@@ -3250,7 +3371,6 @@ NxAdapter::GetDevice(
     return m_Device;
 }
 
-_Use_decl_annotations_
 NTSTATUS
 NxAdapter::NdisInitialize(
     void
@@ -3293,7 +3413,7 @@ Return Value:
     //
     // Register packet extensions for offloads which are advertised by the client driver
     //
-    m_NxOffloadManager->RegisterPacketExtensions();
+    m_NxOffloadManager->RegisterExtensions();
 
     for (auto const &app : m_Apps)
     {
@@ -3309,22 +3429,26 @@ Return Value:
     }
 
 Exit:
-    //
-    // Inform the device (state machine) that the adapter initialization is
-    // complete. It will process the initialization status to handle device
-    // failure appropriately.
-    //
-    GetNxDeviceFromHandle(m_Device)->AdapterInitialized();
 
-    EnqueueEvent(NxAdapter::Event::NdisMiniportInitializeEx);
+    if (status == STATUS_SUCCESS)
+    {
+        //
+        // Inform the device (state machine) that the adapter initialization is
+        // complete. It will process the initialization status to handle device
+        // failure appropriately.
+        //
+        GetNxDeviceFromHandle(m_Device)->AdapterInitialized();
 
-    m_TransitionComplete.Wait();
+        EnqueueEvent(NxAdapter::Event::NdisMiniportInitializeEx);
+
+        m_TransitionComplete.Wait();
+    }
 
     return status;
 }
 
 _Use_decl_annotations_
-VOID
+void
 NxAdapter::NdisHalt()
 {
     ClearGeneralAttributes();
@@ -3333,21 +3457,12 @@ NxAdapter::NdisHalt()
     m_Flags.StartCalled = FALSE;
     m_Flags.GeneralAttributesSet = FALSE;
 
-    m_SharedPacketExtensions.resize(0);
+    m_packetExtensions.resize(0);
 
     //
     // Report the adapter halt to the device
     //
     GetNxDeviceFromHandle(m_Device)->AdapterHalted();
-}
-
-_Use_decl_annotations_
-NxAdapter::Event
-NxAdapter::AdapterPause()
-{
-    NdisMPauseComplete(m_NdisAdapterHandle);
-
-    return NxAdapter::Event::SyncSuccess;
 }
 
 _Use_decl_annotations_
@@ -3455,13 +3570,15 @@ NxAdapter::PnPStartComplete(
 {
     if (m_State == AdapterState::Started)
     {
+        InitializePowerManagement2();
         NdisWdfMiniportStarted(GetNdisHandle());
     }
 }
 
-VOID
-NxAdapter::InitializeSelfManagedIO(
-    VOID
+_Use_decl_annotations_
+void
+NxAdapter::SelfManagedIoStart(
+    void
 )
 /*++
 Routine Description:
@@ -3471,11 +3588,9 @@ Routine Description:
 {
     if (m_State == AdapterState::Started)
     {
-        CX_LOG_IF_NOT_NT_SUCCESS_MSG(
-            InitializePowerManagement(),
-            "Failed to initialize power management for this adapter. NETADAPTER=%p", GetFxObject());
+        InitializePowerManagement1();
 
-        EnqueueEvent(NxAdapter::Event::AdapterStart);
+        EnqueueEvent(NxAdapter::Event::DatapathCreate);
         m_TransitionComplete.Wait();
 
         NdisWdfMiniportDataPathStart(m_NdisAdapterHandle);
@@ -3483,62 +3598,70 @@ Routine Description:
 }
 
 _Use_decl_annotations_
-NTSTATUS
-NxAdapter::InitializePowerManagement(
+void
+NxAdapter::InitializePowerManagement1(
     void
 )
 /*
-Routine Description:
-
-    Called after D0Entry to manage the WDFDEVICE power references based on
-    AOAC and SS support.
-
-    When SS and AOAC structures are initialized in NDIS, they are both initialized
-    with stop flags so that SS/AoAC engines dont try to drop/acquire power refs
-    until the WDFDEVICE is ready. Now that we're ready this routine will clear
-    those SS/AoAC stop flags by calling into NdisWdfActionStartPowerManagement.
-
     This routine ensures this adapter will have one (and only one) WDFDEVICE power
-    reference. This is done to account for:
+    reference per adapter. This is done to account for:
     - Cases where both AOAC and SS are enabled
     - One of them is enabled.
     - Neither of them are enabled.
 
-Remarks:
-
-    We already validated the device is the power policy owner earlier.
-
 --*/
 {
-    auto nxDevice = GetNxDeviceFromHandle(GetDevice());
+    // This is step 1 of power management initialization for this network interface.
+    // This will ensure the WDFDEVICE has 1 power reference before the implicit
+    // power up is complete. After the start IRP is complete NDIS will drop this
+    // reference if either the network interface is idle or AOAC references are zero.
+    const auto powerReferenceStatus = PowerReference(false);
 
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        ValidatePowerCapabilities(),
-        "Adapter has invalid power capabilities. NETADAPTER=%p", GetFxObject());
-
-    if (m_PowerCapabilities.ManageS0IdlePowerReferences == WdfTrue)
-    {
-        CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-            nxDevice->PowerReference(
-                FALSE,
-                PTR_TO_TAG(EvtNdisInitializeEx)),
-            "Failed to acquire a power reference on the parent device");
-
-        CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-            NdisWdfPnpPowerEventHandler(GetNdisHandle(),
-                NdisWdfActionStartPowerManagement, NdisWdfActionPowerNone),
-            "NdisWdfActionStartPowerManagement failed. NETADAPTER=%p", GetFxObject());
-    }
-
-    return STATUS_SUCCESS;
+    CX_LOG_IF_NOT_NT_SUCCESS_MSG(
+        powerReferenceStatus,
+        "Failed to acquire initial power reference on parent device. "
+        "Power management will not be enabled on this interface. "
+        "WDFDEVICE: %p, NETADAPTER: %p",
+            GetDevice(),
+            GetFxObject());
 }
 
 _Use_decl_annotations_
 void
-NxAdapter::SuspendSelfManagedIo(
+NxAdapter::InitializePowerManagement2(
+    void
+)
+{
+    // If we acquired the initial power reference now it is time to tell NDIS to start
+    // power managment operations, which will let it invoke WdfDeviceStopIdle/ResumeIdle.
+    // Note that this is done on IRP_MN_DEVICE_START completion so it conforms to the
+    // requirements described in WDF documentation.
+    if (m_Flags.PowerReferenceAcquired)
+    {
+        // When SS and AOAC structures are initialized in NDIS, they are both initialized
+        // with stop flags so that SS / AoAC engines dont try to drop / acquire power refs
+        // until the WDFDEVICE is ready. Now that we're ready this routine will clear
+        // those SS / AoAC stop flags by calling into NdisWdfActionStartPowerManagement.
+
+        const auto startPMStatus = NdisWdfPnpPowerEventHandler(
+            GetNdisHandle(),
+            NdisWdfActionStartPowerManagement,
+            NdisWdfActionPowerNone);
+
+
+
+
+
+
+        NT_FRE_ASSERT(startPMStatus == STATUS_SUCCESS);
+    }
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::SelfManagedIoSuspend(
     POWER_ACTION SystemPowerAction,
-    SYSTEM_POWER_STATE TargetSystemPowerState,
-    DEVICE_POWER_STATE TargetDevicePowerState
+    WDF_POWER_DEVICE_STATE TargetDevicePowerState
 )
 /*++
 Routine Description:
@@ -3546,48 +3669,30 @@ Routine Description:
     suspend callback for the device has been invoked.
 --*/
 {
-    if (m_State == AdapterState::Started)
+    NT_FRE_ASSERT(TargetDevicePowerState >= WdfPowerDeviceD1);
+    NT_FRE_ASSERT(TargetDevicePowerState <= WdfPowerDeviceD3);
+
+    // If m_State is Started the adapter state machine is
+    // in a DatapathRunning or DatapathPaused state.
+
+    if (m_State != AdapterState::Started)
     {
-        // If m_State is Started the adapter state machine is
-        // in a DatapathRunning or DatapathPaused state.
-
-        if (TargetDevicePowerState > PowerDeviceD0)
-        {
-            NdisWdfMiniportSetPower(
-                GetNdisHandle(),
-                SystemPowerAction,
-                TargetSystemPowerState,
-                TargetDevicePowerState);
-
-            EnqueueEvent(NxAdapter::Event::DatapathStop);
-        }
-        else
-        {
-
-            // NdisWdfMiniportDataPathPause is synchronous and results in the
-            // Event::NdisMiniportPause event being queued.
-            //
-            // If we are DatapathRunning this means we end up transitioning to
-            // DatapathPaused and if we are already DatapathPaused
-            // NdisWdfMiniportDataPathPause is a noop.
-            //
-            // From either DatapathRunning or DatapathPaused this means we
-            // end up transitioning StoppingPaused.
-
-            NdisWdfMiniportDataPathPause(GetNdisHandle());
-            EnqueueEvent(NxAdapter::Event::AdapterStop);
-        }
-
-        m_TransitionComplete.Wait();
+        return;
     }
+
+    NdisWdfMiniportSetPower(
+        GetNdisHandle(),
+        SystemPowerAction,
+        static_cast<DEVICE_POWER_STATE>(TargetDevicePowerState));
+    EnqueueEvent(NxAdapter::Event::DatapathDestroy);
+
+    m_TransitionComplete.Wait();
 }
 
 _Use_decl_annotations_
 void
-NxAdapter::RestartSelfManagedIo(
-    POWER_ACTION SystemPowerAction,
-    SYSTEM_POWER_STATE TargetSystemPowerState,
-    DEVICE_POWER_STATE TargetDevicePowerState
+NxAdapter::SelfManagedIoRestart(
+    POWER_ACTION SystemPowerAction
 )
 /*++
 Routine Description:
@@ -3597,20 +3702,14 @@ Routine Description:
 {
     if (m_State == AdapterState::Started)
     {
-        //
-        // Cx guarantees client's SMIORestart callback will be called before the
-        // data path has started. At this point client's SMIORestart callback
-        // should've already been invoked by the NxDevice.
-        //
-        EnqueueEvent(NxAdapter::Event::DatapathStart);
+        EnqueueEvent(NxAdapter::Event::DatapathCreate);
 
         m_TransitionComplete.Wait();
 
         NdisWdfMiniportSetPower(
             GetNdisHandle(),
             SystemPowerAction,
-            TargetSystemPowerState,
-            TargetDevicePowerState);
+            PowerDeviceD0);
     }
 }
 
@@ -3627,7 +3726,7 @@ NxAdapter::HasCurrentLinkLayerAddress()
 }
 
 _Use_decl_annotations_
-VOID
+void
 NxAdapter::EvtLogTransition(
     _In_ SmFx::TransitionType TransitionType,
     _In_ StateId SourceState,
@@ -3654,7 +3753,7 @@ NxAdapter::EvtLogTransition(
 }
 
 _Use_decl_annotations_
-VOID
+void
 NxAdapter::EvtLogMachineException(
     _In_ SmFx::MachineException exception,
     _In_ EventId relevantEvent,
@@ -3667,13 +3766,13 @@ NxAdapter::EvtLogMachineException(
 }
 
 _Use_decl_annotations_
-VOID
+void
 NxAdapter::EvtMachineDestroyed()
 {
 }
 
 _Use_decl_annotations_
-VOID
+void
 NxAdapter::EvtLogEventEnqueue(
     _In_ EventId relevantEvent
 )
@@ -3682,17 +3781,20 @@ NxAdapter::EvtLogEventEnqueue(
 }
 
 _Use_decl_annotations_
-NET_PACKET_EXTENSION_PRIVATE*
-NxAdapter::QueryAndGetNetPacketExtension(
-    NET_PACKET_EXTENSION_PRIVATE const * ExtensionToQuery
-)
+NET_EXTENSION_PRIVATE const *
+NxAdapter::QueryExtension(
+    PCWSTR Name,
+    ULONG Version,
+    NET_EXTENSION_TYPE Type
+) const
 {
-    for (size_t i = 0; i < m_SharedPacketExtensions.count(); i++)
+    for (auto const & extension : m_packetExtensions)
     {
-        if ((0 == wcscmp(m_SharedPacketExtensions[i].m_extension.Name, ExtensionToQuery->Name)) &&
-            (m_SharedPacketExtensions[i].m_extension.Version >= ExtensionToQuery->Version))
+        if (0 == wcscmp(Name, extension.m_extension.Name) &&
+            Version == extension.m_extension.Version &&
+            Type == extension.m_extension.Type)
         {
-            return &m_SharedPacketExtensions[i].m_extension;
+            return &extension.m_extension;
         }
     }
 
@@ -3700,35 +3802,37 @@ NxAdapter::QueryAndGetNetPacketExtension(
 }
 
 _Use_decl_annotations_
-NET_PACKET_EXTENSION_PRIVATE*
-NxAdapter::QueryAndGetNetPacketExtensionWithLock(
-    NET_PACKET_EXTENSION_PRIVATE const * ExtensionToQuery
-)
+NET_EXTENSION_PRIVATE const *
+NxAdapter::QueryExtensionLocked(
+    PCWSTR Name,
+    ULONG Version,
+    NET_EXTENSION_TYPE Type
+) const
 {
     auto locked = wil::acquire_wdf_wait_lock(m_ExtensionCollectionLock);
-    return QueryAndGetNetPacketExtension(ExtensionToQuery);
+
+    return QueryExtension(Name, Version, Type);
 }
 
 _Use_decl_annotations_
 NTSTATUS
-NxAdapter::RegisterPacketExtension(
-    NET_PACKET_EXTENSION_PRIVATE const * ExtensionToAdd
+NxAdapter::RegisterExtension(
+    NET_EXTENSION_PRIVATE const & Extension
 )
 {
     CX_RETURN_NTSTATUS_IF(
         STATUS_DUPLICATE_NAME,
-        QueryAndGetNetPacketExtension(ExtensionToAdd) != nullptr);
+        QueryExtension(Extension.Name, Extension.Version, Extension.Type) != nullptr);
 
-    NxPacketExtensionPrivate extension;
-
+    NxExtension extension;
     CX_RETURN_IF_NOT_NT_SUCCESS(
-        extension.Initialize(ExtensionToAdd));
+        extension.Initialize(&Extension));
 
     auto locked = wil::acquire_wdf_wait_lock(m_ExtensionCollectionLock);
 
     CX_RETURN_NTSTATUS_IF(
         STATUS_INSUFFICIENT_RESOURCES,
-        ! m_SharedPacketExtensions.append(wistd::move(extension)));
+        ! m_packetExtensions.append(wistd::move(extension)));
 
     return STATUS_SUCCESS;
 }
@@ -3788,17 +3892,7 @@ NxAdapter::ReceiveScalingSetHashSecretKey(
 }
 
 _Use_decl_annotations_
-NTSTATUS
-NxAdapter::QueryRegisteredPacketExtension(
-    NET_PACKET_EXTENSION_PRIVATE const * ExtensionToQuery
-)
-{
-    return (QueryAndGetNetPacketExtensionWithLock(ExtensionToQuery) != nullptr) ?
-               STATUS_SUCCESS : STATUS_NOT_FOUND;
-}
-
-_Use_decl_annotations_
-VOID
+void
 NxAdapter::SetDatapathCapabilities(
     NET_ADAPTER_TX_CAPABILITIES const *TxCapabilities,
     NET_ADAPTER_RX_CAPABILITIES const *RxCapabilities
@@ -3872,20 +3966,103 @@ NxAdapter::SetLinkLayerCapabilities(
 
 _Use_decl_annotations_
 void
-NxAdapter::SetPowerCapabilities(
-    NET_ADAPTER_POWER_CAPABILITIES const & PowerCapabilities
+NxAdapter::SetPacketFilterCapabilities(
+    NET_ADAPTER_PACKET_FILTER_CAPABILITIES const & PacketFilter
 )
 {
-    RtlCopyMemory(&m_PowerCapabilities,
-        &PowerCapabilities,
-        PowerCapabilities.Size);
+    RtlCopyMemory(&m_PacketFilter,
+        &PacketFilter,
+        PacketFilter.Size);
+}
 
-    if (!m_Flags.StartCalled)
+_Use_decl_annotations_
+void
+NxAdapter::SetMulticastCapabilities(
+    NET_ADAPTER_MULTICAST_CAPABILITIES const & MulticastCapabilities
+)
+{
+    RtlCopyMemory(&m_MulticastList,
+        &MulticastCapabilities,
+        MulticastCapabilities.Size);
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::SetPowerOffloadArpCapabilities(
+    NET_ADAPTER_POWER_OFFLOAD_ARP_CAPABILITIES const * Capabilities
+)
+{
+    m_powerPolicy.SetPowerOffloadArpCapabilities(Capabilities);
+
+    if (m_Flags.GeneralAttributesSet)
     {
-        m_NxWake->SetPowerPreviewEvtCallbacks(
-            PowerCapabilities.EvtAdapterPreviewWakePattern,
-            PowerCapabilities.EvtAdapterPreviewProtocolOffload);
+        IndicatePowerCapabilitiesToNdis();
     }
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::SetPowerOffloadNSCapabilities(
+    NET_ADAPTER_POWER_OFFLOAD_NS_CAPABILITIES const * Capabilities
+)
+{
+    m_powerPolicy.SetPowerOffloadNSCapabilities(Capabilities);
+
+    if (m_Flags.GeneralAttributesSet)
+    {
+        IndicatePowerCapabilitiesToNdis();
+    }
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::SetWakeBitmapCapabilities(
+    NET_ADAPTER_WAKE_BITMAP_CAPABILITIES const * Capabilities
+)
+{
+    m_powerPolicy.SetWakeBitmapCapabilities(Capabilities);
+
+    if (m_Flags.GeneralAttributesSet)
+    {
+        IndicatePowerCapabilitiesToNdis();
+    }
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::SetMagicPacketCapabilities(
+    NET_ADAPTER_WAKE_MAGIC_PACKET_CAPABILITIES const * Capabilities
+)
+{
+    m_powerPolicy.SetMagicPacketCapabilities(Capabilities);
+
+    if (m_Flags.GeneralAttributesSet)
+    {
+        IndicatePowerCapabilitiesToNdis();
+    }
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::SetWakeMediaChangeCapabilities(
+    NET_ADAPTER_WAKE_MEDIA_CHANGE_CAPABILITIES const * Capabilities
+)
+{
+    m_powerPolicy.SetWakeMediaChangeCapabilities(Capabilities);
+
+    if (m_Flags.GeneralAttributesSet)
+    {
+        IndicatePowerCapabilitiesToNdis();
+    }
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::SetWakePacketFilterCapabilities(
+    NET_ADAPTER_WAKE_PACKET_FILTER_CAPABILITIES const * Capabilities
+)
+{
+    m_powerPolicy.SetWakePacketFilterCapabilities(Capabilities);
 
     if (m_Flags.GeneralAttributesSet)
     {
@@ -3927,4 +4104,119 @@ NxAdapter::GetTriageInfo(
 )
 {
     g_NetAdapterCxTriageBlock.NxAdapterLinkageOffset = FIELD_OFFSET(NxAdapter, m_Linkage);
+}
+
+_Use_decl_annotations_
+void NxAdapter::ReportWakeReasonPacket(
+    const NET_ADAPTER_WAKE_REASON_PACKET * Reason
+) const
+{
+    Verifier_VerifyNetPowerUpTransition(m_NxDriver->GetPrivateGlobals(), GetNxDeviceFromHandle(m_Device));
+    size_t savedPacketSize;
+    auto wakePacketBuffer = WdfMemoryGetBuffer(Reason->WakePacket, &savedPacketSize);
+    if (savedPacketSize > MAX_ETHERNET_PACKET_SIZE)
+    {
+        savedPacketSize = MAX_ETHERNET_PACKET_SIZE;
+    }
+    ULONG wakePacketSize = ALIGN_UP_BY(NDIS_SIZEOF_PM_WAKE_PACKET_REVISION_1, 8) + ALIGN_UP_BY(savedPacketSize, 8);
+    ULONG wakeReasonSize =
+        ALIGN_UP_BY(NDIS_SIZEOF_PM_WAKE_REASON_REVISION_1, 8) +
+        wakePacketSize;
+
+    size_t reservedWakeReasonSize;
+    auto wakeReason = static_cast<PNDIS_PM_WAKE_REASON>(WdfMemoryGetBuffer(m_WakeReasonMemory, &reservedWakeReasonSize));
+    RtlZeroMemory(wakeReason, reservedWakeReasonSize);
+    wakeReason->Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+    wakeReason->Header.Revision = NDIS_PM_WAKE_REASON_REVISION_1;
+    wakeReason->Header.Size = NDIS_SIZEOF_PM_WAKE_REASON_REVISION_1;
+    wakeReason->WakeReason = NdisWakeReasonPacket;
+    wakeReason->InfoBufferOffset = ALIGN_UP_BY(NDIS_SIZEOF_PM_WAKE_REASON_REVISION_1, 8);
+    wakeReason->InfoBufferSize = wakePacketSize;
+
+    auto wakePacket = reinterpret_cast<PNDIS_PM_WAKE_PACKET>((PUCHAR)wakeReason + ALIGN_UP_BY(NDIS_SIZEOF_PM_WAKE_REASON_REVISION_1, 8));
+    wakePacket->Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+    wakePacket->Header.Revision = NDIS_PM_WAKE_PACKET_REVISION_1;
+    wakePacket->Header.Size = NDIS_SIZEOF_PM_WAKE_PACKET_REVISION_1;
+    wakePacket->PatternId = Reason->PatternId;
+    wakePacket->OriginalPacketSize = Reason->OriginalPacketSize;
+    wakePacket->SavedPacketSize = static_cast<ULONG>(savedPacketSize);
+    wakePacket->SavedPacketOffset = ALIGN_UP_BY(NDIS_SIZEOF_PM_WAKE_PACKET_REVISION_1, 8);
+
+    PUCHAR data = (PUCHAR)wakePacket + ALIGN_UP_BY(NDIS_SIZEOF_PM_WAKE_PACKET_REVISION_1, 8);
+    RtlCopyMemory(data, wakePacketBuffer, savedPacketSize);
+
+    auto wakeIndication = MakeNdisStatusIndication(
+        m_NdisAdapterHandle, NDIS_STATUS_PM_WAKE_REASON, *wakeReason);
+    wakeIndication.StatusBufferSize = wakeReasonSize;
+
+    NdisMIndicateStatusEx(m_NdisAdapterHandle, &wakeIndication);
+}
+
+_Use_decl_annotations_
+void NxAdapter::ReportWakeReasonMediaChange(
+    NET_IF_MEDIA_CONNECT_STATE Reason
+) const
+{
+    Verifier_VerifyNetPowerUpTransition(m_NxDriver->GetPrivateGlobals(), GetNxDeviceFromHandle(m_Device));
+    NDIS_PM_WAKE_REASON wakeReason;
+    wakeReason.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+    wakeReason.Header.Revision = NDIS_PM_WAKE_REASON_REVISION_1;
+    wakeReason.Header.Size = NDIS_SIZEOF_PM_WAKE_REASON_REVISION_1;
+    switch (Reason)
+    {
+    case MediaConnectStateDisconnected:
+        wakeReason.WakeReason = NdisWakeReasonMediaDisconnect;
+        break;
+    case MediaConnectStateConnected:
+        wakeReason.WakeReason = NdisWakeReasonMediaConnect;
+        break;
+    default:
+        Verifier_ReportViolation(
+            m_NxDriver->GetPrivateGlobals(),
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidNetAdapterWakeReasonMediaChange,
+            0,
+            0);
+    }
+    wakeReason.InfoBufferOffset = 0;
+    wakeReason.InfoBufferSize = 0;
+    auto wakeIndication = MakeNdisStatusIndication(
+        m_NdisAdapterHandle, NDIS_STATUS_PM_WAKE_REASON, wakeReason);
+
+    NdisMIndicateStatusEx(m_NdisAdapterHandle, &wakeIndication);
+}
+
+_Use_decl_annotations_
+NTSTATUS
+NxAdapter::PowerReference(
+    bool WaitForD0
+)
+{
+    const auto powerReferenceStatus = WdfDeviceStopIdleWithTag(
+        GetDevice(),
+        WaitForD0,
+        m_tag);
+
+    m_Flags.PowerReferenceAcquired = NT_SUCCESS(powerReferenceStatus);
+
+    CX_LOG_IF_NOT_NT_SUCCESS_MSG(powerReferenceStatus, "Power reference on parent device failed. WDFDEVICE: %p, NETADAPTER: %p",
+        GetDevice(),
+        GetFxObject());
+
+    return powerReferenceStatus;
+}
+
+void
+NxAdapter::PowerDereference(
+    void
+)
+{
+    if (m_Flags.PowerReferenceAcquired)
+    {
+        WdfDeviceResumeIdleWithTag(
+            GetDevice(),
+            m_tag);
+
+        m_Flags.PowerReferenceAcquired = FALSE;
+    }
 }

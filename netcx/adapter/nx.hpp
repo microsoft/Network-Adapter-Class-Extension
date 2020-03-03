@@ -30,10 +30,8 @@ Abstract:
 #include <preview/netadaptercx.h>
 
 #include <net/ring.h>
-#include <netpacketpool.h>
 
 #include <netadapter_p.h>
-#include <netpacketextension_p.h>
 #include <netadapterextension_p.h>
 #include <netdevice_p.h>
 
@@ -41,6 +39,7 @@ Abstract:
 #include <ndiswdf.h>
 
 #include <KMacros.h>
+#include <knew.h>
 
 #include <NxTrace.hpp>
 #include <NxTraceLogging.hpp>

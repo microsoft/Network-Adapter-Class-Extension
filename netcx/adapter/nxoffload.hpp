@@ -90,8 +90,9 @@ public:
 
     virtual
     NTSTATUS
-    RegisterPacketExtension(
-        _In_ OffloadType OffloadType
+    RegisterExtension(
+        _In_ OffloadType OffloadType,
+        _In_ NxOffloadBase const * Offload
         ) = 0;
 
     virtual
@@ -120,8 +121,9 @@ public:
     );
 
     NTSTATUS
-    RegisterPacketExtension(
-        _In_ OffloadType OffloadType
+    RegisterExtension(
+        _In_ OffloadType OffloadType,
+        _In_ NxOffloadBase const * Offload
     );
 
     NETADAPTER
@@ -225,8 +227,28 @@ public:
     );
 
     NTSTATUS
-    RegisterPacketExtensions(
+    RegisterExtensions(
         void
+    );
+
+    void
+    SetRscHardwareCapabilities(
+        _In_ NET_ADAPTER_OFFLOAD_RSC_CAPABILITIES const * HardwareCapabilities
+    );
+
+    void
+    GetRscHardwareCapabilities(
+        _Out_ NET_CLIENT_OFFLOAD_RSC_CAPABILITIES * HardwareCapabilities
+    ) const;
+
+    void
+    GetRscDefaultCapabilities(
+        _Out_ NET_CLIENT_OFFLOAD_RSC_CAPABILITIES * DefaultCapabilities
+    ) const;
+
+    void
+    SetRscActiveCapabilities(
+        _In_ NET_CLIENT_OFFLOAD_RSC_CAPABILITIES const * ActiveCapabilities
     );
 };
 

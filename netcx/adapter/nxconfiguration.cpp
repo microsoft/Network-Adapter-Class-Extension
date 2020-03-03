@@ -110,7 +110,7 @@ NxConfiguration::~NxConfiguration()
     }
 }
 
-VOID
+void
 NxConfiguration::_EvtCleanup(
     _In_  WDFOBJECT Configuration
 )
@@ -290,7 +290,7 @@ Routine Description:
 
 NTSTATUS
 NxConfiguration::Open(
-    VOID
+    void
 )
 /*++
 Routine Description:
@@ -390,18 +390,18 @@ Routine Description:
     return status;
 }
 
-VOID
+void
 NxConfiguration::DeleteFromFailedOpen(
-    VOID
+    void
 )
 {
     NT_ASSERT(m_NdisConfigurationHandle == NULL);
     WdfObjectDelete(GetFxObject());
 }
 
-VOID
+void
 NxConfiguration::Close(
-    VOID
+    void
 )
 {
     //
@@ -428,7 +428,7 @@ NxConfiguration::AddAttributes(
 
 RECORDER_LOG
 NxConfiguration::GetRecorderLog(
-    VOID
+    void
 )
 {
     if (m_IsDeviceConfig)
@@ -574,21 +574,27 @@ Arguments:
         StringAttributes->ParentObject = GetFxObject();
     }
 
+    NTSTATUS status;
+
     if (m_IsDeviceConfig)
     {
         CX_RETURN_IF_NOT_NT_SUCCESS(WdfStringCreate(NULL,
             StringAttributes,
             WdfString));
 
-        if (!NT_SUCCESS(WdfRegistryQueryString(m_Key, ValueName, *WdfString)))
+        status = WdfRegistryQueryString(m_Key, ValueName, *WdfString);
+        if (!NT_SUCCESS(status))
         {
+            LogError(GetRecorderLog(), FLAG_CONFIGURATION,
+                "WdfRegistryQueryString failed %!STATUS!", status);
+
             WdfObjectDelete(*WdfString);
+            return status;
         }
 
         return STATUS_SUCCESS;
     }
 
-    NTSTATUS status;
     PNDIS_CONFIGURATION_PARAMETER ndisConfigurationParam;
 
     CX_RETURN_IF_NOT_NT_SUCCESS(
@@ -733,7 +739,7 @@ Arguments:
 
     NTSTATUS status;
     PNDIS_CONFIGURATION_PARAMETER ndisConfigurationParam;
-    PVOID buffer;
+    void * buffer;
 
     CX_RETURN_IF_NOT_NT_SUCCESS(
         ReadConfiguration(
@@ -806,7 +812,7 @@ Returns:
 {
     NTSTATUS status;
     NDIS_STATUS ndisStatus;
-    PVOID networkAddressBuffer;
+    void * networkAddressBuffer;
     UINT resultLength;
 
     NdisReadNetworkAddress(&ndisStatus,
@@ -955,7 +961,7 @@ _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS
 NxConfiguration::AssignBinary(
     _In_                                PCUNICODE_STRING    ValueName,
-    _In_reads_bytes_(BufferLength)      PVOID               Buffer,
+    _In_reads_bytes_(BufferLength)      void *               Buffer,
     _In_                                ULONG               BufferLength
 )
 /*++

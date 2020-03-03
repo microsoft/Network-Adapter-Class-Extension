@@ -3,42 +3,13 @@
 #include "NxXlatPrecomp.hpp"
 #include "NxXlatCommon.hpp"
 
-#include <ndisoidtypes.h>
+#include <ndis/oidrequesttypes.h>
+#include <ndis/status_p.h>
 
 #include "NxOffload.tmh"
 #include "NxOffload.hpp"
 
 #include "NxTranslationApp.hpp"
-
-#ifdef _KERNEL_MODE
-#include <ntddndis.h>
-
-_IRQL_requires_max_(HIGH_LEVEL)
-static
-NTSTATUS
-NdisConvertNdisStatusToNtStatus(NDIS_STATUS NdisStatus)
-{
-    if (NT_SUCCESS(NdisStatus) &&
-        NdisStatus != NDIS_STATUS_SUCCESS &&
-        NdisStatus != NDIS_STATUS_PENDING &&
-        NdisStatus != NDIS_STATUS_INDICATION_REQUIRED) {
-
-        // Case where an NDIS error is incorrectly mapped as a success by NT_SUCCESS macro
-        return STATUS_UNSUCCESSFUL;
-    } else {
-        switch (NdisStatus)
-        {
-        case NDIS_STATUS_BUFFER_TOO_SHORT:
-            return STATUS_BUFFER_TOO_SMALL;
-            break;
-        default:
-            return (NTSTATUS) NdisStatus;
-            break;
-        }
-    }
-}
-
-#endif // _KERNEL_MODE
 
 _Use_decl_annotations_
 NxTaskOffload::NxTaskOffload(
@@ -97,6 +68,26 @@ NxTaskOffload::Initialize(
         &m_activeLsoCapabilities);
 
     //
+    // RSC hardware and default capabilities to indicate to NDIS
+    //
+
+    NET_CLIENT_OFFLOAD_RSC_CAPABILITIES rscHardwareCapabilities = {
+        sizeof(NET_CLIENT_OFFLOAD_RSC_CAPABILITIES),
+    };
+
+    NET_CLIENT_OFFLOAD_RSC_CAPABILITIES rscDefaultCapabilities = {
+        sizeof(NET_CLIENT_OFFLOAD_RSC_CAPABILITIES)
+    };
+
+    m_dispatch.GetRscHardwareCapabilities(m_app.GetAdapter(), &rscHardwareCapabilities);
+    m_dispatch.GetRscDefaultCapabilities(m_app.GetAdapter(), &rscDefaultCapabilities);
+    m_activeRscCapabilities = rscDefaultCapabilities;
+
+    m_dispatch.SetRscActiveCapabilities(
+        m_app.GetAdapter(),
+        &m_activeRscCapabilities);
+
+    //
     // Construct the NDIS_OFFLOAD structure encapsulating all offloads
     //
 
@@ -108,6 +99,12 @@ NxTaskOffload::Initialize(
         ndisLsoV1Capabilities,
         ndisLsoV2Capabilities);
 
+    NDIS_TCP_RECV_SEG_COALESCE_OFFLOAD ndisRscCapabilities = {};
+
+    TranslateRscCapabilities(
+        rscHardwareCapabilities,
+        ndisRscCapabilities);
+
     NDIS_OFFLOAD hardwareCapabilties = {
         {
             NDIS_OBJECT_TYPE_OFFLOAD,
@@ -117,7 +114,10 @@ NxTaskOffload::Initialize(
         TranslateChecksumCapabilities(checksumHardwareCapabilities),
         ndisLsoV1Capabilities,
         {},
-        ndisLsoV2Capabilities
+        ndisLsoV2Capabilities,
+        0,
+        {},
+        ndisRscCapabilities
     };
 
     ndisLsoV1Capabilities = {};
@@ -128,6 +128,13 @@ NxTaskOffload::Initialize(
         ndisLsoV1Capabilities,
         ndisLsoV2Capabilities);
 
+    ndisRscCapabilities = {};
+
+    TranslateRscCapabilities(
+        rscDefaultCapabilities,
+        ndisRscCapabilities
+        );
+
     NDIS_OFFLOAD defaultCapabilties = {
         {
             NDIS_OBJECT_TYPE_OFFLOAD,
@@ -137,10 +144,103 @@ NxTaskOffload::Initialize(
         TranslateChecksumCapabilities(checksumDefaultCapabilities),
         ndisLsoV1Capabilities,
         {},
-        ndisLsoV2Capabilities
+        ndisLsoV2Capabilities,
+        0,
+        {},
+        ndisRscCapabilities
     };
 
     return SetNdisMiniportOffloadAttributes(hardwareCapabilties, defaultCapabilties); 
+}
+
+_Use_decl_annotations_
+NTSTATUS
+NxTaskOffload::CheckActiveCapabilities(
+    NDIS_OFFLOAD_PARAMETERS const &OffloadParameters
+) const
+{
+    // Get*DefaultCapabilities() provides the intersection of hardware capabilities
+    // advertised by the client driver and the capabilities stored in the registry
+    // through advanced keywords. We need to ensure that we do not change the 
+    // capabilities when it is not consistent with the default values.
+
+    NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES checksumCapabilities = {};
+    m_dispatch.GetChecksumDefaultCapabilities(m_app.GetAdapter(), &checksumCapabilities);
+
+    if ((checksumCapabilities.IPv4 == FALSE &&
+        OffloadParameters.IPv4Checksum != NDIS_OFFLOAD_PARAMETERS_TX_RX_DISABLED &&
+        OffloadParameters.IPv4Checksum != NDIS_OFFLOAD_PARAMETERS_NO_CHANGE) ||
+        (checksumCapabilities.IPv4 == TRUE &&
+        OffloadParameters.IPv4Checksum == NDIS_OFFLOAD_PARAMETERS_TX_RX_DISABLED))
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if ((checksumCapabilities.Tcp == FALSE && 
+        OffloadParameters.TCPIPv4Checksum != NDIS_OFFLOAD_PARAMETERS_TX_RX_DISABLED &&
+        OffloadParameters.TCPIPv6Checksum != NDIS_OFFLOAD_PARAMETERS_TX_RX_DISABLED &&
+        OffloadParameters.TCPIPv4Checksum != NDIS_OFFLOAD_PARAMETERS_NO_CHANGE &&
+        OffloadParameters.TCPIPv6Checksum != NDIS_OFFLOAD_PARAMETERS_NO_CHANGE) ||
+        ((checksumCapabilities.Tcp == TRUE) && 
+        (OffloadParameters.TCPIPv4Checksum == NDIS_OFFLOAD_PARAMETERS_TX_RX_DISABLED ||
+        OffloadParameters.TCPIPv6Checksum == NDIS_OFFLOAD_PARAMETERS_TX_RX_DISABLED)))
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if ((checksumCapabilities.Udp == FALSE && 
+        OffloadParameters.UDPIPv4Checksum != NDIS_OFFLOAD_PARAMETERS_TX_RX_DISABLED &&
+        OffloadParameters.UDPIPv6Checksum != NDIS_OFFLOAD_PARAMETERS_TX_RX_DISABLED &&
+        OffloadParameters.UDPIPv4Checksum != NDIS_OFFLOAD_PARAMETERS_NO_CHANGE &&
+        OffloadParameters.UDPIPv6Checksum != NDIS_OFFLOAD_PARAMETERS_NO_CHANGE) ||
+        ((checksumCapabilities.Udp == TRUE) && 
+        (OffloadParameters.UDPIPv4Checksum == NDIS_OFFLOAD_PARAMETERS_TX_RX_DISABLED ||
+        OffloadParameters.UDPIPv6Checksum == NDIS_OFFLOAD_PARAMETERS_TX_RX_DISABLED)))
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    NET_CLIENT_OFFLOAD_LSO_CAPABILITIES lsoCapabilities = {};
+    m_dispatch.GetLsoDefaultCapabilities(m_app.GetAdapter(), &lsoCapabilities);
+
+    if ((lsoCapabilities.IPv4 == FALSE && 
+        OffloadParameters.LsoV1 == NDIS_OFFLOAD_PARAMETERS_LSOV1_ENABLED &&
+        OffloadParameters.LsoV2IPv4 == NDIS_OFFLOAD_PARAMETERS_LSOV2_ENABLED) ||
+        ((lsoCapabilities.IPv4 == TRUE) && 
+        (OffloadParameters.LsoV1 == NDIS_OFFLOAD_PARAMETERS_LSOV1_DISABLED ||
+        OffloadParameters.LsoV2IPv4 == NDIS_OFFLOAD_PARAMETERS_LSOV2_DISABLED)))
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if ((lsoCapabilities.IPv6 == FALSE &&
+        OffloadParameters.LsoV2IPv6 == NDIS_OFFLOAD_PARAMETERS_LSOV2_ENABLED) ||
+        (lsoCapabilities.IPv6 == TRUE &&
+        OffloadParameters.LsoV2IPv6 == NDIS_OFFLOAD_PARAMETERS_LSOV2_DISABLED))
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    NET_CLIENT_OFFLOAD_RSC_CAPABILITIES rscCapabilities = {};
+    m_dispatch.GetRscDefaultCapabilities(m_app.GetAdapter(), &rscCapabilities);
+
+    if ((rscCapabilities.IPv4 == FALSE && 
+        OffloadParameters.RscIPv4 == NDIS_OFFLOAD_PARAMETERS_RSC_ENABLED) ||
+        (rscCapabilities.IPv4 == TRUE && 
+        OffloadParameters.RscIPv4 == NDIS_OFFLOAD_PARAMETERS_RSC_DISABLED))
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if ((rscCapabilities.IPv6 == FALSE && 
+        OffloadParameters.RscIPv6 == NDIS_OFFLOAD_PARAMETERS_RSC_ENABLED) ||
+        (rscCapabilities.IPv6 == TRUE && 
+        OffloadParameters.RscIPv6 == NDIS_OFFLOAD_PARAMETERS_RSC_DISABLED))
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    return STATUS_SUCCESS;
 }
 
 _Use_decl_annotations_
@@ -157,16 +257,16 @@ NxTaskOffload::SetActiveCapabilities(
         length < NDIS_SIZEOF_OFFLOAD_PARAMETERS_REVISION_3,
         "InformationBufferLength too small.");
 
-    CX_RETURN_NTSTATUS_IF_MSG(
-        STATUS_INVALID_PARAMETER,
-        ! (buffer + length > buffer),
-        "InformationBuffer + InformationBufferLength results in integer overflow.");
-
     auto const parameters = reinterpret_cast<NDIS_OFFLOAD_PARAMETERS const *>(buffer);
+
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        CheckActiveCapabilities(*parameters),
+        "OID_TCP_OFFLOAD_PARAMETERS is trying to change capabilities to be inconsistent with the hardware and registry capabilities");
 
     return SetActiveCapabilities(
         TranslateChecksumCapabilities(*parameters),
-        TranslateLsoCapabilities(*parameters)
+        TranslateLsoCapabilities(*parameters),
+        TranslateRscCapabilities(*parameters)
         );
 }
 
@@ -406,10 +506,43 @@ NxTaskOffload::TranslateLsoCapabilities(
 }
 
 _Use_decl_annotations_
+NET_CLIENT_OFFLOAD_RSC_CAPABILITIES
+NxTaskOffload::TranslateRscCapabilities(
+    NDIS_OFFLOAD_PARAMETERS const &OffloadParameters
+) const
+{
+    NET_CLIENT_OFFLOAD_RSC_CAPABILITIES translatedCapabilities = m_activeRscCapabilities;
+
+    if (OffloadParameters.RscIPv4 != NDIS_OFFLOAD_PARAMETERS_NO_CHANGE)
+    {
+        translatedCapabilities.IPv4 = OffloadParameters.RscIPv4 == NDIS_OFFLOAD_PARAMETERS_RSC_ENABLED;
+    }
+
+    if (OffloadParameters.RscIPv6 != NDIS_OFFLOAD_PARAMETERS_NO_CHANGE)
+    {
+        translatedCapabilities.IPv6 = OffloadParameters.RscIPv6 == NDIS_OFFLOAD_PARAMETERS_RSC_ENABLED;
+    }
+
+    return translatedCapabilities;
+}
+
+_Use_decl_annotations_
+void
+NxTaskOffload::TranslateRscCapabilities(
+    NET_CLIENT_OFFLOAD_RSC_CAPABILITIES const &Capabilities,
+    NDIS_TCP_RECV_SEG_COALESCE_OFFLOAD &NdisRscCapabilities
+) const
+{
+    NdisRscCapabilities.IPv4.Enabled = Capabilities.IPv4;
+    NdisRscCapabilities.IPv6.Enabled = Capabilities.IPv6;
+}
+
+_Use_decl_annotations_
 NTSTATUS
 NxTaskOffload::SetActiveCapabilities(
     NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES const & ChecksumCapabilities,
-    NET_CLIENT_OFFLOAD_LSO_CAPABILITIES const & LsoCapabilities
+    NET_CLIENT_OFFLOAD_LSO_CAPABILITIES const & LsoCapabilities,
+    NET_CLIENT_OFFLOAD_RSC_CAPABILITIES const & RscCapabilities
 )
 {
     m_dispatch.SetChecksumActiveCapabilities(
@@ -424,6 +557,12 @@ NxTaskOffload::SetActiveCapabilities(
 
     m_activeLsoCapabilities = LsoCapabilities;
 
+    m_dispatch.SetRscActiveCapabilities(
+        m_app.GetAdapter(),
+        &RscCapabilities);
+
+    m_activeRscCapabilities = RscCapabilities;
+
     //
     // For all offloads construct the NDIS_OFFLOAD structure to send to NDIS
     //
@@ -437,6 +576,12 @@ NxTaskOffload::SetActiveCapabilities(
         ndisLsoV2Capabilities
         );
 
+    NDIS_TCP_RECV_SEG_COALESCE_OFFLOAD ndisRscCapabilities = {};
+
+    TranslateRscCapabilities(
+        RscCapabilities,
+        ndisRscCapabilities);
+
     NDIS_OFFLOAD offloadCapabilties = {
         {
             NDIS_OBJECT_TYPE_OFFLOAD,
@@ -446,7 +591,10 @@ NxTaskOffload::SetActiveCapabilities(
         TranslateChecksumCapabilities(ChecksumCapabilities),
         ndisLsoV1Capabilities,
         {},
-        ndisLsoV2Capabilities
+        ndisLsoV2Capabilities,
+        0,
+        {},
+        ndisRscCapabilities
     };
 
     return SendNdisTaskOffloadStatusIndication(offloadCapabilties);
@@ -472,8 +620,9 @@ NxTaskOffload::SetEncapsulation(
         "InformationBuffer + InformationBufferLength results in integer overflow.");
 
     auto const encapsulation = reinterpret_cast<NDIS_OFFLOAD_ENCAPSULATION const *>(buffer);
+    auto const offloadsSupported = (IsChecksumOffloadSupported() || IsLsoOffloadSupported() || IsRscOffloadSupported());
 
-    if (!IsChecksumOffloadSupported() && !IsLsoOffloadSupported())
+    if (!offloadsSupported)
     {
         //
         // Offloads are not supported
@@ -498,13 +647,22 @@ NxTaskOffload::SetEncapsulation(
                 FALSE,
                 0,
                 0
+            },
+            {
+                sizeof(NET_CLIENT_OFFLOAD_RSC_CAPABILITIES),
+                FALSE,
+                FALSE,
+                FALSE
             });
     }
 
     if (encapsulation->IPv4.Enabled == NDIS_OFFLOAD_SET_ON && 
         encapsulation->IPv6.Enabled == NDIS_OFFLOAD_SET_ON)
     {
-        return SetActiveCapabilities(m_activeChecksumCapabilities, m_activeLsoCapabilities);
+        return SetActiveCapabilities(m_activeChecksumCapabilities,
+        m_activeLsoCapabilities,
+        m_activeRscCapabilities
+        );
     }
 
     if (encapsulation->IPv6.Enabled == NDIS_OFFLOAD_SET_OFF)
@@ -517,6 +675,12 @@ NxTaskOffload::SetEncapsulation(
                 false,
                 m_activeLsoCapabilities.MaximumOffloadSize,
                 m_activeLsoCapabilities.MinimumSegmentCount
+            },
+            {
+                sizeof(NET_CLIENT_OFFLOAD_RSC_CAPABILITIES),
+                m_activeRscCapabilities.IPv4,
+                false,
+                m_activeRscCapabilities.Timestamp
             });
     }
 
@@ -535,6 +699,12 @@ NxTaskOffload::SetEncapsulation(
                 m_activeLsoCapabilities.IPv6,
                 m_activeLsoCapabilities.MaximumOffloadSize,
                 m_activeLsoCapabilities.MinimumSegmentCount
+            },
+            {
+                sizeof(NET_CLIENT_OFFLOAD_RSC_CAPABILITIES),
+                false,
+                m_activeRscCapabilities.IPv6,
+                m_activeRscCapabilities.Timestamp
             });
     }
 
@@ -545,35 +715,36 @@ _Use_decl_annotations_
 bool
 NxTaskOffload::IsChecksumOffloadSupported(
     void
-)
+) const
 {
     NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES checksumHardwareCapabilities = {};
     m_dispatch.GetChecksumHardwareCapabilities(m_app.GetAdapter(), &checksumHardwareCapabilities);
 
-    if (checksumHardwareCapabilities.IPv4 == false && 
-        checksumHardwareCapabilities.Tcp == false && 
-        checksumHardwareCapabilities.Udp == false )
-    {
-        return false;
-    }
-
-    return true;
+    return checksumHardwareCapabilities.IPv4 ||
+        checksumHardwareCapabilities.Tcp ||
+        checksumHardwareCapabilities.Udp;
 }
 
 _Use_decl_annotations_
 bool
 NxTaskOffload::IsLsoOffloadSupported(
     void
-)
+) const
 {
     NET_CLIENT_OFFLOAD_LSO_CAPABILITIES lsoHardwareCapabilities = {};
     m_dispatch.GetLsoHardwareCapabilities(m_app.GetAdapter(), &lsoHardwareCapabilities);
 
-    if (lsoHardwareCapabilities.IPv4 == false && 
-        lsoHardwareCapabilities.IPv6 == false)
-    {
-        return false;
-    }
+    return lsoHardwareCapabilities.IPv4 || lsoHardwareCapabilities.IPv6;
+}
 
-    return true;
+_Use_decl_annotations_
+bool
+NxTaskOffload::IsRscOffloadSupported(
+    void
+) const
+{
+    NET_CLIENT_OFFLOAD_RSC_CAPABILITIES rscHardwareCapabilities = {};
+    m_dispatch.GetRscHardwareCapabilities(m_app.GetAdapter(), &rscHardwareCapabilities);
+
+    return rscHardwareCapabilities.IPv4 || rscHardwareCapabilities.IPv6;
 }

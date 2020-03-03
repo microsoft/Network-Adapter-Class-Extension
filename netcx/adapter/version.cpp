@@ -109,16 +109,16 @@ Routine Description:
 static
 NTSTATUS
 NetAdapterCxInitialize(
-    VOID
+    void
 )
 {
     return STATUS_SUCCESS;
 }
 
 static
-VOID
+void
 NetAdapterCxDeinitialize(
-    VOID
+    void
 )
 {
 }
@@ -166,15 +166,16 @@ Return Value:
         case MAKEVER(1,1):
         case MAKEVER(1,2):
         case MAKEVER(1,3):
+        case MAKEVER(1,4):
             DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                 "\n\n"
                 "**********************************************************\n"
                 "* NetAdapterCx 1.%u (Preview) client detected.            \n"
-                "* Recompile your source code and target NetAdapterCx 1.%u.\n"
+                "* Recompile your source code and target NetAdapterCx 2.%u.\n"
                 "**********************************************************\n"
                 "\n",
                 ClassInfo->Version.Minor,
-                NETADAPTER_CURRENT_MINOR_VERSION);
+                NETCX_ADAPTER_MINOR_VERSION);
 
             __fallthrough;
 
@@ -182,7 +183,7 @@ Return Value:
 
             return STATUS_NOT_SUPPORTED;
 
-        case MAKEVER(NETADAPTER_CURRENT_MAJOR_VERSION, NETADAPTER_CURRENT_MINOR_VERSION):
+        case MAKEVER(NETCX_ADAPTER_MAJOR_VERSION, NETCX_ADAPTER_MINOR_VERSION):
 
             if (ClassInfo->FunctionTableCount != NetFunctionTableNumEntries &&
                 ClassInfo->Version.Build > 0)
@@ -220,7 +221,7 @@ Return Value:
     #pragma warning(suppress:22107) //The analysis code identify buffer size
     RtlCopyMemory(ClassInfo->FunctionTable,
                   &NetVersion.Functions,
-                  ClassInfo->FunctionTableCount * sizeof(PVOID));
+                  ClassInfo->FunctionTableCount * sizeof(void *));
 
     //
     // Allocate driver globals
@@ -242,11 +243,11 @@ Return Value:
     // verification checks automatically
     //
     pGlobals->CxVerifierOn = (0 != MmIsDriverVerifyingByAddress(
-                                            (PVOID)(ClassInfo->FunctionTable)));
+                                            (void *)(ClassInfo->FunctionTable)));
 
 
     if (pGlobals->CxVerifierOn &&
-        ! MmIsDriverVerifyingByAddress((PVOID)&DriverEntry))
+        ! MmIsDriverVerifyingByAddress((void *)&DriverEntry))
     {
         //
         // If DV is enabled on client but not on Cx, break into the debugger
@@ -268,7 +269,7 @@ Return Value:
 }
 
 static
-VOID
+void
 NetAdapterCxUnbindClient(
     WDF_CLASS_BIND_INFO * ClassInfo,
     WDF_COMPONENT_GLOBALS * ClientGlobals
@@ -305,7 +306,7 @@ Arguments:
 
     ExFreePool(pGlobals);
 
-    *((PVOID*)ClassInfo->ClassBindInfo) = NULL;
+    *((void **)ClassInfo->ClassBindInfo) = NULL;
 }
 
 static
@@ -375,9 +376,9 @@ Arguments:
 }
 
 static
-VOID
+void
 DeleteControlDevice(
-    VOID
+    void
 )
 /*++
 
@@ -403,8 +404,8 @@ static WDF_CLASS_LIBRARY_INFO WdfClassLibraryInfo =
 {
     sizeof(WDF_CLASS_LIBRARY_INFO), // Size
     {
-        NETADAPTER_CURRENT_MAJOR_VERSION,   // Major
-        NETADAPTER_CURRENT_MINOR_VERSION,   // Minor
+        NETCX_ADAPTER_MAJOR_VERSION,   // Major
+        NETCX_ADAPTER_MINOR_VERSION,   // Minor
         0,                                  // Build
     },                                      // Version
     NetAdapterCxInitialize,                 // ClassLibraryInitialize

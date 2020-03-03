@@ -34,13 +34,13 @@ Return Value:
 
 --*/
 {
-    auto privateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
-    Verifier_VerifyExtensionGlobals(privateGlobals);
-    Verifier_VerifyIrqlPassive(privateGlobals);
-    Verifier_VerifyNotNull(privateGlobals, AdapterInit);
+    Verifier_VerifyExtensionGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyNotNull(nxPrivateGlobals, AdapterInit);
 
-    auto adapterInit = GetAdapterInitFromHandle(privateGlobals, AdapterInit);
+    auto adapterInit = GetAdapterInitFromHandle(nxPrivateGlobals, AdapterInit);
     return adapterInit->CreatedAdapter;
 }
 
@@ -86,21 +86,19 @@ Remarks
 
 --*/
 {
-    auto privateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    nxPrivateGlobals->ExtensionType = MediaExtensionTypeFromClientGlobals(nxPrivateGlobals->ClientDriverGlobals);
 
-    Verifier_VerifyPrivateGlobals(privateGlobals);
-    Verifier_VerifyIsMediaExtension(privateGlobals);
-    Verifier_VerifyIrqlPassive(privateGlobals);
-    Verifier_VerifyNotNull(privateGlobals, AdapterInit);
+    Verifier_VerifyExtensionGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyNotNull(nxPrivateGlobals, AdapterInit);
 
-    privateGlobals->IsMediaExtension = true;
+    auto adapterInit = GetAdapterInitFromHandle(nxPrivateGlobals, AdapterInit);
 
-    auto adapterInit = GetAdapterInitFromHandle(privateGlobals, AdapterInit);
-
-    Verifier_VerifyAdapterInitNotUsed(privateGlobals, adapterInit);
+    Verifier_VerifyAdapterInitNotUsed(nxPrivateGlobals, adapterInit);
 
     AdapterExtensionInit extensionConfig;
-    extensionConfig.PrivateGlobals = privateGlobals;
+    extensionConfig.PrivateGlobals = nxPrivateGlobals;
 
     if (!adapterInit->AdapterExtensions.append(extensionConfig))
         return nullptr;
@@ -114,11 +112,11 @@ Remarks
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
-VOID
-NETEXPORT(NetAdapterExtensionInitSetNetRequestPreprocessCallback)(
+void
+NETEXPORT(NetAdapterExtensionInitSetOidRequestPreprocessCallback)(
     _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _Inout_ NETADAPTEREXT_INIT * AdapterExtensionInit,
-    _In_ PFN_NET_ADAPTER_PRE_PROCESS_NET_REQUEST PreprocessNetRequest
+    _In_ PFN_NET_ADAPTER_PRE_PROCESS_OID_REQUEST PreprocessOidRequest
 )
 /*++
 Routine Description:
@@ -129,7 +127,7 @@ Arguments:
 
     Globals - Client driver's globals
     AdapterExtensionInit - Handle allocated with a call to NetAdapterExtensionInitAllocate
-    PreprocessNetRequest - Pointer to a EVT_NET_ADAPTER_PRE_PROCESS_NET_REQUEST function
+    PreprocessOidRequest - Pointer to a EVT_NET_ADAPTER_PRE_PROCESS_OID_REQUEST function
 
 Return Value:
 
@@ -141,55 +139,51 @@ Remarks
 
 --*/
 {
-    auto privateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
-    Verifier_VerifyExtensionGlobals(privateGlobals);
-    Verifier_VerifyIrqlPassive(privateGlobals);
-    Verifier_VerifyNotNull(privateGlobals, AdapterExtensionInit);
-    Verifier_VerifyNotNull(privateGlobals, PreprocessNetRequest);
+    Verifier_VerifyExtensionGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyNotNull(nxPrivateGlobals, AdapterExtensionInit);
+    Verifier_VerifyNotNull(nxPrivateGlobals, PreprocessOidRequest);
 
-    auto adapterExtensionInit = GetAdapterExtensionInitFromHandle(privateGlobals, AdapterExtensionInit);
-    adapterExtensionInit->NetRequestPreprocessCallback = PreprocessNetRequest;
+    auto adapterExtensionInit = GetAdapterExtensionInitFromHandle(nxPrivateGlobals, AdapterExtensionInit);
+    adapterExtensionInit->OidRequestPreprocessCallback = PreprocessOidRequest;
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
-VOID
-NETEXPORT(NetAdapterDispatchPreprocessedNetRequest)(
+void
+NETEXPORT(NetAdapterDispatchPreprocessedOidRequest)(
     _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETADAPTER Adapter,
-    _In_ NETREQUEST Request
+    _In_ NDIS_OID_REQUEST * Request,
+    _In_ WDFCONTEXT Context
 )
 /*++
 Routine Description:
 
-    Extension drivers call this API to return a preprocessed NETREQUEST to NetAdapterCx.
+    Extension drivers call this API to return a preprocessed OID request to NetAdapterCx.
 
 Arguments:
 
     Globals - Client driver's globals
     Adapter - NETADAPTER that received the OID for preprocessing
-    Request - NETREQUEST wrapping an OID request
-
-Return Value:
-
-    None
-
-Remarks
-
-    None
+    Request - NDIS OID request
+    DispatchContext - Internal framework context, opaque to client driver
 
 --*/
 {
-    auto privateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
-    Verifier_VerifyExtensionGlobals(privateGlobals);
-    Verifier_VerifyIrqlPassive(privateGlobals);
-    Verifier_VerifyNotNull(privateGlobals, Adapter);
-    Verifier_VerifyNotNull(privateGlobals, Request);
+    Verifier_VerifyExtensionGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyNotNull(nxPrivateGlobals, Adapter);
+    Verifier_VerifyNotNull(nxPrivateGlobals, Request);
 
     auto nxAdapter = GetNxAdapterFromHandle(Adapter);
-    nxAdapter->DispatchRequest(Request);
+    auto dispatchContext = static_cast<DispatchContext *>(Context);
+
+    nxAdapter->DispatchOidRequest(Request, dispatchContext);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -215,11 +209,11 @@ Return Value:
 
 --*/
 {
-    auto privateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
-    Verifier_VerifyExtensionGlobals(privateGlobals);
-    Verifier_VerifyIrqlPassive(privateGlobals);
-    Verifier_VerifyNotNull(privateGlobals, Adapter);
+    Verifier_VerifyExtensionGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyNotNull(nxPrivateGlobals, Adapter);
 
     // At the moment a NETADAPTER's parent is always a WDFDEVICE
     auto nxAdapter = GetNxAdapterFromHandle(Adapter);
@@ -247,13 +241,38 @@ Returns:
     The Mtu of the given NETADAPTER
   --*/
 {
-    auto privateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
-    Verifier_VerifyExtensionGlobals(privateGlobals);
-    Verifier_VerifyIrqlPassive(privateGlobals);
-    Verifier_VerifyNotNull(privateGlobals, Adapter);
+    Verifier_VerifyExtensionGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyNotNull(nxPrivateGlobals, Adapter);
 
     auto const nxAdapter = GetNxAdapterFromHandle(Adapter);
 
     return nxAdapter->GetMtuSize();
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+void
+NTAPI
+NETEXPORT(NetAdapterExtensionInitSetNdisPmCapabilities)(
+    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _Inout_ NETADAPTEREXT_INIT* AdapterExtensionInit,
+    _In_ CONST NET_ADAPTER_NDIS_PM_CAPABILITIES* Capabilities
+    )
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyExtensionGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, Capabilities);
+    Verifier_VerifyNdisPmCapabilities(nxPrivateGlobals, Capabilities);
+
+    auto adapterExtensionInit = GetAdapterExtensionInitFromHandle(nxPrivateGlobals, AdapterExtensionInit);
+
+    RtlCopyMemory(
+        &adapterExtensionInit->NdisPmCapabilities,
+        Capabilities,
+        Capabilities->Size);
 }

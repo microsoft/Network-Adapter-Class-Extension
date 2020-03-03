@@ -22,11 +22,16 @@ Abstract:
 #include "NxNblTranslation.hpp"
 #include "NxDma.hpp"
 #include "NxPerfTuner.hpp"
+#include "NxExtensions.hpp"
+#include "NxStatistics.hpp"
+
+#include <KArray.h>
 
 class NxTxXlat :
     public INxNblTx,
     public NxNonpagedAllocation<'xTxN'>
 {
+
 public:
 
     _IRQL_requires_(PASSIVE_LEVEL)
@@ -34,7 +39,8 @@ public:
         _In_ size_t QueueId,
         _In_ NET_CLIENT_DISPATCH const * Dispatch,
         _In_ NET_CLIENT_ADAPTER Adapter,
-        _In_ NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
+        _In_ NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch,
+        _In_ NxStatistics & Statistics
     ) noexcept;
 
     virtual
@@ -101,40 +107,77 @@ private:
 
     NxExecutionContext m_executionContext;
 
-    NET_CLIENT_DISPATCH const * m_dispatch = nullptr;
-    NET_CLIENT_ADAPTER m_adapter = nullptr;
-    NET_CLIENT_ADAPTER_DISPATCH const * m_adapterDispatch = nullptr;
-    NET_CLIENT_ADAPTER_PROPERTIES m_adapterProperties = {};
-    NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES m_datapathCapabilities = {};
-    NDIS_MEDIUM m_mediaType;
-    INxNblDispatcher *m_nblDispatcher = nullptr;
-    NxInterlockedFlag m_queueNotification;
-    NxNblQueue m_synchronizedNblQueue;
-    NxNblTranslationStats m_nblTranslationStats;
+    NET_CLIENT_DISPATCH const *
+        m_dispatch = nullptr;
 
-    NET_CLIENT_QUEUE m_queue = nullptr;
-    NET_CLIENT_QUEUE_DISPATCH const * m_queueDispatch = nullptr;
-    NET_EXTENSION m_checksumExtension = {};
-    NET_EXTENSION m_lsoExtension = {};
+    NET_CLIENT_ADAPTER
+        m_adapter = nullptr;
 
-    // allocated in Init
-    NET_RING_COLLECTION m_rings;
-    NxRingBuffer m_packetRing;
-    NxRingContext m_packetContext;
-    NxBounceBufferPool m_bounceBufferPool;
-    wistd::unique_ptr<NxDmaAdapter> m_dmaAdapter;
+    NET_CLIENT_ADAPTER_DISPATCH const *
+        m_adapterDispatch = nullptr;
+
+    NET_CLIENT_ADAPTER_PROPERTIES
+        m_adapterProperties = {};
+
+    NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES
+        m_datapathCapabilities = {};
+
+    NDIS_MEDIUM
+        m_mediaType;
+
+    INxNblDispatcher *
+        m_nblDispatcher = nullptr;
+
+    NxInterlockedFlag
+        m_queueNotification;
+
+    NxNblQueue
+        m_synchronizedNblQueue;
+
+    NxNblTranslationStats
+        m_nblTranslationStats;
+
+    NET_CLIENT_QUEUE
+        m_queue = nullptr;
+
+    NET_CLIENT_QUEUE_DISPATCH const *
+        m_queueDispatch = nullptr;
+
+    TxExtensions
+        m_extensions = {};
+
+    NET_RING_COLLECTION
+        m_rings;
+
+    NxRingBuffer
+        m_packetRing;
+
+    NxRingContext
+        m_packetContext;
+
+    NxBounceBufferPool
+        m_bounceBufferPool;
+
+    wistd::unique_ptr<NxDmaAdapter>
+        m_dmaAdapter;
 
     //
     // Datapath variables
     // All below will change as TransmitThread runs
     //
-    NET_BUFFER_LIST *m_currentNbl = nullptr;
-    NET_BUFFER *m_currentNetBuffer = nullptr;
+    NET_BUFFER_LIST *
+        m_currentNbl = nullptr;
+
+    NET_BUFFER *
+        m_currentNetBuffer = nullptr;
 
     // These are used to determine when to arm notifications
     // and halt queue operation
-    bool m_producedPackets = false;
-    bool m_completedPackets = false;
+    ULONG
+        m_producedPackets = 0;
+
+    ULONG
+        m_completedPackets = 0;
 
     struct ArmedNotifications
     {
@@ -151,63 +194,82 @@ private:
         };
     } m_lastArmedNotifications;
 
-    void
-    ArmNetBufferListArrivalNotification();
+    NxStatistics &
+        m_statistics;
 
     void
-    ArmAdapterTxNotification();
+    ArmNetBufferListArrivalNotification(
+        void
+    );
+
+    void
+    ArmAdapterTxNotification(
+        void
+    );
 
     ArmedNotifications
-    GetNotificationsToArm();
+    GetNotificationsToArm(
+        void
+    );
 
     // The high level operations of the NBL Tx translation
     void
-    PollNetBufferLists();
+    PollNetBufferLists(
+        void
+    );
 
     void
-    DrainCompletions();
+    DrainCompletions(
+        void
+    );
 
     void
-    TranslateNbls();
+    TranslateNbls(
+        void
+    );
 
     void
-    YieldToNetAdapter();
+    YieldToNetAdapter(
+        void
+    );
 
     void
-    WaitForWork();
+    UpdatePerfCounter(
+        void
+    );
+
+    void
+    WaitForWork(
+        void
+    );
 
     // These operations are used exclusively while
     // winding down the Tx path
     void
-    DropQueuedNetBufferLists();
+    DropQueuedNetBufferLists(
+        void
+    );
 
     void
     AbortNbls(
-        _In_opt_ NET_BUFFER_LIST *nblChain);
+        _In_opt_ NET_BUFFER_LIST * nblChain
+    );
 
     // drain queue
     PNET_BUFFER_LIST
-    DequeueNetBufferListQueue();
+    DequeueNetBufferListQueue(
+        void
+    );
 
     void
     ArmNotifications(
         _In_ ArmedNotifications reasons
     );
 
-    NTSTATUS
-    PreparePacketExtensions(
-        _Inout_ Rtl::KArray<NET_CLIENT_PACKET_EXTENSION>& addedPacketExtensions
+    void
+    SetupTxThreadProperties(
+        void
     );
-
-    void
-    GetPacketExtension(
-        PCWSTR ExtensionName,
-        ULONG ExtensionVersion,
-        NET_EXTENSION * Extension
-    ) const;
-
-    void
-    SetupTxThreadProperties();
 
 };
 

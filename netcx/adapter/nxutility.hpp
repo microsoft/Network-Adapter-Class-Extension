@@ -85,7 +85,7 @@ NDIS_STATUS_INDICATION_INIT(
 
     statusIndication->SourceHandle = sourceHandle;
     statusIndication->StatusCode = statusCode;
-    statusIndication->StatusBuffer = static_cast<PVOID>(const_cast<T*>(payload));
+    statusIndication->StatusBuffer = static_cast<void *>(const_cast<T*>(payload));
     statusIndication->StatusBufferSize = sizeof(*payload);
 }
 

@@ -5,6 +5,11 @@
 #include "NxPacketLayout.hpp"
 #include "NxPacketLayout.tmh"
 
+#include <net/ring.h>
+#include <net/fragment.h>
+#include <net/virtualaddress_p.h>
+#include <netiodef.h>
+
 #define IP_VERSION_4 4
 #define IP_VERSION_6 6
 
@@ -12,12 +17,15 @@ _Success_(return)
 bool
 NxGetPacketEtherType(
     _In_ NET_RING_COLLECTION const * descriptor,
+    _In_ NET_EXTENSION const & virtualAddressExtension,
     _In_ NET_PACKET const *packet,
     _Out_ USHORT *ethertype)
 {
     auto fr = NetRingCollectionGetFragmentRing(descriptor);
-    auto fragment = NetRingGetFragmentAtIndex(fr, packet->FragmentIndex);
-    auto buffer = (UCHAR const*)fragment->VirtualAddress + fragment->Offset;
+    auto const fragment = NetRingGetFragmentAtIndex(fr, packet->FragmentIndex);
+    auto const virtualAddress = NetExtensionGetFragmentVirtualAddress(
+        &virtualAddressExtension, packet->FragmentIndex);
+    auto buffer = (UCHAR const*)virtualAddress->VirtualAddress + fragment->Offset;
     auto bytesRemaining = (ULONG)fragment->ValidLength;
 
     if (bytesRemaining < sizeof(ETHERNET_HEADER))
@@ -63,7 +71,7 @@ ParseEthernetHeader(
 
     if (ethertype >= ETHERNET_TYPE_MINIMUM)
     {
-        layout.Layer2Type = NET_PACKET_LAYER2_TYPE_ETHERNET;
+        layout.Layer2Type = NetPacketLayer2TypeEthernet;
         layout.Layer2HeaderLength = sizeof(ETHERNET_HEADER);
         buffer += sizeof(ETHERNET_HEADER);
         bytesRemaining -= sizeof(ETHERNET_HEADER);
@@ -78,7 +86,7 @@ ParseEthernetHeader(
             snap->Oui[1] == SNAP_OUI &&
             snap->Oui[2] == SNAP_OUI)
         {
-            layout.Layer2Type = NET_PACKET_LAYER2_TYPE_ETHERNET;
+            layout.Layer2Type = NetPacketLayer2TypeEthernet;
             layout.Layer2HeaderLength = sizeof(ETHERNET_HEADER) + sizeof(SNAP_HEADER);
             buffer += sizeof(ETHERNET_HEADER) + sizeof(SNAP_HEADER);
             bytesRemaining -= sizeof(ETHERNET_HEADER) + sizeof(SNAP_HEADER);
@@ -87,23 +95,23 @@ ParseEthernetHeader(
         }
         else
         {
-            layout.Layer2Type = NET_PACKET_LAYER2_TYPE_UNSPECIFIED;
+            layout.Layer2Type = NetPacketLayer2TypeUnspecified;
             return;
         }
     }
     else
     {
-        layout.Layer2Type = NET_PACKET_LAYER2_TYPE_UNSPECIFIED;
+        layout.Layer2Type = NetPacketLayer2TypeUnspecified;
         return;
     }
 
     switch (ethertype)
     {
     case ETHERNET_TYPE_IPV4:
-        layout.Layer3Type = NET_PACKET_LAYER3_TYPE_IPV4_UNSPECIFIED_OPTIONS;
+        layout.Layer3Type = NetPacketLayer3TypeIPv4UnspecifiedOptions;
         break;
     case ETHERNET_TYPE_IPV6:
-        layout.Layer3Type = NET_PACKET_LAYER3_TYPE_IPV6_UNSPECIFIED_EXTENSIONS;
+        layout.Layer3Type = NetPacketLayer3TypeIPv6UnspecifiedExtensions;
         break;
     }
 }
@@ -118,16 +126,16 @@ ParseRawIPHeader(
     if (bytesRemaining < 1)
         return;
 
-    layout.Layer2Type = NET_PACKET_LAYER2_TYPE_NULL;
+    layout.Layer2Type = NetPacketLayer2TypeNull;
     layout.Layer2HeaderLength = 0;
 
     switch (buffer[0] >> 4)
     {
     case IP_VERSION_4:
-        layout.Layer3Type = NET_PACKET_LAYER3_TYPE_IPV4_UNSPECIFIED_OPTIONS;
+        layout.Layer3Type = NetPacketLayer3TypeIPv4UnspecifiedOptions;
         break;
     case IP_VERSION_6:
-        layout.Layer3Type = NET_PACKET_LAYER3_TYPE_IPV6_UNSPECIFIED_EXTENSIONS;
+        layout.Layer3Type = NetPacketLayer3TypeIPv6UnspecifiedExtensions;
         break;
     }
 }
@@ -140,11 +148,11 @@ GetLayer4Type(
     switch (protocolId)
     {
     case IPPROTO_TCP:
-        return NET_PACKET_LAYER4_TYPE_TCP;
+        return NetPacketLayer4TypeTcp;
     case IPPROTO_UDP:
-        return NET_PACKET_LAYER4_TYPE_UDP;
+        return NetPacketLayer4TypeUdp;
     default:
-        return NET_PACKET_LAYER4_TYPE_UNSPECIFIED;
+        return NetPacketLayer4TypeUnspecified;
     }
 }
 
@@ -157,7 +165,7 @@ ParseIPv4Header(
 {
     if (bytesRemaining < sizeof(IPV4_HEADER))
     {
-        layout.Layer3Type = NET_PACKET_LAYER3_TYPE_UNSPECIFIED;
+        layout.Layer3Type = NetPacketLayer3TypeUnspecified;
         return;
     }
 
@@ -165,13 +173,13 @@ ParseIPv4Header(
     auto length = Ip4HeaderLengthInBytes(ip);
     if (bytesRemaining < length || length > MAX_IPV4_HLEN)
     {
-        layout.Layer3Type = NET_PACKET_LAYER3_TYPE_UNSPECIFIED;
+        layout.Layer3Type = NetPacketLayer3TypeUnspecified;
         return;
     }
 
     layout.Layer3Type = (length == sizeof(IPV4_HEADER))
-        ? NET_PACKET_LAYER3_TYPE_IPV4_NO_OPTIONS
-        : NET_PACKET_LAYER3_TYPE_IPV4_WITH_OPTIONS;
+        ? NetPacketLayer3TypeIPv4NoOptions
+        : NetPacketLayer3TypeIPv4WithOptions;
     layout.Layer3HeaderLength = length;
     layout.Layer4Type = GetLayer4Type(ip->Protocol);
     buffer += length;
@@ -255,7 +263,7 @@ ParseIPv6Header(
 {
     if (bytesRemaining < sizeof(IPV6_HEADER))
     {
-        layout.Layer3Type = NET_PACKET_LAYER3_TYPE_UNSPECIFIED;
+        layout.Layer3Type = NetPacketLayer3TypeUnspecified;
         return;
     }
 
@@ -270,7 +278,7 @@ ParseIPv6Header(
         switch (ParseIPv6ExtensionHeader(nextHeader, buffer + offset, bytesRemaining - offset, &extensionLength, &nextHeader))
         {
         case IPv6ExtensionParseResult::MalformedExtension:
-            layout.Layer3Type = NET_PACKET_LAYER3_TYPE_UNSPECIFIED;
+            layout.Layer3Type = NetPacketLayer3TypeUnspecified;
             return;
 
         case IPv6ExtensionParseResult::Ok:
@@ -280,16 +288,16 @@ ParseIPv6Header(
         case IPv6ExtensionParseResult::UnknownExtension:
             if (offset > 0x1ff)
             {
-                layout.Layer3Type = NET_PACKET_LAYER3_TYPE_UNSPECIFIED;
+                layout.Layer3Type = NetPacketLayer3TypeUnspecified;
                 return;
             }
             else if (offset == sizeof(IPV6_HEADER))
             {
-                layout.Layer3Type = NET_PACKET_LAYER3_TYPE_IPV6_NO_EXTENSIONS;
+                layout.Layer3Type = NetPacketLayer3TypeIPv6NoExtensions;
             }
             else
             {
-                layout.Layer3Type = NET_PACKET_LAYER3_TYPE_IPV6_WITH_EXTENSIONS;
+                layout.Layer3Type = NetPacketLayer3TypeIPv6WithExtensions;
             }
 
             layout.Layer3HeaderLength = offset;
@@ -310,7 +318,7 @@ ParseTcpHeader(
 {
     if (bytesRemaining < sizeof(TCP_HDR))
     {
-        layout.Layer4Type = NET_PACKET_LAYER4_TYPE_UNSPECIFIED;
+        layout.Layer4Type = NetPacketLayer4TypeUnspecified;
         return;
     }
 
@@ -318,7 +326,7 @@ ParseTcpHeader(
     auto length = (ULONG)tcp->th_len * 4;
     if (bytesRemaining < length || length > TH_MAX_LEN)
     {
-        layout.Layer4Type = NET_PACKET_LAYER4_TYPE_UNSPECIFIED;
+        layout.Layer4Type = NetPacketLayer4TypeUnspecified;
         return;
     }
 
@@ -338,7 +346,7 @@ ParseUdpHeader(
 
     if (bytesRemaining < UDP_HEADER_SIZE)
     {
-        layout.Layer4Type = NET_PACKET_LAYER4_TYPE_UNSPECIFIED;
+        layout.Layer4Type = NetPacketLayer4TypeUnspecified;
         return;
     }
 
@@ -351,14 +359,20 @@ NET_PACKET_LAYOUT
 NxGetPacketLayout(
     _In_ NDIS_MEDIUM mediaType,
     _In_ NET_RING_COLLECTION const * descriptor,
-    _In_ NET_PACKET const *packet)
+    _In_ NET_EXTENSION const & virtualAddressExtension,
+    _In_ NET_PACKET const *packet,
+    _In_ size_t PayloadBackfill)
 {
     NT_ASSERT(packet->FragmentCount != 0);
 
     auto fr = NetRingCollectionGetFragmentRing(descriptor);
-    auto fragment = NetRingGetFragmentAtIndex(fr, packet->FragmentIndex);
-    auto buffer = (UCHAR const*)fragment->VirtualAddress + fragment->Offset;
-    auto bytesRemaining = (ULONG)fragment->ValidLength;
+    auto const fragment = NetRingGetFragmentAtIndex(fr, packet->FragmentIndex);
+    auto const virtualAddress = NetExtensionGetFragmentVirtualAddress(
+        &virtualAddressExtension, packet->FragmentIndex);
+
+    // Skip the backfill space
+    auto buffer = (UCHAR const*)virtualAddress->VirtualAddress + fragment->Offset + PayloadBackfill;
+    auto bytesRemaining = (ULONG)fragment->ValidLength - (ULONG)PayloadBackfill;
 
     NET_PACKET_LAYOUT layout = { };
 
@@ -376,20 +390,20 @@ NxGetPacketLayout(
 
     switch (layout.Layer3Type)
     {
-    case NET_PACKET_LAYER3_TYPE_IPV4_UNSPECIFIED_OPTIONS:
+    case NetPacketLayer3TypeIPv4UnspecifiedOptions:
         ParseIPv4Header(buffer, bytesRemaining, layout);
         break;
-    case NET_PACKET_LAYER3_TYPE_IPV6_UNSPECIFIED_EXTENSIONS:
+    case NetPacketLayer3TypeIPv6UnspecifiedExtensions:
         ParseIPv6Header(buffer, bytesRemaining, layout);
         break;
     }
 
     switch (layout.Layer4Type)
     {
-    case NET_PACKET_LAYER4_TYPE_TCP:
+    case NetPacketLayer4TypeTcp:
         ParseTcpHeader(buffer, bytesRemaining, layout);
         break;
-    case NET_PACKET_LAYER4_TYPE_UDP:
+    case NetPacketLayer4TypeUdp:
         ParseUdpHeader(buffer, bytesRemaining, layout);
         break;
     }

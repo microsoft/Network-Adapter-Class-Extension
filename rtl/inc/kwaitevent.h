@@ -1,7 +1,7 @@
 
 #pragma once
 
-#include "KMacros.h"
+#include <KMacros.h>
 
 #if _KERNEL_MODE
 typedef wistd::integral_constant<EVENT_TYPE, SynchronizationEvent> auto_reset_event_t;

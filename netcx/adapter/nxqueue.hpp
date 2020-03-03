@@ -6,8 +6,10 @@
 #include <KArray.h>
 #include <KPtr.h>
 #include <NetClientQueue.h>
-#include <NetPacketExtensionPrivate.h>
 
+#include "extension/NxExtensionLayout.hpp"
+
+struct NX_PRIVATE_GLOBALS;
 class NxAdapter;
 
 #define QUEUE_CREATION_CONTEXT_SIGNATURE 0x7840dd95
@@ -32,11 +34,8 @@ struct QUEUE_CREATION_CONTEXT
     NxAdapter *
         Adapter = nullptr;
 
-    Rtl::KArray<NET_PACKET_EXTENSION_PRIVATE>
-        NetAdapterAddedPacketExtensions;
-
-    Rtl::KArray<NET_PACKET_EXTENSION_PRIVATE>
-        NetClientAddedPacketExtensions;
+    Rtl::KArray<NET_EXTENSION_PRIVATE>
+        Extensions;
 
     ULONG
         QueueId = 0;
@@ -60,6 +59,7 @@ public:
     };
 
     NxQueue(
+        _In_ NX_PRIVATE_GLOBALS const & PrivateGlobals,
         _In_ QUEUE_CREATION_CONTEXT const & InitContext,
         _In_ ULONG QueueId,
         _In_ NET_PACKET_QUEUE_CONFIG const & QueueConfig,
@@ -76,23 +76,10 @@ public:
         _In_ QUEUE_CREATION_CONTEXT & InitContext
     );
 
-    static
-    NTSTATUS
-    NetQueueInitAddPacketExtension(
-        _Inout_ QUEUE_CREATION_CONTEXT *CreationContext,
-        _In_ const NET_PACKET_EXTENSION_PRIVATE* PacketExtension
-    );
-
     void
     NotifyMorePacketsAvailable(
         void
     );
-
-    size_t
-        m_privateExtensionOffset = 0;
-
-    size_t
-        m_privateExtensionSize = 0;
 
     void
     Start(
@@ -106,6 +93,16 @@ public:
 
     void
     Advance(
+        void
+    );
+
+    void
+    AdvanceVerifying(
+        void
+    );
+
+    void
+    CancelVerifying(
         void
     );
 
@@ -136,7 +133,7 @@ public:
 
     void
     GetExtension(
-        _In_ const NET_PACKET_EXTENSION_PRIVATE* ExtensionToQuery,
+        _In_ const NET_EXTENSION_PRIVATE* ExtensionToQuery,
         _Out_ NET_EXTENSION* Extension
     );
 
@@ -151,13 +148,13 @@ protected:
     NxAdapter *
         m_adapter = nullptr;
 
-    Rtl::KArray<NET_PACKET_EXTENSION_PRIVATE>
-        m_AddedPacketExtensions;
+    NxExtensionLayout
+        m_packetLayout;
 
-    NTSTATUS
-    PrepareAndStorePacketExtensions(
-        _In_ QUEUE_CREATION_CONTEXT & InitContext
-    );
+    NxExtensionLayout
+        m_fragmentLayout;
+
+private:
 
     NTSTATUS
     CreateRing(
@@ -166,15 +163,38 @@ protected:
         _In_ NET_RING_TYPE RingType
     );
 
-private:
+    void
+    AdvancePreVerifying(
+        void
+    );
+
+    void
+    AdvancePostVerifying(
+        void
+    ) const;
+
+    NX_PRIVATE_GLOBALS const &
+        m_privateGlobals;
 
     KPoolPtr<NET_RING>
-        m_rings[NET_RING_TYPE_FRAGMENT + 1];
+        m_rings[NetRingTypeFragment + 1];
 
     NET_RING_COLLECTION
         m_ringCollection;
 
-    PVOID
+    UINT32
+        m_verifiedPacketIndex = 0;
+
+    UINT32
+        m_verifiedFragmentIndex = 0;
+
+    KPoolPtr<NET_RING>
+        m_verifiedRings[NetRingTypeFragment + 1];
+
+    NET_RING_COLLECTION
+        m_verifiedRingCollection;
+
+    void *
         m_clientQueue = nullptr;
 
     NET_CLIENT_QUEUE_NOTIFY_DISPATCH const *
@@ -182,6 +202,9 @@ private:
 
     NET_PACKET_QUEUE_CONFIG const
         m_packetQueueConfig;
+
+    UINT8
+        m_toggle = 0;
 
 protected:
 
@@ -205,6 +228,7 @@ public:
 
     NxTxQueue(
         _In_ WDFOBJECT Object,
+        _In_ NX_PRIVATE_GLOBALS const & PrivateGlobals,
         _In_ QUEUE_CREATION_CONTEXT const & InitContext,
         _In_ ULONG QueueId,
         _In_ NET_PACKET_QUEUE_CONFIG const & QueueConfig
@@ -249,6 +273,7 @@ public:
 
     NxRxQueue(
         _In_ WDFOBJECT Object,
+        _In_ NX_PRIVATE_GLOBALS const & PrivateGlobals,
         _In_ QUEUE_CREATION_CONTEXT const & InitContext,
         _In_ ULONG QueueId,
         _In_ NET_PACKET_QUEUE_CONFIG const & QueueConfig

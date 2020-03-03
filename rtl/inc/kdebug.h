@@ -1,7 +1,7 @@
 
 #pragma once
 
-#include "KMacros.h"
+#include <KMacros.h>
 
 template<ULONG SIGNATURE>
 struct KRTL_CLASS NdisDebugBlock

@@ -3,7 +3,8 @@
 #include "NxXlatPrecomp.hpp"
 #include "NxXlatCommon.hpp"
 
-#include <ndisoidtypes.h>
+#include <ndis/oidrequesttypes.h>
+#include <ndis/status_p.h>
 
 #include "NxReceiveScaling.tmh"
 #include "NxReceiveScaling.hpp"
@@ -13,33 +14,7 @@
 #define SET_INDIRECTION_ENTRIES_RETRY 3
 
 #ifdef _KERNEL_MODE
-#include <ntddndis.h>
 #include <affinity.h> // for MAXIMUM_GROUPS
-
-_IRQL_requires_max_(HIGH_LEVEL)
-static
-NTSTATUS
-NdisConvertNdisStatusToNtStatus(NDIS_STATUS NdisStatus)
-{
-    if (NT_SUCCESS(NdisStatus) &&
-        NdisStatus != NDIS_STATUS_SUCCESS &&
-        NdisStatus != NDIS_STATUS_PENDING &&
-        NdisStatus != NDIS_STATUS_INDICATION_REQUIRED) {
-
-        // Case where an NDIS error is incorrectly mapped as a success by NT_SUCCESS macro
-        return STATUS_UNSUCCESSFUL;
-    } else {
-        switch (NdisStatus)
-        {
-        case NDIS_STATUS_BUFFER_TOO_SHORT:
-            return STATUS_BUFFER_TOO_SMALL;
-            break;
-        default:
-            return (NTSTATUS) NdisStatus;
-            break;
-        }
-    }
-}
 
 #endif // _KERNEL_MODE
 

@@ -60,11 +60,11 @@ Routine Description:
     _FreeHandlers(&m_Config);
 }
 
-#define HANDLER_REF_TAG ((PVOID)(ULONG_PTR)('rldH'))
+#define HANDLER_REF_TAG ((void *)(ULONG_PTR)('rldH'))
 
-VOID
+void
 NxRequestQueue::ReferenceHandlers(
-    VOID
+    void
 )
 /*++
 Routine Description:
@@ -96,7 +96,7 @@ Routine Description:
     }
 }
 
-VOID
+void
 NxRequestQueue::_FreeHandlers(
     _In_ NET_REQUEST_QUEUE_CONFIG * QueueConfig
 )
@@ -263,7 +263,7 @@ Remarks:
     // below, and for now they can only be set once.
     //
 
-    WdfObjectReferenceWithTag(netRequestQueue, (PVOID)NxAdapter::_EvtCleanup);
+    WdfObjectReferenceWithTag(netRequestQueue, (void *)NxAdapter::_EvtCleanup);
 
     //
     // Store the nxRequestQueue pointer in NxAdapter
@@ -345,7 +345,7 @@ Arguments:
     }                                                                          \
 }
 
-VOID
+void
 NxRequestQueue::DispatchRequest(
     _In_ NxRequest * NxRequest
 )
@@ -570,7 +570,7 @@ Exit:
     return;
 }
 
-VOID
+void
 NxRequestQueue::QueueRequest(
     _In_ NETREQUEST Request
 )
@@ -609,7 +609,7 @@ Remarks:
     DispatchRequest(nxRequest);
 }
 
-VOID
+void
 NxRequestQueue::DisconnectRequest(
     _In_ NxRequest * NxRequest
 )

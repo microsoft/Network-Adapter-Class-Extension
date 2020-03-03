@@ -6,6 +6,7 @@
 
 #include <net/checksumtypes_p.h>
 #include <net/lsotypes_p.h>
+#include <net/rsctypes_p.h>
 
 _Use_decl_annotations_
 NxOffloadBase::NxOffloadBase(
@@ -96,9 +97,9 @@ NxOffloadFacade::QueryStandardizedKeywordSetting(
     PULONG Value
 )
 {
-
-
-
+    
+    
+    
     NxConfiguration *nxConfiguration;
     NTSTATUS status = NxConfiguration::_Create(
         m_NxAdapter.GetPrivateGlobals(),
@@ -127,11 +128,12 @@ NxOffloadFacade::QueryStandardizedKeywordSetting(
 
 _Use_decl_annotations_
 NTSTATUS
-NxOffloadFacade::RegisterPacketExtension(
-    OffloadType type
+NxOffloadFacade::RegisterExtension(
+    OffloadType type,
+    NxOffloadBase const * offload
 )
 {
-    NET_PACKET_EXTENSION_PRIVATE extensionPrivate = {};
+    NET_EXTENSION_PRIVATE extensionPrivate = {};
 
     switch (type)
     {
@@ -139,18 +141,41 @@ NxOffloadFacade::RegisterPacketExtension(
         extensionPrivate.Name = NET_PACKET_EXTENSION_CHECKSUM_NAME;
         extensionPrivate.Size = NET_PACKET_EXTENSION_CHECKSUM_VERSION_1_SIZE;
         extensionPrivate.Version = NET_PACKET_EXTENSION_CHECKSUM_VERSION_1;
-        extensionPrivate.NonWdfStyleAlignment = sizeof(UINT32);
+        extensionPrivate.NonWdfStyleAlignment = alignof(NET_PACKET_CHECKSUM);
+        extensionPrivate.Type = NetExtensionTypePacket;
         break;
 
     case OffloadType::Lso:
         extensionPrivate.Name = NET_PACKET_EXTENSION_LSO_NAME;
         extensionPrivate.Size = NET_PACKET_EXTENSION_LSO_VERSION_1_SIZE;
         extensionPrivate.Version = NET_PACKET_EXTENSION_LSO_VERSION_1;
-        extensionPrivate.NonWdfStyleAlignment = sizeof(UINT32);
+        extensionPrivate.NonWdfStyleAlignment = alignof(NET_PACKET_LSO);
+        extensionPrivate.Type = NetExtensionTypePacket;
+        break;
+
+    case OffloadType::Rsc:
+        extensionPrivate.Name = NET_PACKET_EXTENSION_RSC_NAME;
+        extensionPrivate.Size = NET_PACKET_EXTENSION_RSC_VERSION_1_SIZE;
+        extensionPrivate.Version = NET_PACKET_EXTENSION_RSC_VERSION_1;
+        extensionPrivate.NonWdfStyleAlignment = alignof(NET_PACKET_RSC);
+        extensionPrivate.Type = NetExtensionTypePacket;
+
+        auto const nxOffload = static_cast<NxOffload<NET_ADAPTER_OFFLOAD_RSC_CAPABILITIES> const *>(offload);
+        auto const capabilities = nxOffload->GetHardwareCapabilities();
+
+        if (capabilities->Timestamp)
+        {
+            CX_RETURN_IF_NOT_NT_SUCCESS(m_NxAdapter.RegisterExtension(extensionPrivate));
+            extensionPrivate.Name = NET_PACKET_EXTENSION_RSC_TIMESTAMP_NAME;
+            extensionPrivate.Size = NET_PACKET_EXTENSION_RSC_TIMESTAMP_VERSION_1_SIZE;
+            extensionPrivate.Version = NET_PACKET_EXTENSION_RSC_TIMESTAMP_VERSION_1;
+            extensionPrivate.NonWdfStyleAlignment = alignof(NET_PACKET_RSC_TIMESTAMP);
+            extensionPrivate.Type = NetExtensionTypePacket;
+        }
         break;
     }
 
-    return m_NxAdapter.RegisterPacketExtension(&extensionPrivate);
+    return m_NxAdapter.RegisterExtension(extensionPrivate);
 }
 
 _Use_decl_annotations_
@@ -203,6 +228,19 @@ NxOffloadManager::Initialize(
 
     CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !m_NxOffloads.append(wistd::move(lsoOffload)));
 
+    const NET_ADAPTER_OFFLOAD_RSC_CAPABILITIES rscCapabilities = {
+        sizeof(NET_ADAPTER_OFFLOAD_RSC_CAPABILITIES),
+        FALSE,
+        FALSE,
+        FALSE
+    };
+
+    auto rscOffload = wil::make_unique_nothrow<NxOffload<NET_ADAPTER_OFFLOAD_RSC_CAPABILITIES>>(OffloadType::Rsc, rscCapabilities);
+
+    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !rscOffload);
+
+    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !m_NxOffloads.append(wistd::move(rscOffload)));
+
     return STATUS_SUCCESS;
 }
 
@@ -242,11 +280,11 @@ NxOffloadManager::SetActiveCapabilities(
 {
     auto nxOffload = FindNxOffload(OffloadType);
 
-
-
-
-
-
+    
+    
+    
+    
+    
 
     auto offloadCallback = static_cast<NxOffload<T> *>(nxOffload)->GetOffloadCallback();
 
@@ -455,7 +493,7 @@ NxOffloadManager::SetLsoActiveCapabilities(
 
 _Use_decl_annotations_
 NTSTATUS
-NxOffloadManager::RegisterPacketExtensions(
+NxOffloadManager::RegisterExtensions(
     void
 )
 {
@@ -463,10 +501,71 @@ NxOffloadManager::RegisterPacketExtensions(
     {
         if (offload->HasHardwareSupport())
         {
-            CX_RETURN_IF_NOT_NT_SUCCESS(m_NxOffloadFacade->RegisterPacketExtension(offload->GetOffloadType()));
+            CX_RETURN_IF_NOT_NT_SUCCESS(m_NxOffloadFacade->RegisterExtension(
+                offload->GetOffloadType(),
+                offload.get()));
         }
     }
 
     return STATUS_SUCCESS;
 }
 
+_Use_decl_annotations_
+void
+NxOffloadManager::SetRscHardwareCapabilities(
+    NET_ADAPTER_OFFLOAD_RSC_CAPABILITIES const * HardwareCapabilities
+)
+{
+    SetHardwareCapabilities(HardwareCapabilities, OffloadType::Rsc, HardwareCapabilities->EvtAdapterOffloadSetRsc);
+}
+
+_Use_decl_annotations_
+void
+NxOffloadManager::GetRscHardwareCapabilities(
+    NET_CLIENT_OFFLOAD_RSC_CAPABILITIES * HardwareCapabilities
+) const
+{
+    auto const capabilities = GetHardwareCapabilities<NET_ADAPTER_OFFLOAD_RSC_CAPABILITIES>(OffloadType::Rsc);
+
+    HardwareCapabilities->IPv4 = capabilities->IPv4;
+    HardwareCapabilities->IPv6 = capabilities->IPv6;
+    HardwareCapabilities->Timestamp = capabilities->Timestamp;
+}
+
+_Use_decl_annotations_
+void
+NxOffloadManager::GetRscDefaultCapabilities(
+    NET_CLIENT_OFFLOAD_RSC_CAPABILITIES * DefaultCapabilities
+) const
+{
+    //
+    // Initialize the default capabilities to the hardware capabilities
+    //
+    GetRscHardwareCapabilities(DefaultCapabilities);
+
+    //
+    // The hardware capabilities supported by the client driver are turned ON by default
+    // Unless there is a registry keyword which specifies that they need to be turned off
+    //
+
+    DefaultCapabilities->IPv4 = DefaultCapabilities->IPv4 && !IsKeywordSettingDisabled(NDIS_STRING_CONST("*RscIPv4"));
+    DefaultCapabilities->IPv6 = DefaultCapabilities->IPv6 && !IsKeywordSettingDisabled(NDIS_STRING_CONST("*RscIPv6"));
+    DefaultCapabilities->Timestamp = DefaultCapabilities->Timestamp && !IsKeywordSettingDisabled(NDIS_STRING_CONST("*RscTimestamp"));
+}
+
+_Use_decl_annotations_
+void
+NxOffloadManager::SetRscActiveCapabilities(
+    NET_CLIENT_OFFLOAD_RSC_CAPABILITIES const * ActiveCapabilities
+)
+{
+    NET_ADAPTER_OFFLOAD_RSC_CAPABILITIES netAdapterCapabilities = {
+        sizeof(NET_ADAPTER_OFFLOAD_RSC_CAPABILITIES),
+        ActiveCapabilities->IPv4,
+        ActiveCapabilities->IPv6,
+        ActiveCapabilities->Timestamp,
+        nullptr,
+    };
+
+    SetActiveCapabilities(netAdapterCapabilities, OffloadType::Rsc);
+}

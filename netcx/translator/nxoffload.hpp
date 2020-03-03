@@ -49,6 +49,9 @@ private:
 
     NET_CLIENT_OFFLOAD_LSO_CAPABILITIES
         m_activeLsoCapabilities = {};
+        
+    NET_CLIENT_OFFLOAD_RSC_CAPABILITIES
+        m_activeRscCapabilities = {};
 
     //
     // Methods to translate the offload capabilities between different 
@@ -81,6 +84,25 @@ private:
         _Out_ NDIS_TCP_LARGE_SEND_OFFLOAD_V2 &NdisLsoV2Capabilities
     ) const;
 
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NET_CLIENT_OFFLOAD_RSC_CAPABILITIES
+    TranslateRscCapabilities(
+        _In_ NDIS_OFFLOAD_PARAMETERS const &OffloadParameters
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    TranslateRscCapabilities(
+        _In_ NET_CLIENT_OFFLOAD_RSC_CAPABILITIES const &Capabilities,
+        _Out_ NDIS_TCP_RECV_SEG_COALESCE_OFFLOAD &NdisRscCapabilities
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    CheckActiveCapabilities(
+        _In_ NDIS_OFFLOAD_PARAMETERS const &OffloadParameters
+    ) const;
+
     //
     // Methods which are compiled in kernel mode only
     //
@@ -102,20 +124,27 @@ private:
     NTSTATUS
     SetActiveCapabilities(
         _In_ NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES const & ChecksumCapabilities,
-        _In_ NET_CLIENT_OFFLOAD_LSO_CAPABILITIES const & LsoCapabilities
+        _In_ NET_CLIENT_OFFLOAD_LSO_CAPABILITIES const & LsoCapabilities,
+        _In_ NET_CLIENT_OFFLOAD_RSC_CAPABILITIES const & RscCapabilities
     );
 
     _IRQL_requires_(PASSIVE_LEVEL)
     bool
     IsChecksumOffloadSupported(
         void
-    );
+    ) const;
 
     _IRQL_requires_(PASSIVE_LEVEL)
     bool
     IsLsoOffloadSupported(
         void
-    );
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    bool
+    IsRscOffloadSupported(
+        void
+    ) const;
 };
 
 

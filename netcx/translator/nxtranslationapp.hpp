@@ -16,10 +16,17 @@ Abstract:
 #include "NxRxXlat.hpp"
 #include "NxReceiveScaling.hpp"
 #include "NxOffload.hpp"
+#include "NxStatistics.hpp"
+#include "NxCollection.hpp"
+
+#include <KLockHolder.h>
 
 class NxTranslationApp :
     public INxApp
 {
+
+    friend class NxTranslationAppFactory;
+    friend class NxCollection<NxTranslationApp>;
 
 public:
 
@@ -29,6 +36,15 @@ public:
         _In_ NET_CLIENT_ADAPTER Adapter,
         _In_ NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
     ) noexcept;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    ~NxTranslationApp();
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    Initialize(
+        void
+    );
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
     NET_CLIENT_ADAPTER
@@ -120,6 +136,92 @@ public:
         _In_ NDIS_OID_REQUEST const & Request
         );
 
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    ReportInterruptModerationNotSupported(
+        _In_ NDIS_OID_REQUEST & Request
+        );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    ReportGeneralStatistics(
+        _In_ NDIS_OID_REQUEST & Request
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    ReportTxPacketStatistics(
+        _In_ NDIS_OID_REQUEST & Request
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    ReportRxPacketStatistics(
+        _In_ NDIS_OID_REQUEST & Request
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    ReportUlong(
+        _In_ NDIS_OID_REQUEST & Request,
+        _In_ ULONG Value
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    ReportVendorDriverDescription(
+        _In_ NDIS_OID_REQUEST & Request
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    SetMulticastList(
+        _In_ NDIS_OID_REQUEST const & Request
+    );
+
+    _IRQL_requires_max_(APC_LEVEL)
+    void
+    FillPerfCounter(
+        _In_ HANDLE PcwInfo,
+        _In_ ULONG InstanceId
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    SetPacketFilter(
+        _In_ NDIS_OID_REQUEST const & Request
+    );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    ULONG
+    GetMaximumPacketSize(
+        void
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    ULONG
+    GetTxFrameSize(
+        void
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    ULONG
+    GetRxFrameSize(
+        void
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    ULONG
+    GetTxFragmentRingSize(
+        void
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    ULONG
+    GetRxFragmentRingSize(
+        void
+    ) const;
+
 private:
 
     _IRQL_requires_(PASSIVE_LEVEL)
@@ -149,6 +251,12 @@ private:
     StartReceiveScalingQueues(
         void
     );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    ULONG64
+    GetRxCounter(
+        NxStatisticsCounters CounterType
+    ) const;
 
     wistd::unique_ptr<NxTxXlat>
         m_txQueue;
@@ -186,5 +294,27 @@ private:
     NxTaskOffload
         m_offload;
 
+    NxStatistics
+        m_txStatistics;
+
+    Rtl::KArray<NxStatistics, NonPagedPoolNxCacheAligned>
+        m_rxStatistics;
+
+    mutable KPushLock
+        m_statisticsLock;
+
+    LIST_ENTRY
+        m_Linkage = {};
+
+    static ULONG
+        s_LastAppId;
+
+public:
+
+    const ULONG
+        m_AppId = InterlockedIncrement((LONG *) &s_LastAppId);
+
+    static NxCollection<NxTranslationApp> *
+        s_AppCollection;
 };
 

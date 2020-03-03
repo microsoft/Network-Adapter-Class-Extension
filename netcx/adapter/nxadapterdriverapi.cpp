@@ -44,10 +44,10 @@ Return Value:
 
 --*/
 {
-    NX_PRIVATE_GLOBALS *NxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(NxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(NxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
 
     {
         auto exclusive = wil::acquire_wdf_wait_lock(g_RegistrationLock);
@@ -56,7 +56,7 @@ Return Value:
         // First see if we need create a NxDriver.
         //
         CX_RETURN_IF_NOT_NT_SUCCESS(
-            NxDriver::_CreateIfNeeded(Driver, NxPrivateGlobals));
+            NxDriver::_CreateIfNeeded(Driver, nxPrivateGlobals));
 
         NxDriver *nxDriver = GetNxDriverFromWdfDriver(Driver);
 
@@ -102,11 +102,11 @@ Return Value:
 {
     UNREFERENCED_PARAMETER(Driver);
 
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlLessThanOrEqualDispatch(nxPrivateGlobals);
 
-    return pNxPrivateGlobals->NxDriver->GetNdisMiniportDriverHandle();
+    return nxPrivateGlobals->NxDriver->GetNdisMiniportDriverHandle();
 }
 

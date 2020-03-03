@@ -12,6 +12,9 @@ Abstract:
 
 #include <FxObjectBase.hpp>
 
+#include <preview/netrequest.h>
+#include <preview/netrequestqueue.h>
+
 //
 // The NxRequestQueue is an object that represents a Request Queue
 //
@@ -83,13 +86,13 @@ public:
         _Out_    NxRequestQueue **         Queue
     );
 
-    VOID
+    void
     ReferenceHandlers(
-        VOID
+        void
     );
 
     static
-    VOID
+    void
     _FreeHandlers(
         _In_ NET_REQUEST_QUEUE_CONFIG * RequestQueueConfig
     );
@@ -99,17 +102,17 @@ public:
         void
     );
 
-    VOID
+    void
     QueueRequest(
         _In_ NETREQUEST Request
     );
 
-    VOID
+    void
     DispatchRequest(
         _In_ NxRequest * NxRequest
     );
 
-    VOID
+    void
     DisconnectRequest(
         _In_ NxRequest * NxRequest
     );

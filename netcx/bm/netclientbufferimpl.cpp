@@ -14,11 +14,12 @@ Abstract:
 #include "BufferPool.hpp"
 #include "KPtr.h"
 
-// xxx this api needs to be fixed
-#define NETCX_ADAPTER_2
 #include <net/fragment.h>
 
 #include "NetClientBufferImpl.tmh"
+
+#define IS_ALIGNED(x, align)     (((x) & ((align) - 1)) == 0)
+#define IS_POWER_OF_TWO(x)       IS_ALIGNED(x, x)
 
 EXTERN_C_START
 
@@ -41,39 +42,25 @@ NONPAGEDX
 _IRQL_requires_min_(PASSIVE_LEVEL)
 _IRQL_requires_max_(DISPATCH_LEVEL)
 _IRQL_requires_same_
-ULONG
-NetClientAllocateBuffers(
+NTSTATUS
+NetClientAllocateBuffer(
     _In_ NET_CLIENT_BUFFER_POOL BufferPool,
-    _Inout_updates_(NumBuffers) NET_FRAGMENT Buffers[],
-    _In_ ULONG NumBuffers)
+    _Out_ void ** VirtualAddress,
+    _Out_ UINT64 * LogicalAddress,
+    _Out_ SIZE_T * Offset,
+    _Out_ SIZE_T * Capacity
+)
 {
-    NxBufferPool* pool = reinterpret_cast<NxBufferPool *> (BufferPool);
-    ULONG allocatedCount = 0;
+    auto pool = reinterpret_cast<NxBufferPool *>(BufferPool);
 
-    //CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES,
-    //                      pool->AvailableBuffersCount() < NumBuffers);
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        pool->Allocate(
+            VirtualAddress,
+            LogicalAddress,
+            Offset,
+            Capacity));
 
-    for (UINT32 i = 0; i < NumBuffers; i++)
-    {
-        size_t allocatedSize, offset;
-
-        NTSTATUS status = pool->Allocate(&Buffers[i].VirtualAddress,
-                                         &Buffers[i].Mapping.DmaLogicalAddress,
-                                         &offset,
-                                         &allocatedSize);
-
-        if (!NT_SUCCESS(status))
-        {
-            break;
-        }
-
-        Buffers[i].Offset = offset;
-        Buffers[i].Capacity = allocatedSize;
-
-        allocatedCount++;
-    }
-
-    return allocatedCount;
+    return STATUS_SUCCESS;
 }
 
 
@@ -100,7 +87,7 @@ static const NET_CLIENT_BUFFER_POOL_DISPATCH PoolDispatch =
 {
     sizeof(NET_CLIENT_BUFFER_POOL_DISPATCH),
     &NetClientDestroyBufferPool,
-    &NetClientAllocateBuffers,
+    &NetClientAllocateBuffer,
     &NetClientFreeBuffers,
 };
 

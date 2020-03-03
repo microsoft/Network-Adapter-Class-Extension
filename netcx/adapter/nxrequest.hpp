@@ -12,10 +12,14 @@ Abstract:
 
 #include <FxObjectBase.hpp>
 
+#include <preview/netrequest.h>
+
 struct DispatchContext
 {
-    size_t CurrentExtensionIndex = 0;
+    size_t NextHandlerIndex = 0;
 };
+
+static_assert(sizeof(DispatchContext) <= sizeof(NDIS_OID_REQUEST::MiniportReserved));
 
 //
 // The NxRequest is an object that represents a Ndis Oid Request
@@ -60,8 +64,6 @@ private:
     //
     LIST_ENTRY                   m_CancelTempListEntry;
 
-    DispatchContext              m_dispatchContext;
-
 public:
 
     //
@@ -75,7 +77,7 @@ public:
     NDIS_OID                     m_Oid;
     UINT                         m_InputBufferLength;
     UINT                         m_OutputBufferLength;
-    PVOID                        m_InputOutputBuffer;
+    void *                        m_InputOutputBuffer;
 
     BOOLEAN                      m_CancellationStarted;
 
@@ -89,7 +91,7 @@ private:
         _In_ NDIS_OID                 OidId,
         _In_ UINT                     InputBufferLength,
         _In_ UINT                     OutputBufferLength,
-        _In_ PVOID                    InputOutputBuffer
+        _In_ void *                    InputOutputBuffer
     );
 
 public:
@@ -105,34 +107,29 @@ public:
         _Out_    NxRequest **             Request
     );
 
-    DispatchContext *
-    GetDispatchContext(
-        void
-    );
-
     RECORDER_LOG
     GetRecorderLog(
         void
     );
 
-    VOID
+    void
     Complete(
         _In_ NTSTATUS CompletionStatus
     );
 
-    VOID
+    void
     SetDataRequestSetInformation(
         _In_ ULONG BytesRead,
         _In_ ULONG BytesNeeded
     );
 
-    VOID
+    void
     QueryDataRequestSetInformation(
         _In_ ULONG BytesWritten,
         _In_ ULONG BytesNeeded
     );
 
-    VOID
+    void
     MethodRequestSetInformation(
         _In_ ULONG BytesRead,
         _In_ ULONG BytesWritten,

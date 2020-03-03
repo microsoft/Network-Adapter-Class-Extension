@@ -14,6 +14,32 @@ Abstract:
 #include "NxNblDatapath.hpp"
 #include <nblutil.h>
 
+#ifndef _KERNEL_MODE
+
+extern "C"
+__declspec(dllimport)
+VOID
+NdisMSendNetBufferListsComplete(
+    __in NDIS_HANDLE              MiniportAdapterHandle,
+    __in PNET_BUFFER_LIST         NetBufferList,
+    __in ULONG                    SendCompleteFlags
+);
+
+extern "C"
+__declspec(dllimport)
+VOID
+NdisMIndicateReceiveNetBufferLists(
+    __in  NDIS_HANDLE             MiniportAdapterHandle,
+    __in  PNET_BUFFER_LIST        NetBufferLists,
+    __in  NDIS_PORT_NUMBER        PortNumber,
+    __in  ULONG                   NumberOfNetBufferLists,
+    __in  ULONG                   ReceiveFlags
+);
+
+#define NDIS_STATUS_PAUSED ((NDIS_STATUS)STATUS_NDIS_PAUSED)
+
+#endif // _KERNEL_MODE
+
 NxNblDatapath::NxNblDatapath()
 {
     // Initial state is closed.

@@ -11,6 +11,10 @@ Abstract:
 
 #pragma once
 
+#include <net/packet.h>
+#include <net/fragment.h>
+#include <net/virtualaddress.h>
+
 #include <NetClientAdapter.h>
 
 #include "NxExecutionContext.hpp"
@@ -18,6 +22,13 @@ Abstract:
 #include "NxRingContext.hpp"
 #include "NxNbl.hpp"
 #include "NxNblQueue.hpp"
+#include "NxExtensions.hpp"
+#include "NxStatistics.hpp"
+
+#include <KArray.h>
+
+using unique_nbl = wistd::unique_ptr<NET_BUFFER_LIST, wil::function_deleter<decltype(&NdisFreeNetBufferList), NdisFreeNetBufferList>>;
+using unique_nbl_pool = wil::unique_any<NDIS_HANDLE, decltype(&::NdisFreeNetBufferListPool), &::NdisFreeNetBufferListPool>;
 
 class NxNblRx :
     public INxNblRx,
@@ -37,6 +48,7 @@ class NxNblRx :
 class NxRxXlat :
     public NxNonpagedAllocation<'lXRN'>
 {
+
 public:
 
     _IRQL_requires_(PASSIVE_LEVEL)
@@ -44,7 +56,8 @@ public:
         _In_ size_t QueueId,
         _In_ NET_CLIENT_DISPATCH const * Dispatch,
         _In_ NET_CLIENT_ADAPTER Adapter,
-        _In_ NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
+        _In_ NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch,
+        _In_ NxStatistics & Statistics
     ) noexcept;
 
     virtual
@@ -117,11 +130,14 @@ public:
 
 private:
 
-    size_t m_queueId = ~0U;
+    size_t
+        m_queueId = ~0U;
 
-    volatile LONG m_groupAffinityChanged = false;
+    volatile LONG
+        m_groupAffinityChanged = false;
 
-    GROUP_AFFINITY m_groupAffinity = {};
+    GROUP_AFFINITY
+        m_groupAffinity = {};
 
     struct PAGED PacketContext
     {
@@ -153,28 +169,49 @@ private:
         {
             struct
             {
-                bool ShouldArmRxIndication : 1;
-                bool ShouldArmNblReturned : 1;
-                UINT8 Reserved : 6;
+                bool
+                    ShouldArmRxIndication : 1;
+
+                bool
+                    ShouldArmNblReturned : 1;
+
+                UINT8
+                    Reserved : 6;
             } Flags;
 
             UINT8 Value = 0;
         };
     } m_lastArmedNotifications;
 
-    NxExecutionContext m_executionContext;
+    NxExecutionContext
+        m_executionContext;
 
-    NET_CLIENT_DISPATCH const * m_dispatch = nullptr;
-    NET_CLIENT_ADAPTER m_adapter = nullptr;
-    NET_CLIENT_ADAPTER_DISPATCH const * m_adapterDispatch = nullptr;
-    NET_CLIENT_ADAPTER_PROPERTIES m_adapterProperties = {};
-    NET_CLIENT_BUFFER_POOL m_bufferPool = nullptr;
-    NET_CLIENT_BUFFER_POOL_DISPATCH const * m_bufferPoolDispatch = nullptr;
+    NET_CLIENT_DISPATCH const *
+        m_dispatch = nullptr;
 
-    NDIS_MEDIUM m_mediaType;
-    INxNblDispatcher *m_nblDispatcher = nullptr;
+    NET_CLIENT_ADAPTER
+        m_adapter = nullptr;
 
-    KPoolPtrNP<MDL> m_MdlPool;
+    NET_CLIENT_ADAPTER_DISPATCH const *
+        m_adapterDispatch = nullptr;
+
+    NET_CLIENT_ADAPTER_PROPERTIES
+        m_adapterProperties = {};
+
+    NET_CLIENT_BUFFER_POOL
+        m_bufferPool = nullptr;
+
+    NET_CLIENT_BUFFER_POOL_DISPATCH const *
+        m_bufferPoolDispatch = nullptr;
+
+    NDIS_MEDIUM
+        m_mediaType;
+
+    INxNblDispatcher *
+        m_nblDispatcher = nullptr;
+
+    KPoolPtrNP<MDL>
+        m_MdlPool;
 
     unique_nbl_pool
         m_nblStorage;
@@ -185,18 +222,35 @@ private:
     size_t
         m_nblStackIndex = 0;
 
-    NET_CLIENT_MEMORY_MANAGEMENT_MODE m_rxBufferAllocationMode = NET_CLIENT_MEMORY_MANAGEMENT_MODE_DRIVER;
-    size_t m_rxDataBufferSize = 0;
-    UINT32 m_rxNumPackets = 0;
-    UINT32 m_rxNumFragments = 0;
-    size_t m_backfillSize = 0;
+    NET_CLIENT_MEMORY_MANAGEMENT_MODE
+        m_rxBufferAllocationMode = NET_CLIENT_MEMORY_MANAGEMENT_MODE_DRIVER;
 
-    NBL_QUEUE m_discardedNbl;
-    NxNblQueue m_returnedNblQueue;
+    size_t
+        m_rxDataBufferSize = 0;
 
-    NET_CLIENT_QUEUE m_queue = nullptr;
-    NET_CLIENT_QUEUE_DISPATCH const * m_queueDispatch = nullptr;
-    NET_EXTENSION m_checksumExtension = {};
+    UINT32
+        m_rxNumPackets = 0;
+
+    UINT32
+        m_rxNumFragments = 0;
+
+    size_t
+        m_backfillSize = 0;
+
+    NBL_QUEUE
+        m_discardedNbl;
+
+    NxNblQueue
+        m_returnedNblQueue;
+
+    NET_CLIENT_QUEUE
+        m_queue = nullptr;
+
+    NET_CLIENT_QUEUE_DISPATCH const *
+        m_queueDispatch = nullptr;
+
+    RxExtensions
+        m_extensions = {};
 
     NET_RING_COLLECTION
         m_rings;
@@ -208,15 +262,26 @@ private:
         m_fragmentContext;
 
     // changes as translation routine runs
-    ULONG m_outstandingPackets = 0;
-    ULONG m_postedPackets = 0;
-    ULONG m_returnedPackets = 0;
+    ULONG
+        m_outstandingNbls = 0;
+
+    ULONG
+        m_returnedNbls = 0;
+
+    ULONG
+        m_completedPackets = 0;
 
     // notification signals
-    NxInterlockedFlag m_returnedNblNotification;
+    NxInterlockedFlag
+        m_returnedNblNotification;
+
+    NxStatistics &
+        m_statistics;
 
     ArmedNotifications
-    GetNotificationsToArm();
+    GetNotificationsToArm(
+        void
+    );
 
     void
     ArmNotifications(
@@ -224,12 +289,17 @@ private:
     );
 
     void
-    ArmNetBufferListReturnedNotification();
+    ArmNetBufferListReturnedNotification(
+        void
+    );
 
     void
-    ArmAdapterRxNotification();
+    ArmAdapterRxNotification(
+        void
+    );
 
-    bool m_memoryPreallocated = false;
+    bool
+        m_memoryPreallocated = false;
 
     bool
     TransferDataBufferFromNetPacketToNbl(
@@ -242,8 +312,11 @@ private:
     ReInitializeMdlForDataBuffer(
         _In_ PNET_BUFFER nb,
         _In_ NET_FRAGMENT const * fragment,
+        _In_ NET_FRAGMENT_VIRTUAL_ADDRESS const * VirtualAddress,
+        _In_ NET_FRAGMENT_RETURN_CONTEXT const * ReturnContext,
         _In_ PMDL fragmentMdl,
-        _In_ bool isFirstFragment);
+        _In_ bool isFirstFragment
+    );
 
     NET_BUFFER_LIST *
     NblStackPop(
@@ -261,50 +334,60 @@ private:
     ) const;
 
     PNET_BUFFER_LIST
-    FreeReceivedDataBuffer(_In_ PNET_BUFFER_LIST nbl);
+    FreeReceivedDataBuffer(
+        _In_ PNET_BUFFER_LIST nbl
+    );
 
     // functions called within the EC thread
     void
-    EcReturnBuffers();
-
-    void
-    EcRecoverBuffers();
-
-    void
-    EcPrepareBuffersForNetAdapter();
-
-    void
-    EcUpdateAffinity();
-
-    void
-    EcYieldToNetAdapter();
-
-    void
-    EcIndicateNblsToNdis();
-
-    void
-    WaitForWork();
-
-    NTSTATUS
-    CreateVariousPools();
-
-    NTSTATUS
-    PreparePacketExtensions(
-        _Inout_ Rtl::KArray<NET_CLIENT_PACKET_EXTENSION>& addedPacketExtensions
+    EcReturnBuffers(
+        void
     );
 
     void
-    GetPacketExtension(
-        _In_ PCWSTR ExtensionName,
-        _In_ ULONG ExtensionVersion,
-        _Out_ NET_EXTENSION * Extension
-    ) const;
-
-    bool
-    IsPacketChecksumEnabled() const;
+    EcRecoverBuffers(
+        void
+    );
 
     void
-    SetupRxThreadProperties();
+    EcPrepareBuffersForNetAdapter(
+        void
+    );
+
+    void
+    EcUpdateAffinity(
+        void
+    );
+
+    void
+    EcYieldToNetAdapter(
+        void
+    );
+
+    void
+    EcIndicateNblsToNdis(
+        void
+    );
+
+    void
+    EcUpdatePerfCounter(
+        void
+    );
+
+    void
+    EcWaitForWork(
+        void
+    );
+
+    NTSTATUS
+    CreateVariousPools(
+        void
+    );
+
+    void
+    SetupRxThreadProperties(
+        void
+    );
 
 };
 

@@ -25,18 +25,18 @@ NETEXPORT(NetTxQueueCreate)(
     _Out_ NETPACKETQUEUE* TxQueue
 )
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
     auto & InitContext = *reinterpret_cast<QUEUE_CREATION_CONTEXT*>(NetTxQueueInit);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyQueueInitContext(pNxPrivateGlobals, &InitContext);
-    Verifier_VerifyTypeSize(pNxPrivateGlobals, Configuration);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyQueueInitContext(nxPrivateGlobals, &InitContext);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, Configuration);
 
     // A NETPACKETQUEUE's parent is always the NETADAPTER
-    Verifier_VerifyObjectAttributesParentIsNull(pNxPrivateGlobals, TxQueueAttributes);
-    Verifier_VerifyObjectAttributesContextSize(pNxPrivateGlobals, TxQueueAttributes, MAXULONG);
-    Verifier_VerifyNetPacketQueueConfiguration(pNxPrivateGlobals, Configuration);
+    Verifier_VerifyObjectAttributesParentIsNull(nxPrivateGlobals, TxQueueAttributes);
+    Verifier_VerifyObjectAttributesContextSize(nxPrivateGlobals, TxQueueAttributes, MAXULONG);
+    Verifier_VerifyNetPacketQueueConfiguration(nxPrivateGlobals, Configuration);
 
     *TxQueue = nullptr;
 
@@ -50,11 +50,11 @@ NETEXPORT(NetTxQueueCreate)(
         "WdfObjectCreate for NxTxQueue failed.");
 
     NxTxQueue * txQueue = new (NxTxQueue::_FromFxBaseObject(object.get()))
-        NxTxQueue (object.get(), InitContext, InitContext.QueueId, *Configuration);
+        NxTxQueue (object.get(), *nxPrivateGlobals, InitContext, InitContext.QueueId, *Configuration);
 
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         txQueue->Initialize(InitContext),
-        "Tx queue creation failed. NxPrivateGlobals=%p", pNxPrivateGlobals);
+        "Tx queue creation failed. NxPrivateGlobals=%p", nxPrivateGlobals);
 
     if (TxQueueAttributes != WDF_NO_OBJECT_ATTRIBUTES)
     {
@@ -75,7 +75,7 @@ NETEXPORT(NetTxQueueCreate)(
 
 _IRQL_requires_max_(HIGH_LEVEL)
 WDFAPI
-VOID
+void
 NETEXPORT(NetTxQueueNotifyMoreCompletedPacketsAvailable)(
     _In_
     NET_DRIVER_GLOBALS * DriverGlobals,
@@ -99,12 +99,12 @@ NETEXPORT(NetTxQueueInitGetQueueId)(
     NETTXQUEUE_INIT * NetTxQueueInit
 )
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
     auto InitContext = reinterpret_cast<QUEUE_CREATION_CONTEXT*>(NetTxQueueInit);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyQueueInitContext(pNxPrivateGlobals, InitContext);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyQueueInitContext(nxPrivateGlobals, InitContext);
 
     return InitContext->QueueId;
 }
@@ -119,11 +119,11 @@ NETEXPORT(NetTxQueueGetRingCollection)(
     NETPACKETQUEUE NetTxQueue
 )
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyTxQueueHandle(pNxPrivateGlobals, NetTxQueue);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTxQueueHandle(nxPrivateGlobals, NetTxQueue);
 
     return GetTxQueueFromHandle(NetTxQueue)->GetRingCollection();
 }
@@ -140,19 +140,19 @@ NETEXPORT(NetRxQueueCreate)(
     _Out_ NETPACKETQUEUE * RxQueue
 )
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     auto & InitContext = *reinterpret_cast<QUEUE_CREATION_CONTEXT*>(NetRxQueueInit);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyQueueInitContext(pNxPrivateGlobals, &InitContext);
-    Verifier_VerifyTypeSize(pNxPrivateGlobals, Configuration);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyQueueInitContext(nxPrivateGlobals, &InitContext);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, Configuration);
 
     // A NETPACKETQUEUE's parent is always the NETADAPTER
-    Verifier_VerifyObjectAttributesParentIsNull(pNxPrivateGlobals, RxQueueAttributes);
-    Verifier_VerifyObjectAttributesContextSize(pNxPrivateGlobals, RxQueueAttributes, MAXULONG);
-    Verifier_VerifyNetPacketQueueConfiguration(pNxPrivateGlobals, Configuration);
+    Verifier_VerifyObjectAttributesParentIsNull(nxPrivateGlobals, RxQueueAttributes);
+    Verifier_VerifyObjectAttributesContextSize(nxPrivateGlobals, RxQueueAttributes, MAXULONG);
+    Verifier_VerifyNetPacketQueueConfiguration(nxPrivateGlobals, Configuration);
 
     *RxQueue = nullptr;
 
@@ -166,11 +166,11 @@ NETEXPORT(NetRxQueueCreate)(
         "WdfObjectCreate for NxTxQueue failed.");
 
     NxRxQueue * rxQueue = new (NxRxQueue::_FromFxBaseObject(object.get()))
-    NxRxQueue(object.get(), InitContext, InitContext.QueueId, *Configuration);
+        NxRxQueue(object.get(), *nxPrivateGlobals, InitContext, InitContext.QueueId, *Configuration);
 
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         rxQueue->Initialize(InitContext),
-        "Rx queue creation failed. NxPrivateGlobals=%p", pNxPrivateGlobals);
+        "Rx queue creation failed. NxPrivateGlobals=%p", nxPrivateGlobals);
 
     if (RxQueueAttributes != WDF_NO_OBJECT_ATTRIBUTES)
     {
@@ -191,7 +191,7 @@ NETEXPORT(NetRxQueueCreate)(
 
 _IRQL_requires_max_(HIGH_LEVEL)
 WDFAPI
-VOID
+void
 NETEXPORT(NetRxQueueNotifyMoreReceivedPacketsAvailable)(
     _In_
     NET_DRIVER_GLOBALS * DriverGlobals,
@@ -199,10 +199,10 @@ NETEXPORT(NetRxQueueNotifyMoreReceivedPacketsAvailable)(
     NETPACKETQUEUE RxQueue
 )
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyRxQueueHandle(pNxPrivateGlobals, RxQueue);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyRxQueueHandle(nxPrivateGlobals, RxQueue);
 
     GetRxQueueFromHandle(RxQueue)->NotifyMorePacketsAvailable();
 }
@@ -217,12 +217,12 @@ NETEXPORT(NetRxQueueInitGetQueueId)(
     NETRXQUEUE_INIT * NetRxQueueInit
 )
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
     auto InitContext = reinterpret_cast<QUEUE_CREATION_CONTEXT*>(NetRxQueueInit);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyQueueInitContext(pNxPrivateGlobals, InitContext);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyQueueInitContext(nxPrivateGlobals, InitContext);
 
     return InitContext->QueueId;
 }
@@ -237,134 +237,77 @@ NETEXPORT(NetRxQueueGetRingCollection)(
     NETPACKETQUEUE NetRxQueue
 )
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyRxQueueHandle(pNxPrivateGlobals, NetRxQueue);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyRxQueueHandle(nxPrivateGlobals, NetRxQueue);
 
     return GetRxQueueFromHandle(NetRxQueue)->GetRingCollection();
 }
 
-_Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
-NTSTATUS
-NETEXPORT(NetTxQueueInitAddPacketExtension)(
-    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
-    _In_ NETTXQUEUE_INIT * QueueInit,
-    _In_ const NET_PACKET_EXTENSION * ExtensionToAdd
-)
-{
-    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
-    QUEUE_CREATION_CONTEXT *queueCreationContext = reinterpret_cast<QUEUE_CREATION_CONTEXT *>(QueueInit);
-
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyTypeSize(pNxPrivateGlobals, ExtensionToAdd);
-    Verifier_VerifyNetPacketExtension(pNxPrivateGlobals, ExtensionToAdd);
-    Verifier_VerifyQueueInitContext(pNxPrivateGlobals, queueCreationContext);
-
-    NET_PACKET_EXTENSION_PRIVATE extensionPrivate = {};
-    extensionPrivate.Name = ExtensionToAdd->Name;
-    extensionPrivate.Size = ExtensionToAdd->ExtensionSize;
-    extensionPrivate.Version = ExtensionToAdd->Version;
-    extensionPrivate.NonWdfStyleAlignment = ExtensionToAdd->Alignment + 1;
-
-    return NxQueue::NetQueueInitAddPacketExtension(queueCreationContext, &extensionPrivate);
-}
-
-_Must_inspect_result_
-_IRQL_requires_max_(PASSIVE_LEVEL)
-WDFAPI
-NTSTATUS
-NETEXPORT(NetRxQueueInitAddPacketExtension)(
-    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
-    _In_ NETRXQUEUE_INIT * QueueInit,
-    _In_ NET_PACKET_EXTENSION const * ExtensionToAdd
-)
-{
-    //
-    // store the incoming NET_PACKET_EXTENSION into QUEUE_CREATION_CONTEXT,
-    // the incoming extension memory (inc. the string memory) is caller-allocated and
-    // expected to be valid until this call is over.
-    // During queue creation (Net*QueueCreate), CX would allocate a new internal
-    // NET_PACKET_EXTENSION_PRIVATE (apart from the one stored in adapter object)
-    // and store it inside the queue object for offset queries
-    //
-
-    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
-    QUEUE_CREATION_CONTEXT *queueCreationContext = reinterpret_cast<QUEUE_CREATION_CONTEXT *>(QueueInit);
-
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyTypeSize(pNxPrivateGlobals, ExtensionToAdd);
-    Verifier_VerifyNetPacketExtension(pNxPrivateGlobals, ExtensionToAdd);
-    Verifier_VerifyQueueInitContext(pNxPrivateGlobals, queueCreationContext);
-
-    NET_PACKET_EXTENSION_PRIVATE extensionPrivate = {};
-    extensionPrivate.Name = ExtensionToAdd->Name;
-    extensionPrivate.Size = ExtensionToAdd->ExtensionSize;
-    extensionPrivate.Version = ExtensionToAdd->Version;
-    extensionPrivate.NonWdfStyleAlignment = ExtensionToAdd->Alignment + 1;
-
-    return NxQueue::NetQueueInitAddPacketExtension(queueCreationContext, &extensionPrivate);
-}
-
-_IRQL_requires_max_(PASSIVE_LEVEL)
-WDFAPI
-VOID
+void
 NETEXPORT(NetTxQueueGetExtension)(
     _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETPACKETQUEUE NetTxQueue,
-    _In_ const NET_PACKET_EXTENSION_QUERY* Query,
+    _In_ NET_EXTENSION_QUERY const * Query,
     _Out_ NET_EXTENSION* Extension
 )
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     RtlZeroMemory(Extension, sizeof(*Extension));
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyTypeSize(pNxPrivateGlobals, Query);
-    Verifier_VerifyNetPacketExtensionQuery(pNxPrivateGlobals, Query);
-    Verifier_VerifyTxQueueHandle(pNxPrivateGlobals, NetTxQueue);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, Query);
+    Verifier_VerifyNetExtensionQuery(nxPrivateGlobals, Query);
+    Verifier_VerifyTxQueueHandle(nxPrivateGlobals, NetTxQueue);
 
     NxTxQueue *txQueue = GetTxQueueFromHandle(NetTxQueue);
 
-    NET_PACKET_EXTENSION_PRIVATE extensionPrivate = {};
-    extensionPrivate.Name = Query->Name;
-    extensionPrivate.Version = Query->Version;
+    NET_EXTENSION_PRIVATE const extension = {
+        Query->Name,
+        0,
+        Query->Version,
+        0,
+        Query->Type,
+    };
 
-    txQueue->GetExtension(&extensionPrivate, Extension);
+    txQueue->GetExtension(&extension, Extension);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
-VOID
+void
 NETEXPORT(NetRxQueueGetExtension)(
     _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETPACKETQUEUE NetRxQueue,
-    _In_ const NET_PACKET_EXTENSION_QUERY* Query,
+    _In_ NET_EXTENSION_QUERY const * Query,
     _Out_ NET_EXTENSION* Extension
 )
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     RtlZeroMemory(Extension, sizeof(*Extension));
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyTypeSize(pNxPrivateGlobals, Query);
-    Verifier_VerifyNetPacketExtensionQuery(pNxPrivateGlobals, Query);
-    Verifier_VerifyRxQueueHandle(pNxPrivateGlobals, NetRxQueue);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, Query);
+    Verifier_VerifyNetExtensionQuery(nxPrivateGlobals, Query);
+    Verifier_VerifyRxQueueHandle(nxPrivateGlobals, NetRxQueue);
 
     NxRxQueue *rxQueue = GetRxQueueFromHandle(NetRxQueue);
 
-    NET_PACKET_EXTENSION_PRIVATE extensionPrivate = {};
-    extensionPrivate.Name = Query->Name;
-    extensionPrivate.Version = Query->Version;
+    NET_EXTENSION_PRIVATE const extension = {
+        Query->Name,
+        0,
+        Query->Version,
+        0,
+        Query->Type,
+    };
 
-    rxQueue->GetExtension(&extensionPrivate, Extension);
+    rxQueue->GetExtension(&extension, Extension);
 }

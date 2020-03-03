@@ -97,14 +97,14 @@ Usage:
 
 #pragma once
 
-#include "KMacros.h"
-#include "KDeletePolicy.h"
-#include "KNew.h"
+#include <KMacros.h>
+#include <KDeletePolicy.h>
+#include <KNew.h>
 #include <cstddef>
-#include <wil\wistd_type_traits.h>
+#include <wil/wistd_type_traits.h>
 
 class ndisTriageClass;
-extern "C" VOID ndisInitGlobalTriageBlock();
+VOID ndisInitGlobalTriageBlock();
 
 template<typename T>
 class KRTL_CLASS KRef
@@ -204,6 +204,24 @@ public:
     PAGED void assign_unsafe(T *t)
     {
         reset(KRefHolder::from_pointer(t));
+    }
+
+    PAGED void manual_addref()
+    {
+        WIN_ASSERT(_p != pointer());
+        ref();
+    }
+
+    PAGED void manual_deref()
+    {
+        WIN_ASSERT(_p != pointer());
+        unref();
+    }
+
+    PAGED static void manual_deref(T *t)
+    {
+        auto p = KRefHolder::from_pointer(t);
+        p->Release();
     }
 
 private:

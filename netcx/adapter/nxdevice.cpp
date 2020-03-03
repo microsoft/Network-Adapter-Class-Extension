@@ -15,6 +15,7 @@ Abstract:
 
 #include "NxAdapter.hpp"
 #include "NxDriver.hpp"
+#include "powerpolicy/NxPowerList.hpp"
 #include "NxMacros.hpp"
 #include "verifier.hpp"
 #include "version.hpp"
@@ -28,18 +29,20 @@ static EVT_WDFCX_DEVICE_PRE_PREPARE_HARDWARE_FAILED_CLEANUP EvtCxDevicePrePrepar
 static EVT_WDF_DEVICE_RELEASE_HARDWARE EvtCxDevicePreReleaseHardware;
 static EVT_WDF_DEVICE_RELEASE_HARDWARE EvtCxDevicePostReleaseHardware;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_INIT EvtCxDevicePostSelfManagedIoInit;
-static EVT_WDF_DEVICE_SELF_MANAGED_IO_RESTART EvtCxDevicePostSelfManagedIoRestart;
-static EVT_WDF_DEVICE_SELF_MANAGED_IO_SUSPEND EvtCxDevicePreSelfManagedIoSuspend;
 static EVT_WDF_DEVICE_SELF_MANAGED_IO_CLEANUP EvtCxDevicePostSelfManagedIoCleanup;
 static EVT_WDF_DEVICE_SURPRISE_REMOVAL EvtCxDevicePreSurpriseRemoval;
+static EVT_WDF_OBJECT_CONTEXT_CLEANUP EvtDeviceCleanup;
+static EVT_WDFCX_DEVICE_POST_D0_ENTRY_POST_HARDWARE_ENABLED EvtCxDevicePostD0EntryPostHardwareEnabled;
+static EVT_WDFCX_DEVICE_PRE_D0_EXIT_PRE_HARDWARE_DISABLED EvtCxDevicePreD0ExitPreHardwareDisabled;
+
+static EVT_WDFCX_DEVICE_PRE_DISARM_WAKE_FROM_S0 EvtCxPreDisarmWakeFromS0;
+static EVT_WDFCX_DEVICE_POST_DISARM_WAKE_FROM_S0 EvtCxPostDisarmWakeFromS0;
+static EVT_WDFCX_DEVICE_PRE_DISARM_WAKE_FROM_SX EvtCxPreDisarmWakeFromSx;
+static EVT_WDFCX_DEVICE_POST_DISARM_WAKE_FROM_SX EvtCxPostDisarmWakeFromSx;
 
 static EVT_WDFCXDEVICE_WDM_IRP_PREPROCESS EvtWdmIrpPreprocessRoutine;
 static EVT_WDFCXDEVICE_WDM_IRP_PREPROCESS EvtWdmPnpIrpPreprocessRoutine;
-static EVT_WDFCXDEVICE_WDM_IRP_PREPROCESS EvtWdmPowerIrpPreprocessRoutine;
 static EVT_WDFCXDEVICE_WDM_IRP_PREPROCESS EvtWdmWmiIrpPreprocessRoutine;
-
-static IO_COMPLETION_ROUTINE WdmIrpCompleteFromNdis;
-static IO_COMPLETION_ROUTINE WdmIrpCompleteSetPower;
 
 static DRIVER_NOTIFICATION_CALLBACK_ROUTINE DeviceInterfaceChangeNotification;
 
@@ -111,7 +114,7 @@ static
 void
 _FunctionLevelResetCompletion(
     _In_ NTSTATUS Status,
-    _Inout_opt_ PVOID Context
+    _Inout_opt_ void * Context
 );
 
 _Use_decl_annotations_
@@ -154,7 +157,6 @@ Routine Description:
 
     UCHAR pnpMinorCodes[] =
     {
-        IRP_MN_REMOVE_DEVICE,
         IRP_MN_QUERY_REMOVE_DEVICE
     };
 
@@ -166,20 +168,6 @@ Routine Description:
             pnpMinorCodes,
             ARRAYSIZE(pnpMinorCodes)),
         "WdfDeviceInitAssignWdmIrpPreprocessCallback failed for IRP_MJ_PNP");
-
-    UCHAR powerMinorCodes[] =
-    {
-        IRP_MN_SET_POWER
-    };
-
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        WdfCxDeviceInitAssignWdmIrpPreprocessCallback(
-            CxDeviceInit,
-            EvtWdmPowerIrpPreprocessRoutine,
-            IRP_MJ_POWER,
-            powerMinorCodes,
-            ARRAYSIZE(powerMinorCodes)),
-        "WdfDeviceInitAssignWdmIrpPreprocessCallback failed for IRP_MJ_POWER");
 
     UCHAR wmiMinorCodes[] =
     {
@@ -240,27 +228,29 @@ Routine Description:
     //
     pnpCallbacks.EvtCxDevicePreSurpriseRemoval = EvtCxDevicePreSurpriseRemoval;
 
-    //
-    // EvtDeviceSelfManagedIoInit:
-    //
+    pnpCallbacks.EvtCxDevicePostD0EntryPostHardwareEnabled = EvtCxDevicePostD0EntryPostHardwareEnabled;
+    pnpCallbacks.EvtCxDevicePreD0ExitPreHardwareDisabled = EvtCxDevicePreD0ExitPreHardwareDisabled;
+
     pnpCallbacks.EvtCxDevicePostSelfManagedIoInit = EvtCxDevicePostSelfManagedIoInit;
-
-    //
-    // EvtDeviceSelfManagedIoRestart:
-    //
-    pnpCallbacks.EvtCxDevicePostSelfManagedIoRestart = EvtCxDevicePostSelfManagedIoRestart;
-
-    //
-    // EvtDeviceSelfManagedIoSuspend:
-    //
-    pnpCallbacks.EvtCxDevicePreSelfManagedIoSuspend = EvtCxDevicePreSelfManagedIoSuspend;
-
-    //
-    // EvtDeviceSelfManagedIoCleanup
-    //
     pnpCallbacks.EvtCxDevicePostSelfManagedIoCleanup = EvtCxDevicePostSelfManagedIoCleanup;
 
     WdfCxDeviceInitSetPnpPowerEventCallbacks(CxDeviceInit, &pnpCallbacks);
+}
+
+void
+SetCxPowerPolicyCallbacks(
+    _In_ WDFCXDEVICE_INIT *CxDeviceInit
+)
+{
+    WDFCX_POWER_POLICY_EVENT_CALLBACKS cxPowerPolicyCallBacks;
+    WDFCX_POWER_POLICY_EVENT_CALLBACKS_INIT(&cxPowerPolicyCallBacks);
+
+    cxPowerPolicyCallBacks.EvtCxDevicePreDisarmWakeFromS0 = EvtCxPreDisarmWakeFromS0;
+    cxPowerPolicyCallBacks.EvtCxDevicePostDisarmWakeFromS0 = EvtCxPostDisarmWakeFromS0;
+    cxPowerPolicyCallBacks.EvtCxDevicePreDisarmWakeFromSx = EvtCxPreDisarmWakeFromSx;
+    cxPowerPolicyCallBacks.EvtCxDevicePostDisarmWakeFromSx = EvtCxPostDisarmWakeFromSx;
+
+    WdfCxDeviceInitSetPowerPolicyEventCallbacks(CxDeviceInit, &cxPowerPolicyCallBacks);
 }
 
 void
@@ -273,7 +263,7 @@ Routine Description:
     As a result NxDevice adds the adapter to its collection.
 --*/
 {
-    m_AdapterCollection.AddAdapter(Adapter);
+    m_adapterCollection.Add(Adapter);
 }
 
 _Use_decl_annotations_
@@ -282,7 +272,7 @@ NxDevice::AdapterDestroyed(
     NxAdapter *Adapter
 )
 {
-    if (m_AdapterCollection.RemoveAdapter(Adapter))
+    if (m_adapterCollection.Remove(Adapter))
     {
         LogVerbose(
             GetRecorderLog(),
@@ -299,7 +289,7 @@ NxDevice::AreAllAdaptersHalted(
     void
 )
 {
-    if(InterlockedCompareExchange((LONG *)&m_NdisInitializeCount, 0, 0) == 0)
+    if(InterlockedCompareExchange((LONG *)&m_ndisInitializeCount, 0, 0) == 0)
     {
         return NxDevice::Event::Yes;
     }
@@ -314,7 +304,7 @@ NxDevice::AdapterInitialized(
     void
 )
 {
-    InterlockedIncrement((LONG *)&m_NdisInitializeCount);
+    InterlockedIncrement((LONG *)&m_ndisInitializeCount);
 }
 
 void
@@ -322,7 +312,7 @@ NxDevice::AdapterHalted(
     void
 )
 {
-    InterlockedDecrement((LONG *)&m_NdisInitializeCount);
+    InterlockedDecrement((LONG *)&m_ndisInitializeCount);
 
     KIRQL irql;
 
@@ -339,9 +329,9 @@ _Use_decl_annotations_
 NxDevice::Event
 NxDevice::ReleasingIsSurpriseRemoved()
 {
-    m_State = DeviceState::ReleasingPhase2Pending;
+    m_state = DeviceState::ReleasingPhase2Pending;
 
-    if (m_Flags.SurpriseRemoved)
+    if (m_flags.SurpriseRemoved)
     {
         return NxDevice::Event::Yes;
     } else
@@ -354,7 +344,7 @@ _Use_decl_annotations_
 NxDevice::Event
 NxDevice::ReleasingReportSurpriseRemoveToNdis()
 {
-    m_AdapterCollection.ForEachAdapter(
+    m_adapterCollection.ForEach(
         [this](NxAdapter & adapter)
     {
         adapter.ReportSurpriseRemove();
@@ -367,10 +357,10 @@ _Use_decl_annotations_
 NxDevice::Event
 NxDevice::ReleasingReportDeviceAddFailureToNdis()
 {
-    m_AdapterCollection.ForEachAdapter(
+    m_adapterCollection.ForEach(
         [this](NxAdapter & adapter)
     {
-        adapter.FullStop(m_State);
+        adapter.FullStop(m_state);
     });
 
     return NxDevice::Event::SyncSuccess;
@@ -380,7 +370,7 @@ _Use_decl_annotations_
 NxDevice::Event
 NxDevice::ReleasingReportPreReleaseToNdis()
 {
-    m_AdapterCollection.ForEachAdapter(
+    m_adapterCollection.ForEach(
         [this](NxAdapter & adapter)
     {
         adapter.StopPhase1();
@@ -395,9 +385,9 @@ _Use_decl_annotations_
 NxDevice::Event
 NxDevice::ReleasingReportPostReleaseToNdis()
 {
-    m_State = DeviceState::Released;
+    m_state = DeviceState::Released;
 
-    m_AdapterCollection.ForEachAdapter(
+    m_adapterCollection.ForEach(
         [this](NxAdapter &adapter)
     {
         adapter.StopPhase2();
@@ -414,7 +404,7 @@ NxDevice::CheckPowerPolicyOwnership(
     void
 )
 {
-    m_Flags.IsPowerPolicyOwner = GetPowerPolicyOwnership();
+    m_flags.IsPowerPolicyOwner = GetPowerPolicyOwnership();
     return NxDevice::Event::SyncSuccess;
 }
 
@@ -422,15 +412,12 @@ _Use_decl_annotations_
 NxDevice::Event
 NxDevice::RemovedReportRemoveToNdis()
 {
-    m_State = DeviceState::Removed;
-
-    (void)IoWMIRegistrationControl(WdfDeviceWdmGetDeviceObject(GetFxObject()),
-        WMIREG_ACTION_DEREGISTER);
+    m_state = DeviceState::Removed;
 
     Verifier_VerifyDeviceAdapterCollectionIsEmpty(
-        m_NxDriver->GetPrivateGlobals(),
+        m_nxDriver->GetPrivateGlobals(),
         this,
-        &m_AdapterCollection);
+        &m_adapterCollection);
 
     WdfDeviceObjectCleanupHandled.Set();
 
@@ -447,9 +434,9 @@ Description:
     resource rebalance
 */
 {
-    m_State = DeviceState::Initialized;
+    m_state = DeviceState::Initialized;
 
-    m_AdapterCollection.ForEachAdapter(
+    m_adapterCollection.ForEach(
         [this](NxAdapter & adapter)
     {
         adapter.PrepareForRebalance();
@@ -464,9 +451,9 @@ NxDevice::Started(
     void
 )
 {
-    m_State = DeviceState::Started;
+    m_state = DeviceState::Started;
 
-    m_AdapterCollection.ForEachAdapter(
+    m_adapterCollection.ForEach(
         [this](NxAdapter & adapter)
     {
         adapter.PnPStartComplete();
@@ -497,10 +484,10 @@ NxDevice::PrepareHardwareFailedCleanup(
     void
 )
 {
-    m_AdapterCollection.ForEachAdapter(
+    m_adapterCollection.ForEach(
         [this](NxAdapter & adapter)
     {
-        adapter.FullStop(m_State);
+        adapter.FullStop(m_state);
     });
 
     CxPrePrepareHardwareFailedCleanupHandled.Set();
@@ -522,18 +509,18 @@ Description:
 
 */
 {
-    m_AdapterCollection.ForEachAdapter(
+    m_adapterCollection.ForEach(
         [this](NxAdapter & adapter)
     {
-        adapter.Refresh(m_State);
+        adapter.Refresh(m_state);
     });
 }
 
+_Use_decl_annotations_
 NTSTATUS
 NxDevice::_Create(
-    _In_  NX_PRIVATE_GLOBALS *          PrivateGlobals,
-    _In_  WDFDEVICE                     Device,
-    _Out_ NxDevice **                   NxDeviceParam
+    NX_PRIVATE_GLOBALS * PrivateGlobals,
+    WDFDEVICE_INIT * DeviceInit
 )
 /*++
 Routine Description:
@@ -545,57 +532,88 @@ Routine Description:
 
 --*/
 {
-    NTSTATUS              status;
     WDF_OBJECT_ATTRIBUTES attributes;
-
-    //
-    // First Apply a context on the device
-    //
-
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, NxDevice);
 
-    #pragma prefast(suppress:__WARNING_FUNCTION_CLASS_MISMATCH_NONE, "can't add class to static member function")
-    attributes.EvtCleanupCallback = NxDevice::_EvtCleanup;
+    attributes.EvtCleanupCallback = EvtDeviceCleanup;
+    attributes.EvtDestroyCallback = [](WDFOBJECT Object)
+    {
+        // Note: Do not assume 'Object' is a valid WDFDEVICE handle. In case of failure
+        // we might get a half initialized device object. The only thing that is guaranteed
+        // to succeed is getting the typed context
+        auto nxDevice = static_cast<NxDevice *>(WdfObjectGetTypedContext(
+            Object,
+            NxDevice));
 
-    //
-    // Ensure that the destructor would be called when this object is distroyed.
-    //
-    NxDevice::_SetObjectAttributes(&attributes);
+        nxDevice->~NxDevice();
+    };
 
-    void * nxDeviceMemory;
-    status = WdfObjectAllocateContext(Device,
-                                      &attributes,
-                                      &nxDeviceMemory);
+    void * storage;
 
-    if (!NT_SUCCESS(status)) {
-        LogError(PrivateGlobals->NxDriver->GetRecorderLog(), FLAG_DEVICE,
-                 "WdfObjectAllocateContext failed %!STATUS!", status);
-        return status;
-    }
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        WdfCxDeviceInitAllocateContext(
+            DeviceInit,
+            &attributes,
+            &storage));
 
-    //
-    // Use the inplacement new and invoke the constructor on the
-    // NxAdapter's memory
-    //
-    auto nxDevice = new (nxDeviceMemory) NxDevice(PrivateGlobals,
-                                             Device);
+    new (storage) NxDevice(PrivateGlobals);
 
-    __analysis_assume(nxDevice != NULL);
-
-    NT_ASSERT(nxDevice);
-
-    CX_RETURN_IF_NOT_NT_SUCCESS(nxDevice->Init());
-
-    *NxDeviceParam = nxDevice;
-
-    return status;
+    return STATUS_SUCCESS;
 }
 
-NTSTATUS
-NxDevice::Init(
+WDFDEVICE
+NxDevice::GetFxObject(
     void
+) const
+{
+    return m_device;
+}
+
+_Use_decl_annotations_
+NTSTATUS
+NxDevice::EnsureInitialized(
+    WDFDEVICE Device
 )
 {
+    if (m_device == nullptr)
+    {
+        CX_RETURN_IF_NOT_NT_SUCCESS(Initialize(Device));
+    }
+
+    return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+NTSTATUS
+NxDevice::Initialize(
+    WDFDEVICE Device
+)
+{
+    m_device = Device;
+
+    //
+    // Querying device bus address is best effort
+    //
+    WDF_DEVICE_PROPERTY_DATA data;
+    WDF_DEVICE_PROPERTY_DATA_INIT(&data, &DEVPKEY_Device_Address);
+
+    DEVPROPTYPE devPropType;
+    ULONG requiredSize;
+
+    WdfDeviceQueryPropertyEx(
+        m_device,
+        &data,
+        sizeof(m_deviceBusAddress),
+        &m_deviceBusAddress,
+        &requiredSize,
+        &devPropType);
+
+    
+    
+    
+    
+    
+
     #ifdef _KERNEL_MODE
     StateMachineEngineConfig smConfig(WdfDeviceWdmGetDeviceObject(GetFxObject()), NETADAPTERCX_TAG);
     #else
@@ -603,7 +621,7 @@ NxDevice::Init(
     #endif
 
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        Initialize(smConfig),
+        NxDeviceStateMachine::Initialize(smConfig),
         "StateMachineEngine_Init failed");
 
     // Default supported OID List
@@ -619,22 +637,13 @@ NxDevice::Init(
     return STATUS_SUCCESS;
 }
 
-_Use_decl_annotations_
-void
-NxDevice::ReleaseRemoveLock(
-    IRP *Irp
-)
-{
-    Mx::MxReleaseRemoveLock(&m_RemoveLock, Irp);
-}
-
 void
 NxDevice::SurpriseRemoved(
     void
 )
 {
-    NT_ASSERT(!m_Flags.SurpriseRemoved);
-    m_Flags.SurpriseRemoved = true;
+    NT_ASSERT(!m_flags.SurpriseRemoved);
+    m_flags.SurpriseRemoved = true;
 }
 
 NxDriver *
@@ -642,64 +651,24 @@ NxDevice::GetNxDriver(
     void
 ) const
 {
-    return m_NxDriver;
+    return m_nxDriver;
 }
 
+_Use_decl_annotations_
 NxDevice::NxDevice(
-    _In_ NX_PRIVATE_GLOBALS *          NxPrivateGlobals,
-    _In_ WDFDEVICE                     Device
-):
-    CFxObject(Device),
-    m_NxDriver(NxPrivateGlobals->NxDriver)
+    NX_PRIVATE_GLOBALS * NxPrivateGlobals
+)
+    : m_nxDriver(NxPrivateGlobals->NxDriver)
 {
-    Mx::MxInitializeRemoveLock(&m_RemoveLock, NETADAPTERCX_TAG, 0, 0);
-
-    NTSTATUS status = STATUS_UNSUCCESSFUL;
-
-    WDF_DEVICE_PROPERTY_DATA data;
-    WDF_OBJECT_ATTRIBUTES objAttributes;
-    DEVPROPTYPE devPropType;
-    WDFMEMORY memory = nullptr;
-
-    WDF_DEVICE_PROPERTY_DATA_INIT(&data, &DEVPKEY_Device_Address);
-    WDF_OBJECT_ATTRIBUTES_INIT(&objAttributes);
-    objAttributes.ParentObject = Device;
-
-    status = WdfDeviceAllocAndQueryPropertyEx(
-        Device,
-        &data,
-        PagedPool,
-        &objAttributes,
-        &memory,
-        &devPropType);
-
-    if ((NT_SUCCESS(status)) &&
-        (devPropType == DEVPROP_TYPE_UINT32))
-    {
-        size_t bufferSize;
-        PVOID buffer = WdfMemoryGetBuffer(memory, &bufferSize);
-        if (bufferSize == sizeof(UINT32))
-        {
-            m_DeviceBusAddress = *((PUINT32)buffer);
-        }
-    }
-
-    if (memory != nullptr)
-    {
-        WdfObjectDelete(memory);
-    }
-
-
-
-
-
-
-
-    m_NetAdapterCxTriageBlock = &g_NetAdapterCxTriageBlock;
+    m_netAdapterCxTriageBlock = &g_NetAdapterCxTriageBlock;
 }
 
-NxDevice::~NxDevice()
+UINT32
+NxDevice::GetDeviceBusAddress(
+    void
+) const
 {
+    return m_deviceBusAddress;
 }
 
 _Use_decl_annotations_
@@ -711,30 +680,11 @@ EvtCxDevicePrePrepareHardware(
 )
 {
     UNREFERENCED_PARAMETER((ResourcesRaw, ResourcesTranslated));
-    auto  nxDevice = GetNxDeviceFromHandle(Device);
+    auto nxDevice = GetNxDeviceFromHandle(Device);
 
-    if (nxDevice == nullptr)
-    {
-        // If there is no NxDevice context create it
-        auto driver = WdfDeviceGetDriver(Device);
-        auto nxDriver = GetNxDriverFromWdfDriver(driver);
-
-        CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-            NxDevice::_Create(
-                nxDriver->GetPrivateGlobals(),
-                Device,
-                &nxDevice),
-            "Failed to create NxDevice context. WDFDEVICE=%p", Device);
-    }
-
-    //
-    // register WMI after NxDevice being succesfully created
-    // because we will deregister inside NxDevice's cleanup callback
-    //
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        IoWMIRegistrationControl(WdfDeviceWdmGetDeviceObject(Device),
-                                 WMIREG_ACTION_REGISTER),
-        "IoWMIRegisterationControl Failed, device=%p", nxDevice);
+        nxDevice->EnsureInitialized(Device),
+        "Failed to initialize NxDevice. WDFDEVICE=%p", Device);
 
     nxDevice->EnqueueEvent(NxDevice::Event::CxPrePrepareHardware);
     return nxDevice->CxPrePrepareHardwareHandled.Wait();
@@ -821,7 +771,7 @@ NxDevice::GetPowerPolicyOwnership(
     NTSTATUS ntStatus = WdfDeviceStopIdleWithTag(
         GetFxObject(),
         FALSE,
-        PTR_TO_TAG(EvtCxDevicePostSelfManagedIoInit));
+        PTR_TO_TAG(EvtCxDevicePostD0EntryPostHardwareEnabled));
 
     if (!NT_SUCCESS(ntStatus))
     {
@@ -833,33 +783,8 @@ NxDevice::GetPowerPolicyOwnership(
         return false;
     }
 
-    WdfDeviceResumeIdleWithTag(GetFxObject(), PTR_TO_TAG(EvtCxDevicePostSelfManagedIoInit));
+    WdfDeviceResumeIdleWithTag(GetFxObject(), PTR_TO_TAG(EvtCxDevicePostD0EntryPostHardwareEnabled));
     return true;
-}
-
-_Use_decl_annotations_
-NTSTATUS
-EvtCxDevicePostSelfManagedIoInit(
-    WDFDEVICE Device
-)
-/*++
-
-Routine Description:
-
-    Called by WDF after a successful call to the client's
-    EvtDeviceSelfManagedIoInit.
-
-    If the client's EvtDeviceSelfManagedIoInit fails this
-    callback won't be called.
-
-    This routine informs NDIS that it is ok to start the data path for the
-    client.
-
---*/
-{
-    auto nxDevice = GetNxDeviceFromHandle(Device);
-    nxDevice->EnqueueEvent(NxDevice::Event::CxPostSelfManagedIoInit);
-    return nxDevice->CxPostSelfManagedIoInitHandled.Wait();
 }
 
 _Use_decl_annotations_
@@ -868,24 +793,15 @@ NxDevice::InitializeSelfManagedIo(
     void
 )
 {
-    m_State = DeviceState::SelfManagedIoInitialized;
+    m_state = DeviceState::SelfManagedIoInitialized;
 
-    m_AdapterCollection.ForEachAdapter(
+    m_adapterCollection.ForEach(
         [this](NxAdapter & adapter)
     {
-        adapter.InitializeSelfManagedIO();
+        adapter.SelfManagedIoStart();
     });
 
-    auto ntStatus = IoRegisterPlugPlayNotification(
-        EventCategoryDeviceInterfaceChange,
-        0,
-        (void *)&GUID_DEVINTERFACE_NETCX,
-        WdfDriverWdmGetDriverObject(WdfGetDriver()),
-        DeviceInterfaceChangeNotification,
-        GetFxObject(),
-        &m_PlugPlayNotificationHandle);
-
-    CxPostSelfManagedIoInitHandled.Set(ntStatus);
+    CxSelfManagedIoHandled.Set();
 
     return NxDevice::Event::SyncSuccess;
 }
@@ -896,41 +812,41 @@ NxDevice::ReinitializeSelfManagedIo(
     void
 )
 {
-    m_State = DeviceState::SelfManagedIoInitialized;
+    m_state = DeviceState::SelfManagedIoInitialized;
 
-    m_AdapterCollection.ForEachAdapter(
+    m_adapterCollection.ForEach(
         [this](NxAdapter & adapter)
     {
-        adapter.InitializeSelfManagedIO();
+        adapter.SelfManagedIoStart();
     });
 
-    CxPostSelfManagedIoRestartHandled.Set();
+    CxSelfManagedIoHandled.Set();
+
     return NxDevice::Event::SyncSuccess;
 }
 
 _Use_decl_annotations_
 NTSTATUS
-EvtCxDevicePostSelfManagedIoRestart(
-    WDFDEVICE Device
+EvtCxDevicePostD0EntryPostHardwareEnabled(
+    WDFDEVICE Device,
+    WDF_POWER_DEVICE_STATE PreviousTargetState
 )
-/*++
-
-Routine Description:
-
-    Called by WDF after a successful call to the client's
-    EvtDeviceSelfManagedIoRestart.
-
-    If the client's EvtDeviceSelfManagedIoRestart fails
-    this callback won't be called.
-
-    This routine informs the adapter that it is ok to start the data path
-    for the client from WDF perspective.
-
---*/
 {
+    NT_FRE_ASSERT(PreviousTargetState >= WdfPowerDeviceD1);
+    NT_FRE_ASSERT(PreviousTargetState <= WdfPowerDeviceD3Final);
+
     auto nxDevice = GetNxDeviceFromHandle(Device);
-    nxDevice->EnqueueEvent(NxDevice::Event::CxPostSelfManagedIoRestart);
-    nxDevice->CxPostSelfManagedIoRestartHandled.Wait();
+
+    if (PreviousTargetState == WdfPowerDeviceD3Final)
+    {
+        nxDevice->EnqueueEvent(NxDevice::Event::CxPostSelfManagedIoStart);
+    }
+    else
+    {
+        nxDevice->EnqueueEvent(NxDevice::Event::CxPostSelfManagedIoRestart);
+    }
+
+    nxDevice->CxSelfManagedIoHandled.Wait();
 
     return STATUS_SUCCESS;
 }
@@ -941,43 +857,43 @@ NxDevice::RestartSelfManagedIo(
     void
 )
 {
-    m_AdapterCollection.ForEachAdapter(
+    m_adapterCollection.ForEach(
         [this](NxAdapter & adapter)
     {
-        adapter.RestartSelfManagedIo(
-            m_SystemPowerAction,
-            m_TargetSystemPowerState,
-            m_TargetDevicePowerState);
+        auto const SystemPowerAction = WdfDeviceGetSystemPowerAction(m_device);
+        adapter.SelfManagedIoRestart(
+            SystemPowerAction
+        );
     });
 
-    CxPostSelfManagedIoRestartHandled.Set();
+    CxSelfManagedIoHandled.Set();
 
     return NxDevice::Event::SyncSuccess;
 }
 
 _Use_decl_annotations_
 NTSTATUS
-EvtCxDevicePreSelfManagedIoSuspend(
-    WDFDEVICE Device
+EvtCxDevicePreD0ExitPreHardwareDisabled(
+    WDFDEVICE Device,
+    WDF_POWER_DEVICE_STATE TargetState
 )
-/*++
-
-Routine Description:
-
-    Called by WDF before calling the client's
-    EvtDeviceSelfManagedIoSuspend.
-
-    This routine informs NDIS that it must synchronously pause the clients
-    datapath.
---*/
 {
     auto nxDevice = GetNxDeviceFromHandle(Device);
 
-    nxDevice->EnqueueEvent(NxDevice::Event::CxPreSelfManagedIoSuspend);
-
-    nxDevice->CxPreSelfManagedIoSuspendHandled.Wait();
+    nxDevice->PreSelfManagedIoSuspend(TargetState);
 
     return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+NTSTATUS
+EvtCxDevicePostSelfManagedIoInit(
+    WDFDEVICE Device
+)
+{
+    auto nxDevice = GetNxDeviceFromHandle(Device);
+
+    return nxDevice->RegisterPlugPlayNotification();
 }
 
 _Use_decl_annotations_
@@ -987,20 +903,92 @@ EvtCxDevicePostSelfManagedIoCleanup(
 )
 {
     auto nxDevice = GetNxDeviceFromHandle(Device);
-    nxDevice->EnqueueEvent(NxDevice::Event::CxPostSelfManagedIoCleanup);
-    nxDevice->CxPostSelfManagedIoCleanupHandled.Wait();
+
+    nxDevice->UnregisterPlugPlayNotification();
 }
 
 _Use_decl_annotations_
-NxDevice::Event
-NxDevice::SelfManagedIoCleanup(
+VOID
+EvtCxPreDisarmWakeFromS0(
+    WDFDEVICE Device
+)
+{
+    auto nxDevice = GetNxDeviceFromHandle(Device);
+    nxDevice->EnableWakeReasonReporting();
+}
+
+_Use_decl_annotations_
+VOID
+EvtCxPostDisarmWakeFromS0(
+    WDFDEVICE Device
+)
+{
+    auto nxDevice = GetNxDeviceFromHandle(Device);
+    nxDevice->DisableWakeReasonReporting();
+}
+
+_Use_decl_annotations_
+VOID
+EvtCxPreDisarmWakeFromSx(
+    WDFDEVICE Device
+)
+{
+    auto nxDevice = GetNxDeviceFromHandle(Device);
+    nxDevice->EnableWakeReasonReporting();
+}
+
+_Use_decl_annotations_
+VOID
+EvtCxPostDisarmWakeFromSx(
+    WDFDEVICE Device
+)
+{
+    auto nxDevice = GetNxDeviceFromHandle(Device);
+    nxDevice->DisableWakeReasonReporting();
+}
+
+void
+NxDevice::EnableWakeReasonReporting(
     void
 )
 {
-    IoUnregisterPlugPlayNotificationEx(m_PlugPlayNotificationHandle);
-    CxPostSelfManagedIoCleanupHandled.Set();
+    m_isDisarmInProgress = true;
+}
 
-    return NxDevice::Event::SyncSuccess;
+void
+NxDevice::DisableWakeReasonReporting(
+    void
+)
+{
+    m_isDisarmInProgress = false;
+}
+
+_Use_decl_annotations_
+NTSTATUS
+NxDevice::RegisterPlugPlayNotification(
+    void
+)
+{
+    return IoRegisterPlugPlayNotification(
+        EventCategoryDeviceInterfaceChange,
+        0,
+        (void *)&GUID_DEVINTERFACE_NETCX,
+        WdfDriverWdmGetDriverObject(WdfGetDriver()),
+        DeviceInterfaceChangeNotification,
+        GetFxObject(),
+        &m_plugPlayNotificationHandle);
+}
+
+_Use_decl_annotations_
+void
+NxDevice::UnregisterPlugPlayNotification(
+    void
+)
+{
+    if (m_plugPlayNotificationHandle != nullptr)
+    {
+        IoUnregisterPlugPlayNotificationEx(m_plugPlayNotificationHandle);
+    }
 }
 
 void
@@ -1014,7 +1002,7 @@ NxDevice::StartComplete(
 _Use_decl_annotations_
 NxDevice::Event
 NxDevice::SuspendSelfManagedIo(
-    VOID
+    void
 )
 /*++
 Routine Description:
@@ -1024,18 +1012,24 @@ Routine Description:
 
 --*/
 {
-    if (m_TargetDevicePowerState == PowerDeviceUnspecified)
+    if (m_targetDevicePowerState == WdfPowerDeviceInvalid)
     {
-        m_State = DeviceState::ReleasingPhase1Pending;
+        m_state = DeviceState::ReleasingPhase1Pending;
     }
 
-    m_AdapterCollection.ForEachAdapter(
+    m_adapterCollection.ForEach(
         [this](NxAdapter & adapter)
     {
-        adapter.SuspendSelfManagedIo(
-            m_SystemPowerAction,
-            m_TargetSystemPowerState,
-            m_TargetDevicePowerState);
+        if (m_targetDevicePowerState == WdfPowerDeviceD3Final)
+        {
+            adapter.SelfManagedIoStop();
+        }
+        else
+        {
+            adapter.SelfManagedIoSuspend(
+                WdfDeviceGetSystemPowerAction(m_device),
+                m_targetDevicePowerState);
+        }
     });
 
     CxPreSelfManagedIoSuspendHandled.Set();
@@ -1043,13 +1037,21 @@ Routine Description:
     return NxDevice::Event::SyncSuccess;
 }
 
-BOOLEAN
+bool
 NxDevice::IsDeviceInPowerTransition(
-    VOID
+    void
 )
 {
-    NT_ASSERT(m_TargetDevicePowerState < PowerDeviceMaximum);
-    return m_TargetDevicePowerState != PowerDeviceUnspecified;
+    NT_FRE_ASSERT(m_targetDevicePowerState < WdfPowerDeviceMaximum);
+    return m_targetDevicePowerState != WdfPowerDeviceInvalid;
+}
+
+bool
+NxDevice::IsDisarmInProgress(
+    void
+)
+{
+    return m_isDisarmInProgress;
 }
 
 _Use_decl_annotations_
@@ -1069,70 +1071,6 @@ Routine Description:
 --*/
 {
     GetNxDeviceFromHandle(Device)->SurpriseRemoved();
-}
-
-_Use_decl_annotations_
-NTSTATUS
-WdmIrpCompleteFromNdis(
-    DEVICE_OBJECT *DeviceObject,
-    IRP *Irp,
-    void *Context
-)
-/*++
-Routine Description:
-
-    This is a wdm irp completion routine for the IRPs that were forwarded to
-    ndis.sys directly from a pre-processor routine.
-
-    It release a removelock that was acquired in the preprocessor routine
-
---*/
-{
-    UNREFERENCED_PARAMETER(DeviceObject);
-
-    auto device = static_cast<NxDevice *>(Context);
-    device->ReleaseRemoveLock(Irp);
-
-    //
-    // Propagate the Pending Flag
-    //
-    if (Irp->PendingReturned) {
-        IoMarkIrpPending(Irp);
-    }
-
-    return STATUS_CONTINUE_COMPLETION;
-}
-
-_Use_decl_annotations_
-NTSTATUS
-WdmIrpCompleteSetPower(
-    DEVICE_OBJECT *DeviceObject,
-    IRP *Irp,
-    void *Context
-)
-/*++
-Routine Description:
-    This completion routine is registered when the device
-    receives a power IRP requesting it to go to D0/Dx.
-
---*/
-{
-    UNREFERENCED_PARAMETER(DeviceObject);
-
-    auto irpStack = IoGetCurrentIrpStackLocation(Irp);
-
-    auto device = static_cast<NxDevice *>(Context);
-    device->PostSetPowerIrp(irpStack->Parameters.Power);
-
-    //
-    // Propagate the Pending Flag
-    //
-    if (Irp->PendingReturned)
-    {
-        IoMarkIrpPending(Irp);
-    }
-
-    return STATUS_CONTINUE_COMPLETION;
 }
 
 _Use_decl_annotations_
@@ -1185,8 +1123,6 @@ DeviceInterfaceChangeNotification(
                 reinterpret_cast<void **>(&fileObject),
                 nullptr),
             "ObReferenceObjectByHandle failed.");
-
-        NT_ASSERT(fileObject->FsContext == NETADAPTERCX_DEVICE_INTERFACE_SIGNATURE);
 
         auto device = static_cast<WDFDEVICE>(Context);
         auto pdo = WdfDeviceWdmGetPhysicalDevice(device);
@@ -1365,7 +1301,7 @@ Routine Description:
     // future calls for the same handle we know where to dispatch the IRP.
 
     NxAdapter * adapter = nullptr;
-    auto deviceInterfaceType = DeviceInterfaceTypeFromFileName(&m_AdapterCollection,
+    auto deviceInterfaceType = DeviceInterfaceTypeFromFileName(&m_adapterCollection,
         *irpStack,
         &adapter);
 
@@ -1501,8 +1437,8 @@ NxDevice::WdmIoIrpPreProcess(
 
 NTSTATUS
 NxDevice::WdmSystemControlIrpPreProcess(
-    _Inout_ PIRP       Irp,
-    _In_    WDFCONTEXT DispatchContext
+    _Inout_ IRP * Irp,
+    _In_ WDFCONTEXT DispatchContext
 )
 {
     LogVerbose(GetRecorderLog(), FLAG_DEVICE,
@@ -1531,44 +1467,7 @@ NxDevice::WdmSystemControlIrpPreProcess(
 
     }
 
-    //
-    // Acquire a wdm remove lock, the lock is released in the
-    // completion routine: WdmIrpCompleteFromNdis
-    //
-    NTSTATUS status = Mx::MxAcquireRemoveLock(&m_RemoveLock, Irp);
-
-    if (!NT_SUCCESS(status)) {
-
-        NT_ASSERT(status == STATUS_DELETE_PENDING);
-        LogInfo(GetRecorderLog(), FLAG_DEVICE,
-            "Mx::MxAcquireRemoveLock failed, irp 0x%p, %!STATUS!", Irp, status);
-
-        Irp->IoStatus.Status = status;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
-        return status;
-    }
-
-    IoCopyCurrentIrpStackLocationToNext(Irp);
-
-#pragma prefast(suppress:__WARNING_FUNCTION_CLASS_MISMATCH_NONE, "can't add class to static member function")
-    SetCompletionRoutineSmart(WdfDeviceWdmGetDeviceObject(device),
-        Irp,
-        WdmIrpCompleteFromNdis,
-        (PVOID)this,
-        TRUE,
-        TRUE,
-        TRUE);
-
-    //
-    // We need to explicitly adjust the IrpStackLocation since we do not call
-    // IoCallDriver to send this Irp to NDIS.sys. Rather we hand this irp to
-    // Ndis.sys in function call.
-    //
-    IoSetNextIrpStackLocation(Irp);
-
-    status = WmiIrpDispatch(Irp, DispatchContext);
-
-    return status;
+    return WmiIrpDispatch(Irp, DispatchContext);
 }
 
 _Use_decl_annotations_
@@ -1579,9 +1478,9 @@ NxDevice::WmiIrpDispatch(
 )
 {
     PIO_STACK_LOCATION pirpSp = IoGetCurrentIrpStackLocation(Irp);
-    PVOID dataPath = pirpSp->Parameters.WMI.DataPath;
+    void * dataPath = pirpSp->Parameters.WMI.DataPath;
     ULONG bufferSize = pirpSp->Parameters.WMI.BufferSize;
-    PVOID buffer = pirpSp->Parameters.WMI.Buffer;
+    void * buffer = pirpSp->Parameters.WMI.Buffer;
     NTSTATUS status = STATUS_SUCCESS;
     ULONG returnSize = 0;
 
@@ -1754,7 +1653,7 @@ Arguments:
         {
             ASSERT(WmiRegInfoSize >= 4);
 
-            *((PULONG)WmiRegInfo) = (commonSizeNeeded);
+            *((ULONG *)WmiRegInfo) = (commonSizeNeeded);
             *ReturnSize = sizeof(ULONG);
             return STATUS_BUFFER_TOO_SMALL;
         }
@@ -1862,7 +1761,7 @@ Arguments:
         BufferSize);
     CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !dataBuffer);
 
-    m_AdapterCollection.ForEachAdapter(
+    m_adapterCollection.ForEach(
         [this, &status, &ReturnSize, &pNdisGuid, &Guid, BufferSize, &Wnode, &miniportCount, &dataBuffer, &wnodeCopy](NxAdapter & adapter)
     {
         RtlZeroMemory(dataBuffer.get(), BufferSize);
@@ -1928,9 +1827,27 @@ Routine Description:
     WNODE_ALL_DATA information is updated in AllData. A buffer is used to store AllData's instance
     name array when the SingleData's data block is added to AllData. Then, the AllData's instance
     name array is copied to the end of the data blocks. A buffer is used to store the instance name
-    strings. The instance name offsets are updated. SingleData's instnace name offset is added.
+    strings. The instance name offsets are updated. SingleData's instance name offset is added.
     The instance name strings are copied back into AllData. Then SingleData's instance name is
     added at the end of AllData.
+
+    WNODE_ALL_DATA structure:
+
+    +--------------+-----------------+------------------+---------------------------+-------------------+
+    | WndodeHeader | DataBlockOffset | InstanceCount(n) | OffsetInstanceNameOffsets | FixedInstanceSize |
+    +---------------------------------------------------+---------------------------+-------------------+
+
+    +--------------+----------------+------------+----------------+
+    | Data Block 1 |  Data Block 2  |  . . . . . |  Data Block n  |
+    +--------------+----------------+------------+----------------+
+    |                       |
+    DataBlockOffset    FixedInstanceSize
+
+    +----------+- - - -+-----------+-------------------+-----------------+- - - -+-----------------+
+    | Offset 1 | . . . |  Offset n |  Instance Name 1  | Instance Name 2 | . . . | Instance Name n |
+    +----------+- - - -+-----------+-------------------+-----------------+- - - -+-----------------+
+    |                              |                                             |
+    OffsetInstanceNameOffset    Offset 1                                      Offset n
 
 Arguments:
     AllData - The WNODE_ALL_DATA structure that SingleData will be aggregated into
@@ -1946,12 +1863,12 @@ Arguments:
     const ULONG instanceNameSize = SingleData->WnodeHeader.BufferSize - SingleData->OffsetInstanceNameOffsets;
     const ULONG dataToBeAddedSize = roundedFixedInstanceSize + instanceNameSize;
     const ULONG allDataBufferSize = AllData->WnodeHeader.BufferSize;
-    const ULONG totalBufferSizeReqd = SingleData->WnodeHeader.BufferSize + dataToBeAddedSize * (m_AdapterCollection.Count() - 1);
+    const ULONG totalBufferSizeReqd = SingleData->WnodeHeader.BufferSize + dataToBeAddedSize * (m_adapterCollection.Count() - 1);
 
     if (BufferSize < totalBufferSizeReqd)
     {
         Status = SetWmiBufferTooSmall(BufferSize,
-            (PVOID)AllData,
+            (void *)AllData,
             totalBufferSizeReqd,
             ReturnSize);
         return Status;
@@ -1962,17 +1879,7 @@ Arguments:
         // This is the first instance in the WNODE
         RtlCopyMemory(AllData,
             SingleData,
-            sizeof(WNODE_ALL_DATA));
-
-        // Copy the Data Block
-        RtlCopyMemory((PUCHAR)AllData + AllData->DataBlockOffset,
-            (PUCHAR)SingleData + SingleData->DataBlockOffset,
-            roundedFixedInstanceSize);
-
-        // Copy the Instance Name
-        RtlCopyMemory((PUCHAR)AllData + AllData->OffsetInstanceNameOffsets,
-            (PUCHAR)SingleData + SingleData->OffsetInstanceNameOffsets,
-            instanceNameSize);
+            SingleData->WnodeHeader.BufferSize);
     }
     else
     {
@@ -2019,11 +1926,11 @@ Arguments:
         //Update the instance name offsets array
         for (size_t i = 0; i < MiniportCount; i++)
         {
-            *(PULONG)((PUCHAR)AllData + AllData->OffsetInstanceNameOffsets + i * sizeof(ULONG)) += roundedFixedInstanceSize + sizeof(ULONG);
+            *(ULONG *)((PUCHAR)AllData + AllData->OffsetInstanceNameOffsets + i * sizeof(ULONG)) += roundedFixedInstanceSize + sizeof(ULONG);
         }
 
         // Offset of the last Instance Name
-        *(PULONG)((PUCHAR)AllData + AllData->DataBlockOffset + roundedFixedInstanceSize * AllData->InstanceCount + MiniportCount * sizeof(ULONG)) =
+        *(ULONG *)((PUCHAR)AllData + AllData->DataBlockOffset + roundedFixedInstanceSize * AllData->InstanceCount + MiniportCount * sizeof(ULONG)) =
             AllData->OffsetInstanceNameOffsets
             + sizeof(ULONG)
             + tempInstanceNameSize;
@@ -2079,9 +1986,12 @@ Arguments:
     instanceName.Length = *(PUSHORT)((PUCHAR)Wnode + Wnode->OffsetInstanceName);
     instanceName.MaximumLength = *(PUSHORT)((PUCHAR)Wnode + Wnode->OffsetInstanceName);
 
-    auto adapter = m_AdapterCollection.FindAndReferenceAdapterByInstanceName(&instanceName);
+    auto adapter = m_adapterCollection.FindAndReferenceAdapterByInstanceName(&instanceName);
 
-    CX_RETURN_NTSTATUS_IF(STATUS_WMI_INSTANCE_NOT_FOUND, !adapter);
+    CX_WARNING_RETURN_NTSTATUS_IF_MSG(STATUS_WMI_INSTANCE_NOT_FOUND,
+        !adapter,
+        "Adapter(%wZ) not found.",
+        &instanceName);
 
     NDIS_HANDLE miniport = adapter->GetNdisHandle();
     switch(MinorFunction)
@@ -2172,9 +2082,12 @@ Arguments:
     instanceName.Length = *(PUSHORT)((PUCHAR)Wnode + Wnode->OffsetInstanceName);
     instanceName.MaximumLength = *(PUSHORT)((PUCHAR)Wnode + Wnode->OffsetInstanceName);
 
-    auto adapter = m_AdapterCollection.FindAndReferenceAdapterByInstanceName(&instanceName);
+    auto adapter = m_adapterCollection.FindAndReferenceAdapterByInstanceName(&instanceName);
 
-    CX_RETURN_NTSTATUS_IF(STATUS_WMI_INSTANCE_NOT_FOUND, !adapter);
+    CX_WARNING_RETURN_NTSTATUS_IF_MSG(STATUS_WMI_INSTANCE_NOT_FOUND,
+        !adapter,
+        "Adapter(%wZ) not found.",
+        &instanceName);
 
     NDIS_HANDLE miniport = adapter->GetNdisHandle();
 
@@ -2274,16 +2187,12 @@ Arguments:
 
 NTSTATUS
 NxDevice::WdmPnPIrpPreProcess(
-    _Inout_ PIRP       Irp
+    _Inout_ IRP * Irp
 )
 /*++
 Routine Description:
 
     This is a pre-processor routine for PNP IRP's
-
-    In case this is a IRP_MN_REMOVE_DEVICE irp, we want to call
-    Mx::MxReleaseRemoveLockAndWait to ensure that all existing remove locks have
-    been release and no new remove locks can be acquired.
 
     In case this is an IRP_MN_QUERY_REMOVE_DEVICE if we are the device stack requesting
     for a reset, then we mark the status as DEVICE_HUNG so that PnP can skip orderly removal
@@ -2297,19 +2206,8 @@ Routine Description:
 
     switch (irpStack->MinorFunction)
     {
-    case IRP_MN_REMOVE_DEVICE:
-        //
-        // Acquiring a RemoveLock is required before calling
-        // Mx::MxReleaseRemoveLockAndWait
-        //
-        status = Mx::MxAcquireRemoveLock(&m_RemoveLock, Irp);
-
-        NT_ASSERT(NT_SUCCESS(status));
-
-        Mx::MxReleaseRemoveLockAndWait(&m_RemoveLock, Irp);
-        break;
     case IRP_MN_QUERY_REMOVE_DEVICE:
-        if (m_FailingDeviceRequestingReset)
+        if (m_failingDeviceRequestingReset)
         {
             // In the case we are the one who requested for reset/recovery, then mark the IRP as
             // STATUS_DEVICE_HUNG which is used as a hint to ACPI that this is the device failing and
@@ -2396,9 +2294,7 @@ EvtWdmPnpIrpPreprocessRoutine(
     auto irpStack = IoGetCurrentIrpStackLocation(Irp);
 
     NT_FRE_ASSERT(irpStack->MajorFunction == IRP_MJ_PNP);
-    NT_FRE_ASSERT(
-        irpStack->MinorFunction == IRP_MN_QUERY_REMOVE_DEVICE ||
-        irpStack->MinorFunction == IRP_MN_REMOVE_DEVICE);
+    NT_FRE_ASSERT(irpStack->MinorFunction == IRP_MN_QUERY_REMOVE_DEVICE);
 
     auto nxDevice = GetNxDeviceFromHandle(Device);
 
@@ -2426,46 +2322,6 @@ EvtWdmPnpIrpPreprocessRoutine(
 
 _Use_decl_annotations_
 NTSTATUS
-EvtWdmPowerIrpPreprocessRoutine(
-    WDFDEVICE Device,
-    IRP *Irp,
-    WDFCONTEXT DispatchContext
-)
-{
-    auto irpStack = IoGetCurrentIrpStackLocation(Irp);
-
-    NT_FRE_ASSERT(irpStack->MajorFunction == IRP_MJ_POWER);
-    NT_FRE_ASSERT(irpStack->MinorFunction == IRP_MN_SET_POWER);
-
-    auto nxDevice = GetNxDeviceFromHandle(Device);
-
-    LogVerbose(nxDevice->GetRecorderLog(), FLAG_DEVICE,
-        "EvtWdmPowerIrpPreprocessRoutine IRP_MJ_POWER. WDFDEVICE=%p, IRP=%p, irpStack->MinorFunction=0x%x",
-        Device,
-        Irp,
-        irpStack->MinorFunction);
-
-    nxDevice->PreSetPowerIrp(irpStack->Parameters.Power);
-
-    IoCopyCurrentIrpStackLocationToNext(Irp);
-
-    SetCompletionRoutineSmart(
-        WdfDeviceWdmGetDeviceObject(Device),
-        Irp,
-        WdmIrpCompleteSetPower,
-        nxDevice,
-        TRUE,
-        TRUE,
-        TRUE);
-
-    return WdfDeviceWdmDispatchIrp(
-        Device,
-        Irp,
-        DispatchContext);
-}
-
-_Use_decl_annotations_
-NTSTATUS
 EvtWdmWmiIrpPreprocessRoutine(
     WDFDEVICE Device,
     IRP *Irp,
@@ -2476,9 +2332,10 @@ EvtWdmWmiIrpPreprocessRoutine(
     return nxDevice->WdmSystemControlIrpPreProcess(Irp, DispatchContext);
 }
 
-VOID
-NxDevice::_EvtCleanup(
-    _In_  WDFOBJECT Device
+_Use_decl_annotations_
+void
+EvtDeviceCleanup(
+    WDFOBJECT Device
 )
 /*++
 Routine Description:
@@ -2490,20 +2347,25 @@ Routine Description:
 --*/
 {
     auto nxDevice = GetNxDeviceFromHandle(static_cast<WDFDEVICE>(Device));
-    nxDevice->EnqueueEvent(NxDevice::Event::WdfDeviceObjectCleanup);
-    nxDevice->WdfDeviceObjectCleanupHandled.Wait();
+
+    // Only post an event if the state machine had a chance to initialize
+    if (nxDevice->IsInitialized())
+    {
+        nxDevice->EnqueueEvent(NxDevice::Event::WdfDeviceObjectCleanup);
+        nxDevice->WdfDeviceObjectCleanupHandled.Wait();
+    }
 }
 
 RECORDER_LOG
 NxDevice::GetRecorderLog(
-    VOID
+    void
 )
 {
-    return m_NxDriver->GetRecorderLog();
+    return m_nxDriver->GetRecorderLog();
 }
 
 _Use_decl_annotations_
-VOID
+void
 NxDevice::EvtLogTransition(
     _In_ SmFx::TransitionType TransitionType,
     _In_ StateId SourceState,
@@ -2525,7 +2387,7 @@ NxDevice::EvtLogTransition(
 }
 
 _Use_decl_annotations_
-VOID
+void
 NxDevice::EvtLogMachineException(
     _In_ SmFx::MachineException exception,
     _In_ EventId relevantEvent,
@@ -2534,7 +2396,7 @@ NxDevice::EvtLogMachineException(
 {
     UNREFERENCED_PARAMETER((exception, relevantEvent, relevantState));
 
-
+    
     if (!KdRefreshDebuggerNotPresent())
     {
         DbgBreakPoint();
@@ -2542,13 +2404,13 @@ NxDevice::EvtLogMachineException(
 }
 
 _Use_decl_annotations_
-VOID
+void
 NxDevice::EvtMachineDestroyed()
 {
 }
 
 _Use_decl_annotations_
-VOID
+void
 NxDevice::EvtLogEventEnqueue(
     _In_ EventId relevantEvent
 )
@@ -2561,97 +2423,44 @@ NxDevice::IsPowerPolicyOwner(
     void
 ) const
 {
-    return !!m_Flags.IsPowerPolicyOwner;
+    return !!m_flags.IsPowerPolicyOwner;
 }
 
 _Use_decl_annotations_
 void
-NxDevice::PreSetPowerIrp(
-    PowerIrpParameters const & PowerParameters
+NxDevice::PreSelfManagedIoSuspend(
+    WDF_POWER_DEVICE_STATE TargetState
 )
 {
-    if (PowerParameters.Type == SystemPowerState)
-    {
-        m_SystemPowerAction = PowerParameters.ShutdownType;
-        m_TargetSystemPowerState = PowerParameters.State.SystemState;
-    }
-    else if (PowerParameters.Type == DevicePowerState)
-    {
-        m_TargetDevicePowerState = PowerParameters.State.DeviceState;
-    }
+    m_targetDevicePowerState = TargetState;
+    EnqueueEvent(NxDevice::Event::CxPreSelfManagedIoSuspend);
+    CxPreSelfManagedIoSuspendHandled.Wait();
 }
 
 _Use_decl_annotations_
 void
-NxDevice::PostSetPowerIrp(
-    PowerIrpParameters const & PowerParameters
+NxDevice::GetPowerOffloadList(
+    NxPowerOffloadList * PowerList
 )
 {
-    if (PowerParameters.Type == DevicePowerState)
-    {
-        m_SystemPowerAction = PowerActionNone;
-        m_TargetSystemPowerState = PowerSystemUnspecified;
-        m_TargetDevicePowerState = PowerDeviceUnspecified;
-    }
-}
-
-_Use_decl_annotations_
-NTSTATUS
-NxDevice::PowerReference(
-    bool WaitForD0,
-    void *Tag
-)
-/*++
-
-Routine description:
-
-    This routine acquires a power reference on the WDFDEVICE.
-    It also tracks failures in a way that enables callers to
-    always issue Ref/Deref calls, regardless if the actual
-    WDF call failed.
-
---*/
-{
-    NTSTATUS status = WdfDeviceStopIdleWithTag(
-        GetFxObject(),
-        WaitForD0,
-        Tag);
-
-    if (!NT_SUCCESS(status))
-    {
-        LogWarning(GetRecorderLog(), FLAG_DEVICE,
-            "WdfDeviceStopIdle failed %!STATUS!. WDFDEVICE=%p", status, GetFxObject());
-
-        //
-        // Track WdfDeviceStopIdle failures so as to avoid imbalance of stop idle
-        // and resume idle.
-        //
-        InterlockedIncrement(&m_PowerRefFailureCount);
-
-        return status;
-    }
-
-    return status;
+    m_adapterCollection.ForEach(
+        [this, PowerList](NxAdapter & Adapter)
+        {
+            Adapter.m_powerPolicy.UpdatePowerOffloadList(IsDeviceInPowerTransition(), PowerList);
+        });
 }
 
 _Use_decl_annotations_
 void
-NxDevice::PowerDereference(
-    void *Tag
+NxDevice::GetWakeSourceList(
+    NxWakeSourceList * PowerList
 )
 {
-    //
-    // -1 is returned if failure count was already 0 (floor). This denotes no
-    // failed calls to _EvtNdisPowerReference need to be accounted for.
-    // If any other value is returned the failure count was decremented
-    // successfully so no need to call WdfDeviceResumeIdle
-    //
-    if (-1 == NxInterlockedDecrementFloor(&m_PowerRefFailureCount, 0))
-    {
-        WdfDeviceResumeIdleWithTag(
-            GetFxObject(),
-            Tag);
-    }
+    m_adapterCollection.ForEach(
+        [this, PowerList](NxAdapter & Adapter)
+        {
+            Adapter.m_powerPolicy.UpdateWakeSourceList(IsDeviceInPowerTransition(), PowerList);
+        });
 }
 
 _Use_decl_annotations_
@@ -2670,7 +2479,7 @@ Routine description:
 
 --*/
 {
-    m_FailingDeviceRequestingReset = TRUE;
+    m_failingDeviceRequestingReset = true;
 }
 
 _Use_decl_annotations_
@@ -2690,22 +2499,22 @@ Routine description:
 {
     NTSTATUS status;
 
-    RtlZeroMemory(&m_ResetInterface, sizeof(m_ResetInterface));
-    m_ResetInterface.Size = sizeof(m_ResetInterface);
-    m_ResetInterface.Version = 1;
+    RtlZeroMemory(&m_resetInterface, sizeof(m_resetInterface));
+    m_resetInterface.Size = sizeof(m_resetInterface);
+    m_resetInterface.Version = 1;
 
     status = WdfFdoQueryForInterface(
         GetFxObject(),
         &GUID_DEVICE_RESET_INTERFACE_STANDARD,
-        (PINTERFACE)&m_ResetInterface,
-        sizeof(m_ResetInterface),
+        (PINTERFACE)&m_resetInterface,
+        sizeof(m_resetInterface),
         1,
         NULL);
     if (!NT_SUCCESS(status))
     {
         LogWarning(GetRecorderLog(), FLAG_DEVICE,
             "QueryDeviceResetInterface failed %!STATUS!. WDFDEVICE=%p", status, GetFxObject());
-        RtlZeroMemory(&m_ResetInterface, sizeof(m_ResetInterface));
+        RtlZeroMemory(&m_resetInterface, sizeof(m_resetInterface));
     }
 
 }
@@ -2723,8 +2532,8 @@ Routine description:
 
 --*/
 {
-    if ((m_ResetInterface.DeviceReset != NULL) &&
-        ((m_ResetInterface.SupportedResetTypes & (1 << ResetType)) != 0))
+    if ((m_resetInterface.DeviceReset != NULL) &&
+        ((m_resetInterface.SupportedResetTypes & (1 << ResetType)) != 0))
     {
         return TRUE;
     }
@@ -2735,7 +2544,7 @@ Routine description:
 _Use_decl_annotations_
 bool
 NxDevice::GetSupportedDeviceResetType(
-    _Inout_ PULONG SupportedDeviceResetTypes
+    _Inout_ ULONG * SupportedDeviceResetTypes
 ) const
 /*++
 
@@ -2747,9 +2556,9 @@ Routine description:
 {
     bool fDeviceResetSupported = FALSE;
 
-    if (m_ResetInterface.DeviceReset != NULL)
+    if (m_resetInterface.DeviceReset != NULL)
     {
-        *SupportedDeviceResetTypes = m_ResetInterface.SupportedResetTypes;
+        *SupportedDeviceResetTypes = m_resetInterface.SupportedResetTypes;
         fDeviceResetSupported = TRUE;
     }
 
@@ -2776,15 +2585,15 @@ Routine description:
     // If the client driver has registered for this callback, then it means that it wants
     // to handle the reset itself. This is useful in the case of USB where CyclePort can
     // internally trigger a Device Reset Operation
-    if (m_EvtNetDeviceReset != NULL)
+    if (m_evtNetDeviceReset != NULL)
     {
-        m_EvtNetDeviceReset(GetFxObject());
+        m_evtNetDeviceReset(GetFxObject());
     }
     // This else block calls into the reset interface directly. Mostly applicable to PCIe based
     // devices.
-    else if((m_ResetInterface.DeviceReset != NULL) && DeviceResetTypeSupported(ResetType))
+    else if((m_resetInterface.DeviceReset != NULL) && DeviceResetTypeSupported(ResetType))
     {
-        ++m_ResetAttempts;  // Currently this is not used. Will use it later.
+        ++m_resetAttempts;  // Currently this is not used. Will use it later.
 
         LogInfo(GetRecorderLog(), FLAG_DEVICE, "Performing Device Reset");
         // Set the completion routine and context for function-level device resets.
@@ -2798,7 +2607,7 @@ Routine description:
         }
 
         // Dispatch the specified device reset request to ACPI.
-        status = m_ResetInterface.DeviceReset(m_ResetInterface.Context, ResetType, 0, NULL);
+        status = m_resetInterface.DeviceReset(m_resetInterface.Context, ResetType, 0, NULL);
 
         // Wait for the function-level device reset to complete.
         if ((status == STATUS_PENDING) && (ResetType == FunctionLevelDeviceReset))
@@ -2843,7 +2652,7 @@ _Use_decl_annotations_
 void
 _FunctionLevelResetCompletion(
     NTSTATUS Status,
-    PVOID Context
+    void * Context
 )
 /*++
 
@@ -2876,7 +2685,19 @@ Routine description:
 
 --*/
 {
-    m_EvtNetDeviceReset = NetDeviceReset;
+    m_evtNetDeviceReset = NetDeviceReset;
+}
+
+_Use_decl_annotations_
+void
+NxDevice::SetPowerPolicyEventCallbacks(
+    NET_DEVICE_POWER_POLICY_EVENT_CALLBACKS const * Callbacks
+)
+{
+    RtlCopyMemory(
+        &m_powerPolicyEventCallbacks,
+        Callbacks,
+        Callbacks->Size);
 }
 
 void
@@ -2884,49 +2705,11 @@ NxDevice::GetTriageInfo(
     void
 )
 {
+    g_NetAdapterCxTriageBlock.StateMachineEngineOffset = 0;
+    g_NetAdapterCxTriageBlock.NxDeviceAdapterCollectionOffset = FIELD_OFFSET(NxDevice, m_adapterCollection);
 
-    g_NetAdapterCxTriageBlock.NxDeviceAdapterCollectionOffset = FIELD_OFFSET(NxDevice, m_AdapterCollection);
-
-    CFxObject::GetTriageInfo();
     NxAdapter::GetTriageInfo();
     NxAdapterCollection::GetTriageInfo();
-}
-
-_Use_decl_annotations_
-void
-NxDevice::SetMaximumNumberOfWakePatterns(
-    NET_ADAPTER_POWER_CAPABILITIES const & PowerCapabilities
-)
-{
-    m_wakePatternMax = PowerCapabilities.NumTotalWakePatterns;
-}
-
-bool
-NxDevice::IncreaseWakePatternReference(
-    void
-)
-{
-    if (InterlockedIncrementU(&m_wakePatternCount) > m_wakePatternMax)
-    {
-        // Note: m_wakePatternCount may temporarily go over the limit,
-        // so this variable should not be used to query how many wake
-        // patterns are currently programmed on this device. For that
-        // use m_WakeListCount of each NxWake object associated with
-        // this device
-        InterlockedDecrementU(&m_wakePatternCount);
-        return false;
-    }
-
-    return true;
-}
-
-void
-NxDevice::DecreaseWakePatternReference(
-    void
-)
-{
-    NT_FRE_ASSERT(m_wakePatternCount > 0);
-    InterlockedDecrementU(&m_wakePatternCount);
 }
 
 _Use_decl_annotations_
@@ -2961,4 +2744,12 @@ NxDevice::GetOidListCount(
 ) const
 {
     return m_oidListCount;
+}
+
+NET_DEVICE_POWER_POLICY_EVENT_CALLBACKS const &
+NxDevice::GetPowerPolicyEventCallbacks(
+    void
+) const
+{
+    return m_powerPolicyEventCallbacks;
 }

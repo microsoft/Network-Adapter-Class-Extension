@@ -17,87 +17,40 @@ struct NX_PRIVATE_GLOBALS;
 struct _NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES;
 typedef _NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES;
 
+struct _NET_REQUEST_QUEUE_CONFIG;
+typedef _NET_REQUEST_QUEUE_CONFIG NET_REQUEST_QUEUE_CONFIG;
+
+struct _NET_ADAPTER_PACKET_FILTER_CAPABILITIES;
+typedef _NET_ADAPTER_PACKET_FILTER_CAPABILITIES NET_ADAPTER_PACKET_FILTER_CAPABILITIES;
+
 class NxAdapter;
 class NxAdapterCollection;
 class NxDevice;
 class NxRequest;
-class NxWake;
 
-//
-// NET_*_SUPPORTED_FLAGS are used to check if a client is passing valid flags to NetAdapterCx APIs
-//
+#define NDIS_MBB_WAKEUP_SUPPORTED_FLAGS ( \
+    NDIS_WWAN_WAKE_ON_REGISTER_STATE_SUPPORTED | \
+    NDIS_WWAN_WAKE_ON_SMS_RECEIVE_SUPPORTED | \
+    NDIS_WWAN_WAKE_ON_USSD_RECEIVE_SUPPORTED | \
+    NDIS_WWAN_WAKE_ON_PACKET_STATE_SUPPORTED | \
+    NDIS_WWAN_WAKE_ON_UICC_CHANGE_SUPPORTED) \
 
-// There is not yet a public NDIS_PM or NET_ADAPTER_POWER flag for NDIS_PM_AOAC_NAPS_SUPPORTED, but it's used in
-// test code. So for now, just using that private define, but at some point we need to figure out the right thing to do here.
-#define NET_ADAPTER_POWER_CAPABILITIES_SUPPORTED_FLAGS (NET_ADAPTER_POWER_WAKE_PACKET_INDICATION                    | \
-                                                        NET_ADAPTER_POWER_SELECTIVE_SUSPEND                         | \
-                                                        NDIS_PM_AOAC_NAPS_SUPPORTED)
+#define NDIS_WIFI_WAKEUP_SUPPORTED_FLAGS ( \
+    NDIS_WLAN_WAKE_ON_NLO_DISCOVERY_SUPPORTED | \
+    NDIS_WLAN_WAKE_ON_AP_ASSOCIATION_LOST_SUPPORTED | \
+    NDIS_WLAN_WAKE_ON_GTK_HANDSHAKE_ERROR_SUPPORTED | \
+    NDIS_WLAN_WAKE_ON_4WAY_HANDSHAKE_REQUEST_SUPPORTED) \
 
-#define NET_ADAPTER_PROTOCOL_OFFLOADS_SUPPORTED_FLAGS  (NET_ADAPTER_PROTOCOL_OFFLOAD_ARP                            | \
-                                                        NET_ADAPTER_PROTOCOL_OFFLOAD_NS                             | \
-                                                        NET_ADAPTER_PROTOCOL_OFFLOAD_80211_RSN_REKEY)
+#define NET_PACKET_FILTER_SUPPORTED_FLAGS              (NetPacketFilterFlagDirected                             | \
+                                                        NetPacketFilterFlagMulticast                            | \
+                                                        NetPacketFilterFlagAllMulticast                        | \
+                                                        NetPacketFilterFlagBroadcast                            | \
+                                                        NetPacketFilterFlagPromiscuous)
 
-#define NET_ADAPTER_WAKEUP_SUPPORTED_FLAGS             (NET_ADAPTER_WAKE_ON_MEDIA_CONNECT                           | \
-                                                        NET_ADAPTER_WAKE_ON_MEDIA_DISCONNECT)
-
-#define NET_ADAPTER_WAKEUP_MEDIA_SPECIFIC_SUPPORTED_FLAGS (NET_ADAPTER_WLAN_WAKE_ON_NLO_DISCOVERY                   | \
-                                                           NET_ADAPTER_WLAN_WAKE_ON_AP_ASSOCIATION_LOST             | \
-                                                           NET_ADAPTER_WLAN_WAKE_ON_GTK_HANDSHAKE_ERROR             | \
-                                                           NET_ADAPTER_WLAN_WAKE_ON_4WAY_HANDSHAKE_REQUEST          | \
-                                                           NET_ADAPTER_WWAN_WAKE_ON_REGISTER_STATE                  | \
-                                                           NET_ADAPTER_WWAN_WAKE_ON_SMS_RECEIVE                     | \
-                                                           NET_ADAPTER_WWAN_WAKE_ON_USSD_RECEIVE                    | \
-                                                           NET_ADAPTER_WWAN_WAKE_ON_PACKET_STATE                    | \
-                                                           NET_ADAPTER_WWAN_WAKE_ON_UICC_CHANGE)
-
-#define NET_ADAPTER_WAKE_SUPPORTED_FLAGS               (NET_ADAPTER_WAKE_BITMAP_PATTERN                              | \
-                                                        NET_ADAPTER_WAKE_MAGIC_PACKET                                | \
-                                                        NET_ADAPTER_WAKE_IPV4_TCP_SYN                                | \
-                                                        NET_ADAPTER_WAKE_IPV6_TCP_SYN                                | \
-                                                        NET_ADAPTER_WAKE_IPV4_DEST_ADDR_WILDCARD                     | \
-                                                        NET_ADAPTER_WAKE_IPV6_DEST_ADDR_WILDCARD                     | \
-                                                        NET_ADAPTER_WAKE_EAPOL_REQUEST_ID_MESSAGE)
-
-#define NET_ADAPTER_STATISTICS_SUPPORTED_FLAGS         (NET_ADAPTER_STATISTICS_XMIT_OK                              | \
-                                                        NET_ADAPTER_STATISTICS_RCV_OK                               | \
-                                                        NET_ADAPTER_STATISTICS_XMIT_ERROR                           | \
-                                                        NET_ADAPTER_STATISTICS_RCV_ERROR                            | \
-                                                        NET_ADAPTER_STATISTICS_RCV_NO_BUFFER                        | \
-                                                        NET_ADAPTER_STATISTICS_DIRECTED_BYTES_XMIT                  | \
-                                                        NET_ADAPTER_STATISTICS_DIRECTED_FRAMES_XMIT                 | \
-                                                        NET_ADAPTER_STATISTICS_MULTICAST_BYTES_XMIT                 | \
-                                                        NET_ADAPTER_STATISTICS_MULTICAST_FRAMES_XMIT                | \
-                                                        NET_ADAPTER_STATISTICS_BROADCAST_BYTES_XMIT                 | \
-                                                        NET_ADAPTER_STATISTICS_BROADCAST_FRAMES_XMIT                | \
-                                                        NET_ADAPTER_STATISTICS_DIRECTED_BYTES_RCV                   | \
-                                                        NET_ADAPTER_STATISTICS_DIRECTED_FRAMES_RCV                  | \
-                                                        NET_ADAPTER_STATISTICS_MULTICAST_BYTES_RCV                  | \
-                                                        NET_ADAPTER_STATISTICS_MULTICAST_FRAMES_RCV                 | \
-                                                        NET_ADAPTER_STATISTICS_BROADCAST_BYTES_RCV                  | \
-                                                        NET_ADAPTER_STATISTICS_BROADCAST_FRAMES_RCV                 | \
-                                                        NET_ADAPTER_STATISTICS_RCV_CRC_ERROR                        | \
-                                                        NET_ADAPTER_STATISTICS_TRANSMIT_QUEUE_LENGTH                | \
-                                                        NET_ADAPTER_STATISTICS_BYTES_RCV                            | \
-                                                        NET_ADAPTER_STATISTICS_BYTES_XMIT                           | \
-                                                        NET_ADAPTER_STATISTICS_RCV_DISCARDS                         | \
-                                                        NET_ADAPTER_STATISTICS_GEN_STATISTICS                       | \
-                                                        NET_ADAPTER_STATISTICS_XMIT_DISCARDS)                         \
-
-#define NET_PACKET_FILTER_SUPPORTED_FLAGS              (NET_PACKET_FILTER_TYPE_DIRECTED                             | \
-                                                        NET_PACKET_FILTER_TYPE_MULTICAST                            | \
-                                                        NET_PACKET_FILTER_TYPE_ALL_MULTICAST                        | \
-                                                        NET_PACKET_FILTER_TYPE_BROADCAST                            | \
-                                                        NET_PACKET_FILTER_TYPE_SOURCE_ROUTING                       | \
-                                                        NET_PACKET_FILTER_TYPE_PROMISCUOUS                          | \
-                                                        NET_PACKET_FILTER_TYPE_ALL_LOCAL                            | \
-                                                        NET_PACKET_FILTER_TYPE_MAC_FRAME                            | \
-                                                        NET_PACKET_FILTER_TYPE_NO_LOCAL)
-
-#define NDIS_AUTO_NEGOTIATION_SUPPORTED_FLAGS          (NET_ADAPTER_AUTO_NEGOTIATION_NO_FLAGS                       | \
-                                                        NET_ADAPTER_LINK_STATE_XMIT_LINK_SPEED_AUTO_NEGOTIATED      | \
-                                                        NET_ADAPTER_LINK_STATE_RCV_LINK_SPEED_AUTO_NEGOTIATED       | \
-                                                        NET_ADAPTER_LINK_STATE_DUPLEX_AUTO_NEGOTIATED               | \
-                                                        NET_ADAPTER_LINK_STATE_PAUSE_FUNCTIONS_AUTO_NEGOTIATED)       \
+#define NDIS_AUTO_NEGOTIATION_SUPPORTED_FLAGS          (NetAdapterAutoNegotiationFlagXmitLinkSpeedAutoNegotiated      | \
+                                                        NetAdapterAutoNegotiationFlagRcvLinkSpeedautoNegotiated       | \
+                                                        NetAdapterAutoNegotiationFlagDuplexAutoNegotiated               | \
+                                                        NetAdapterAutoNegotiationFlagPauseFunctionsAutoNegotiated)       \
 
 #define NET_CONFIGURATION_QUERY_ULONG_SUPPORTED_FLAGS  (NET_CONFIGURATION_QUERY_ULONG_NO_FLAGS                      | \
                                                         NET_CONFIGURATION_QUERY_ULONG_MAY_BE_STORED_AS_HEX_STRING)    \
@@ -122,9 +75,9 @@ typedef enum _FailureCode : ULONG_PTR
     FailureCode_DefaultRequestQueueAlreadyExists,
     FailureCode_InvalidStructTypeSize,
     FailureCode_InvalidQueueConfiguration,
-    FailureCode_InvalidPowerCapabilities,
     FailureCode_MacAddressLengthTooLong,
-    FailureCode_InvalidLinkLayerCapabilities,
+    FailureCode_InvalidPacketFilterCapabilities,
+    FailureCode_InvalidSetPacketFilterCallBack,
     FailureCode_InvalidLinkState,
     FailureCode_ParameterCantBeNull,
     FailureCode_InvalidQueryUlongFlag,
@@ -138,11 +91,11 @@ typedef enum _FailureCode : ULONG_PTR
     FailureCode_QueueAlreadyCreated,
     FailureCode_ObjectAttributesContextSizeTooLarge,
     FailureCode_NotPowerOfTwo,
-    FailureCode_InvalidNetPacketExtensionName,
-    FailureCode_InvalidNetPacketExtensionVersion,
-    FailureCode_InvalidNetPacketExtensionAlignment,
-    FailureCode_InvalidNetPacketExtensionExtensionSize,
-    FailureCode_NetPacketExtensionVersionedSizeMismatch,
+    FailureCode_InvalidNetExtensionName,
+    FailureCode_InvalidNetExtensionVersion,
+    FailureCode_InvalidNetExtensionType,
+    FailureCode_InvalidNetExtensionAlignment,
+    FailureCode_InvalidNetExtensionExtensionSize,
     FailureCode_InvalidAdapterTxCapabilities,
     FailureCode_InvalidAdapterRxCapabilities,
     FailureCode_InvalidReceiveScalingHashType,
@@ -156,6 +109,41 @@ typedef enum _FailureCode : ULONG_PTR
     FailureCode_InvalidLsoCapabilities,
     FailureCode_IllegalPrivateApiCall,
     FailureCode_InvalidQueueHandle,
+    FailureCode_InvalidNetAdapterWakeReasonMediaChange,
+    FailureCode_PowerNotInTransition,
+    FailureCode_DisarmNotInProgress,
+    FailureCode_InvalidPowerOffloadListSignature,
+    FailureCode_InvalidWakeSourceListSignature,
+    FailureCode_InvalidRingImmutable,
+    FailureCode_InvalidRingImmutableFrameworkElement,
+    FailureCode_InvalidRingImmutableDriverTxPacket,
+    FailureCode_InvalidRingImmutableDriverTxFragment,
+    FailureCode_InvalidRingImmutableDriverRxPacketIgnore,
+    FailureCode_InvalidRingModifiedRxPacket,
+    FailureCode_InvalidRingModifiedRxFragment,
+    FailureCode_InvalidRingUnmodifiedRxPacket,
+    FailureCode_InvalidRingUnmodifiedRxFragment,
+    FailureCode_InvalidRingBeginIndex,
+    FailureCode_InvalidRingRxPacketFragmentCountZero,
+    FailureCode_InvalidRingRxPacketFragmentCountOutOfRange,
+    FailureCode_InvalidRingRxPacketFragmentIndexOutOfPreRange,
+    FailureCode_InvalidRingRxPacketFragmentCountOutOfPreRange,
+    FailureCode_InvalidRingRxPacketFragmentIndexOutOfPostRange,
+    FailureCode_InvalidRingRxPacketFragmentCountOutOfPostRange,
+    FailureCode_InvalidRingRxPacketLayer2Type,
+    FailureCode_InvalidRingRxPacketLayer2TypeNullLengthNonZero,
+    FailureCode_InvalidRingRxPacketLayer2TypeEthernetLengthInvalid,
+    FailureCode_InvalidRingRxPacketLayer3TypeIPv4LengthInvalid,
+    FailureCode_InvalidRingRxPacketLayer3TypeIPv6LengthInvalid,
+    FailureCode_InvalidRingRxPacketLayer4TypeTcpLengthInvalid,
+    FailureCode_InvalidRingRxPacketLayer4TypeUdpLengthInvalid,
+    FailureCode_InvalidRingRxPacketLayer3Type,
+    FailureCode_InvalidRingRxPacketLayer4Type,
+    FailureCode_InvalidRingRxPacketFragmentIndexOverlap,
+    FailureCode_InvalidRingRxPacketFragmentCountOverlap,
+    FailureCode_InvalidRingRxPacketFragmentOffsetInvalid,
+    FailureCode_InvalidRingRxPacketFragmentLengthInvalid,
+    FailureCode_InvalidMediaSpecificWakeUpFlags,
 } FailureCode;
 
 //
@@ -170,80 +158,86 @@ typedef enum _VerifierAction
     VerifierAction_DbgBreakIfDebuggerPresent
 } VerifierAction;
 
-VOID
+void
 NetAdapterCxBugCheck(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ FailureCode         FailureCode,
     _In_ ULONG_PTR           Parameter2,
     _In_ ULONG_PTR           Parameter3
 );
 
-VOID
+void
 Verifier_ReportViolation(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ VerifierAction      Action,
     _In_ FailureCode         FailureCode,
     _In_ ULONG_PTR           Parameter2,
     _In_ ULONG_PTR           Parameter3
 );
 
-VOID
+void
 Verifier_VerifyPrivateGlobals(
-    NX_PRIVATE_GLOBALS * PrivateGlobals
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals
 );
 
-VOID
+void
 Verifier_VerifyIrqlPassive(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals
 );
 
-VOID
+void
 Verifier_VerifyIrqlLessThanOrEqualDispatch(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals
 );
 
-VOID
+void
 Verifier_VerifyAdapterNotStarted(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ NxAdapter *         pNxAdapter
 );
 
-VOID
-Verifier_VerifyNetPowerSettingsAccessible(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ NxWake *             NetWake
+void
+Verifier_VerifyNetPowerTransition(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NxDevice *           Device
 );
 
-VOID
+void
+Verifier_VerifyNetPowerUpTransition(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NxDevice *           Device
+);
+
+void
 Verifier_VerifyNetRequestCompletionStatusNotPending(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ NETREQUEST NetRequest,
     _In_ NTSTATUS   CompletionStatus
 );
 
-VOID
+void
 Verifier_VerifyNetRequestType(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ NxRequest * NxRequest,
     _In_ NDIS_REQUEST_TYPE Type
 );
 
-VOID
+void
 Verifier_VerifyNetRequestIsQuery(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ NxRequest * NxRequest
 );
 
-VOID
+void
 Verifier_VerifyNetRequest(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ NxRequest * pNxRequest
 );
 
 template <typename T>
-VOID
+void
 Verifier_VerifyTypeSize(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ T *Input)
 {
     ULONG uInputSize = Input->Size;
@@ -260,165 +254,210 @@ Verifier_VerifyTypeSize(
     }
 }
 
-VOID
+void
 Verifier_VerifyNotNull(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ void const * const Ptr
 );
 
 NTSTATUS
 Verifier_VerifyQueueConfiguration(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ NET_REQUEST_QUEUE_CONFIG * QueueConfig
 );
 
-VOID
+void
 Verifier_VerifyReceiveScalingCapabilities(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ const NET_ADAPTER_RECEIVE_SCALING_CAPABILITIES * Capabilities
 );
 
-VOID
-Verifier_VerifyPowerCapabilities(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ NxAdapter const & NxAdapter,
-    _In_ NET_ADAPTER_POWER_CAPABILITIES const & PowerCapabilities
+void
+Verifier_VerifyPacketFilter(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_ADAPTER_PACKET_FILTER_CAPABILITIES const * PacketFilter
 );
 
-VOID
-Verifier_VerifyLinkLayerCapabilities(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ NET_ADAPTER_LINK_LAYER_CAPABILITIES * LinkLayerCapabilities
-);
-
-VOID
+void
 Verifier_VerifyCurrentLinkState(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ NET_ADAPTER_LINK_STATE * LinkState
 );
 
-VOID
+void
 Verifier_VerifyLinkLayerAddress(
-    _In_ NX_PRIVATE_GLOBALS *PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ NET_ADAPTER_LINK_LAYER_ADDRESS *LinkLayerAddress
 );
 
-VOID
+void
 Verifier_VerifyQueryAsUlongFlags(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ NET_CONFIGURATION_QUERY_ULONG_FLAGS Flags
 );
 
-VOID
+void
 Verifier_VerifyMtuSize(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
          ULONG MtuSize
 );
 
-VOID
+void
 Verifier_VerifyQueueInitContext(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ QUEUE_CREATION_CONTEXT *NetQueueInit
 );
 
-VOID
+void
 Verifier_VerifyNetPacketQueueConfiguration(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ NET_PACKET_QUEUE_CONFIG const * Configuration
 );
 
-VOID
+void
 Verifier_VerifyObjectAttributesParentIsNull(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ WDF_OBJECT_ATTRIBUTES * ObjectAttributes
 );
 
-VOID
+void
 Verifier_VerifyObjectAttributesContextSize(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_opt_ WDF_OBJECT_ATTRIBUTES * ObjectAttributes,
     _In_ SIZE_T MaximumContextSize
 );
 
-VOID
+void
 Verifier_VerifyDatapathCallbacks(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ NET_ADAPTER_DATAPATH_CALLBACKS const *DatapathCallbacks
 );
 
-VOID
+void
 Verifier_VerifyAdapterInitSignature(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ AdapterInit const *AdapterInit
 );
 
-VOID
+void
 Verifier_VerifyAdapterExtensionInitSignature(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ AdapterExtensionInit const *AdapterExtensionInit
 );
 
-VOID
+void
 Verifier_VerifyAdapterInitNotUsed(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ AdapterInit const *AdapterInit
 );
 
-VOID
-Verifier_VerifyNetPacketExtension(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ NET_PACKET_EXTENSION const * NetPacketExtension
+void
+Verifier_VerifyNetExtensionQuery(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_EXTENSION_QUERY const * Query
 );
 
-VOID
-Verifier_VerifyNetPacketExtensionQuery(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
-    _In_ NET_PACKET_EXTENSION_QUERY const * NetPacketExtension
-);
-
-VOID
+void
 Verifier_VerifyNetAdapterTxCapabilities(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ const NET_ADAPTER_TX_CAPABILITIES *TxCapabilities
 );
 
-VOID
+void
 Verifier_VerifyNetAdapterRxCapabilities(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ const NET_ADAPTER_RX_CAPABILITIES *RxCapabilities
 );
 
-VOID
+void
 Verifier_VerifyDeviceAdapterCollectionIsEmpty(
-    _In_ NX_PRIVATE_GLOBALS *PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ NxDevice const *Device,
     _In_ NxAdapterCollection const *AdapterCollection
 );
 
-VOID
+void
 Verifier_VerifyLsoCapabilities(
-    _In_ NX_PRIVATE_GLOBALS *PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES const *LsoCapabilities
 );
 
 void
 Verifier_VerifyExtensionGlobals(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals
-);
-
-void
-Verifier_VerifyIsMediaExtension(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals
 );
 
 void
 Verifier_VerifyRxQueueHandle(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ NETPACKETQUEUE NetRxQueue
 );
 
 void
 Verifier_VerifyTxQueueHandle(
-    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ NETPACKETQUEUE NetTxQueue
+);
+
+void
+Verifier_VerifyPowerOffloadList(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_POWER_OFFLOAD_LIST const * List
+);
+
+void
+Verifier_VerifyWakeSourceList(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_WAKE_SOURCE_LIST const * List
+);
+
+void
+Verifier_VerifyRingImmutable(
+    _In_ NX_PRIVATE_GLOBALS const & PrivateGlobals,
+    _In_ NET_RING const & Before,
+    _In_ NET_RING const & After
+);
+
+void
+Verifier_VerifyRingImmutableDriverTxPackets(
+    _In_ NX_PRIVATE_GLOBALS const & PrivateGlobals,
+    _In_ NET_RING const & Before,
+    _In_ NET_RING const & After
+);
+
+void
+Verifier_VerifyRingImmutableDriverTxFragments(
+    _In_ NX_PRIVATE_GLOBALS const & PrivateGlobals,
+    _In_ NET_RING const & Before,
+    _In_ NET_RING const & After
+);
+
+void
+Verifier_VerifyRingImmutableDriverRx(
+    _In_ NX_PRIVATE_GLOBALS const & PrivateGlobals,
+    _In_ NET_ADAPTER_RX_CAPABILITIES const & RxCapabilities,
+    _In_ NET_RING const & PacketBefore,
+    _In_ NET_RING const & PacketAfter,
+    _In_ NET_RING const & FragmentBefore,
+    _In_ NET_RING const & FragmentAfter
+);
+
+void
+Verifier_VerifyRingBeginIndex(
+    _In_ NX_PRIVATE_GLOBALS const & PrivateGlobals,
+    _In_ NET_RING const & Before,
+    _In_ NET_RING const & After
+);
+
+void
+Verifier_VerifyRingImmutableFrameworkElements(
+    _In_ NX_PRIVATE_GLOBALS const & PrivateGlobals,
+    _In_ NET_RING const & Before,
+    _In_ NET_RING const & After
+);
+
+void
+Verifier_VerifyNdisPmCapabilities(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_ADAPTER_NDIS_PM_CAPABILITIES const * NdisPmCapabilities
 );

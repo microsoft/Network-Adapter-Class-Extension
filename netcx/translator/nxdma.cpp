@@ -7,6 +7,8 @@
 #include "NxDma.hpp"
 #include "NxScatterGatherList.hpp"
 
+MAKE_INTRUSIVE_LIST_ENUMERABLE(MDL, Next);
+
 _Use_decl_annotations_
 DmaContext::DmaContext(
     void *SGBuffer,
@@ -84,8 +86,8 @@ NxDmaAdapter::NxDmaAdapter(
     m_dmaAdapter(static_cast<DMA_ADAPTER *>(DatapathCapabilities.TxMemoryConstraints.Dma.DmaAdapter)),
     m_physicalDeviceObject(static_cast<DEVICE_OBJECT *>(DatapathCapabilities.TxMemoryConstraints.Dma.PhysicalDeviceObject)),
     m_flushIoBuffers(!!DatapathCapabilities.FlushBuffers),
-    m_dmaContext(Rings, NET_RING_TYPE_PACKET),
-    m_packetRingSize(Rings.Rings[NET_RING_TYPE_PACKET]->NumberOfElements),
+    m_dmaContext(Rings, NetRingTypePacket),
+    m_packetRingSize(Rings.Rings[NetRingTypePacket]->NumberOfElements),
     m_maximumPacketSize(DatapathCapabilities.NominalMtu)
 {
 }
@@ -250,7 +252,9 @@ NxDmaAdapter::BuildScatterGatherListEx(
 
     auto& dmaContext = DmaTransfer.GetTransferContext();
 
-    return m_dmaAdapter->DmaOperations->BuildScatterGatherListEx(
+    auto oldIrql = KeRaiseIrqlToDpcLevel();
+
+    auto ntStatus = m_dmaAdapter->DmaOperations->BuildScatterGatherListEx(
         m_dmaAdapter,
         m_physicalDeviceObject,
         dmaContext.DmaTransferContext,
@@ -266,6 +270,9 @@ NxDmaAdapter::BuildScatterGatherListEx(
         nullptr, // DmaCompletionRoutine
         nullptr, // CompletionContext
         ScatterGatherList);
+
+    KeLowerIrql(oldIrql);
+    return ntStatus;
 }
 
 _Use_decl_annotations_
@@ -274,10 +281,14 @@ NxDmaAdapter::PutScatterGatherList(
     SCATTER_GATHER_LIST *ScatterGatherList
 ) const
 {
+    auto oldIrql = KeRaiseIrqlToDpcLevel();
+
     m_dmaAdapter->DmaOperations->PutScatterGatherList(
         m_dmaAdapter,
         ScatterGatherList,
         TRUE);
+
+    KeLowerIrql(oldIrql);
 }
 
 _Use_decl_annotations_

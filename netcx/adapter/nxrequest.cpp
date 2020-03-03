@@ -25,7 +25,7 @@ NxRequest::NxRequest(
     _In_ NDIS_OID                 Oid,
     _In_ UINT                     InputBufferLength,
     _In_ UINT                     OutputBufferLength,
-    _In_ PVOID                    InputOutputBuffer
+    _In_ void *                    InputOutputBuffer
 ) :
     CFxObject(NetRequest),
     m_NdisOidRequest(NdisOidRequest),
@@ -48,7 +48,7 @@ Routine Description:
 }
 
 NxRequest::~NxRequest(
-    VOID
+    void
 )
 /*++
 Routine Description:
@@ -98,7 +98,7 @@ Remarks:
     NDIS_OID              oid;
     UINT                  inputBufferLength;
     UINT                  outputBufferLength;
-    PVOID                 inputOutputBuffer;
+    void *                 inputOutputBuffer;
 
     switch (NdisOidRequest->RequestType) {
     case NdisRequestSetInformation:
@@ -208,14 +208,6 @@ Remarks:
     return status;
 }
 
-DispatchContext *
-NxRequest::GetDispatchContext(
-    void
-)
-{
-    return &m_dispatchContext;
-}
-
 RECORDER_LOG
 NxRequest::GetRecorderLog(
     void
@@ -224,7 +216,7 @@ NxRequest::GetRecorderLog(
     return m_NxAdapter->GetRecorderLog();
 }
 
-VOID
+void
 NxRequest::Complete(
     _In_ NTSTATUS CompletionStatus
 )

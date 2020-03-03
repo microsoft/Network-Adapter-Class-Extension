@@ -5,7 +5,7 @@
 #include "KWaitEvent.h"
 
 #define NETADAPTERCX_TAG 'xCdN'
-#define NETADAPTERCX_TAG_PTR ((PVOID)(PULONG_PTR) NDISCX_TAG)
+#define NETADAPTERCX_TAG_PTR ((void *)(PULONG_PTR) NDISCX_TAG)
 #define NX_WMI_TAG 'mWxN'
 
 #ifndef RTL_IS_POWER_OF_TWO
@@ -14,12 +14,12 @@
 #endif
 
 FORCEINLINE
-VOID
+void
 SetCompletionRoutineSmart(
     _In_     PDEVICE_OBJECT         DeviceObject,
     _In_     PIRP                   Irp,
     _In_     PIO_COMPLETION_ROUTINE CompletionRoutine,
-    _In_opt_ PVOID                  Context,
+    _In_opt_ void *                  Context,
     _In_     BOOLEAN                InvokeOnSuccess,
     _In_     BOOLEAN                InvokeOnError,
     _In_     BOOLEAN                InvokeOnCancel
@@ -144,7 +144,7 @@ Usage:
         ...
     } *PMYCONTEXT;
 
-    VOID DeleteEntries(PMYCONTEXT Context,
+    void DeleteEntries(PMYCONTEXT Context,
                            UCHAR Data) {
         PMYENTRY entry, nextEntry;
 
@@ -170,7 +170,7 @@ Usage:
        )
 
 FORCEINLINE
-VOID
+void
 InitializeListEntry(
     _Out_ PLIST_ENTRY ListEntry
     )
@@ -299,9 +299,9 @@ public:
         if (!Enabled) { return; }
     }
 
-    VOID
+    void
     InitAndAcquire(
-        VOID
+        void
         ) {
         if (!m_Enabled) { return; }
         NT_ASSERT(m_Count == 0);
@@ -311,15 +311,15 @@ public:
 
     BOOLEAN
     Acquire(
-        VOID
+        void
         ) {
         if (!m_Enabled) { return TRUE; }
         return (NxInterlockedIncrementGTZero(&m_Count) != 0);
     }
 
-    VOID
+    void
     Release(
-        VOID
+        void
         ) {
         if (!m_Enabled) { return; }
         if (0 == InterlockedDecrement(&m_Count)) {
@@ -327,9 +327,9 @@ public:
         }
     }
 
-    VOID
+    void
     ReleaseAndWait(
-        VOID
+        void
         ){
         if (!m_Enabled) { return; }
         Release();
@@ -347,22 +347,22 @@ class PointerWithHiddenBits {
 public:
 
     static
-    PVOID
+    void *
     _GetPtr(
-        PVOID Ptr
+        void * Ptr
         ) {
-        return (PVOID)(((ULONG_PTR)Ptr) & ~POINTER_WITH_HIDDEN_BITS_MASK);
+        return (void *)(((ULONG_PTR)Ptr) & ~POINTER_WITH_HIDDEN_BITS_MASK);
     }
 
     static
-    VOID
+    void
     _SetBit0(
-        PVOID* Ptr
+        void ** Ptr
         )
     {
         ULONG_PTR ptrVal = (ULONG_PTR)*Ptr;
         ptrVal |= 0x1;
-        *Ptr = (PVOID)(ptrVal);
+        *Ptr = (void *)(ptrVal);
     }
 
     static
@@ -383,7 +383,7 @@ inline
 NTSTATUS
 SetWmiBufferTooSmall(
     _In_ ULONG BufferSize,
-    _In_ PVOID Wnode,
+    _In_ void * Wnode,
     _In_ ULONG WnodeSize,
     _Out_ PULONG PReturnSize
     )

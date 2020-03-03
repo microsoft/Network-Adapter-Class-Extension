@@ -13,73 +13,6 @@ Abstract:
 #include "BufferPool.hpp"
 #include "BufferPool.tmh"
 
-class RtlMdl
-{
-public:
-
-    static RtlMdl* CreateMdl(_In_ PVOID VirtualAddress,
-                          _In_ size_t Length,
-                          _In_ bool toBuildMdl)
-    {
-        RtlMdl* mdl = new (std::nothrow, BUFFER_MANAGER_POOL_TAG) RtlMdl();
-
-        if (!NT_SUCCESS(mdl->Allocate(VirtualAddress, Length, toBuildMdl)))
-        {
-            delete mdl;
-            mdl = nullptr;
-        }
-
-        return mdl;
-    }
-
-    ~RtlMdl()
-    {
-        if (m_Mdl)
-        {
-            IoFreeMdl(m_Mdl);
-            m_Mdl = nullptr;
-        }
-
-        m_PhysicalPageCount = 0;
-        m_AllocatedMdlSize = 0;
-    }
-
-    size_t GetByteCount() { return MmGetMdlByteCount(m_Mdl); }
-    size_t GetPhysicalPageCount() { return m_PhysicalPageCount; }
-    size_t GetByteOffset() { return MmGetMdlByteOffset(m_Mdl); }
-    PPFN_NUMBER GetPhysicalPages() { return MmGetMdlPfnArray(m_Mdl); }
-    PMDL GetMdl() { return m_Mdl; }
-
-private:
-
-    RtlMdl() {}
-
-    NTSTATUS
-    Allocate(_In_ PVOID VirtualAddress,
-             _In_ size_t Length,
-             _In_ bool toBuildMdl)
-    {
-        ULONG ulength;
-        CX_RETURN_IF_NOT_NT_SUCCESS(RtlSizeTToULong(Length, &ulength));
-        m_Mdl = IoAllocateMdl(VirtualAddress, ulength, FALSE, FALSE, nullptr);
-        CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !m_Mdl);
-
-        m_AllocatedMdlSize = MmSizeOfMdl(VirtualAddress, Length);
-        m_PhysicalPageCount = ADDRESS_AND_SIZE_TO_SPAN_PAGES(VirtualAddress, Length);
-
-        if (toBuildMdl)
-        {
-            MmBuildMdlForNonPagedPool(m_Mdl);
-        }
-
-        return STATUS_SUCCESS;
-    }
-
-    size_t m_PhysicalPageCount = 0;
-    size_t m_AllocatedMdlSize = 0;
-    PMDL m_Mdl = nullptr;
-};
-
 NxBufferPool::NxBufferPool()
 {}
 
@@ -89,7 +22,7 @@ NxBufferPool::~NxBufferPool()
     {
         MmUnmapReservedMapping(m_BaseVirtualAddress,
                                BUFFER_MANAGER_POOL_TAG,
-                               m_StitchedMdl->GetMdl());
+                               m_StitchedMdl.get());
 
         MmFreeMappingAddress(m_BaseVirtualAddress,
                              BUFFER_MANAGER_POOL_TAG);
@@ -104,7 +37,7 @@ NxBufferPool::Initialize(
     _In_ size_t AllocateSize,
     _In_ size_t AlignmentOffset,
     _In_ size_t Alignment,
-    _Out_ size_t* TotalSizeRequested,
+    _Out_ size_t* MinimumSizeRequested,
     _Out_ size_t* MinimumChunkSize)
 {
     NT_ASSERT(Alignment <= PAGE_SIZE);
@@ -120,14 +53,13 @@ NxBufferPool::Initialize(
     CX_RETURN_NTSTATUS_IF(STATUS_INTEGER_OVERFLOW, m_StrideSize < AllocateSize);
 
 
-    //2. calculate the total size of memory needed to populate the entire pool
+    //2. calculate the minimum size of memory needed to populate the entire pool
     //Buffer Manage only allows alignment value < PAGE_SIZE and grantuates the memory chunck it
     //allocated is always page algined
-    size_t requstedTotalSize = 0;
+    size_t minAllocationSize = 0;
 
     //2.a calculate the necessary memory size to store all buffers
-    CX_RETURN_IF_NOT_NT_SUCCESS(RtlSizeTMult(m_RequestedPoolSize, m_StrideSize, &requstedTotalSize));
-
+    CX_RETURN_IF_NOT_NT_SUCCESS(RtlSizeTMult(m_RequestedPoolSize, m_StrideSize, &minAllocationSize));
 
     //2.b calculate the offset needed at the starting of the memory chunk for alignment
     size_t chunkOffsetAligned;
@@ -136,11 +68,8 @@ NxBufferPool::Initialize(
     m_ChunkOffset = chunkOffsetAligned - m_AlignmentOffset;
 
     //2.c calculate the total size
-    CX_RETURN_IF_NOT_NT_SUCCESS(RtlSizeTAdd(requstedTotalSize, m_ChunkOffset, &requstedTotalSize));
-    //round-up to multiple of pages
-    m_RequestedTotalSize = ALIGN_UP_BY(requstedTotalSize, PAGE_SIZE);
-    CX_RETURN_NTSTATUS_IF(STATUS_INTEGER_OVERFLOW, m_RequestedTotalSize < requstedTotalSize);
-    *TotalSizeRequested = m_RequestedTotalSize;
+    CX_RETURN_IF_NOT_NT_SUCCESS(RtlSizeTAdd(minAllocationSize, m_ChunkOffset, &minAllocationSize));
+    *MinimumSizeRequested = minAllocationSize;
 
     //a memory chunk cannot be smaller than the size required for a single buffer + offset needed
     //for alignment
@@ -186,7 +115,7 @@ NxBufferPool::StitchMemoryChunks()
         CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES,
                               !m_BaseVirtualAddress);
 
-        m_StitchedMdl.reset(RtlMdl::CreateMdl(m_BaseVirtualAddress, m_ContiguousVirtualLength, false));
+        m_StitchedMdl.reset(RtlMdl::Make(m_BaseVirtualAddress, m_ContiguousVirtualLength));
         CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES,
                               !m_StitchedMdl);
 
@@ -202,28 +131,29 @@ NxBufferPool::StitchMemoryChunks()
             NT_FRE_ASSERT(m_MemoryChunkBaseAddresses.append(baseAddress));
 
             wistd::unique_ptr<RtlMdl> chunkMdl;
-            chunkMdl.reset(RtlMdl::CreateMdl(m_MemoryChunks[i]->GetVirtualAddress(),
-                                             m_MemoryChunkSize,
-                                             true));
+            chunkMdl.reset(RtlMdl::Make(m_MemoryChunks[i]->GetVirtualAddress(),
+                                             m_MemoryChunkSize));
             CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES,
                                   !chunkMdl);
 
-            NT_FRE_ASSERT(m_StitchedMdl->GetPhysicalPageCount() ==
-                          chunkMdl->GetPhysicalPageCount() * m_NumMemoryChunks);
+            MmBuildMdlForNonPagedPool(chunkMdl.get());
 
-            RtlCopyMemory(&m_StitchedMdl->GetPhysicalPages()[stitchedMdlPhysicalPageIndex],
-                          chunkMdl->GetPhysicalPages(),
-                          chunkMdl->GetPhysicalPageCount() * sizeof(PFN_NUMBER));
+            NT_FRE_ASSERT(m_StitchedMdl->GetPfnArrayCount() ==
+                          chunkMdl->GetPfnArrayCount() * m_NumMemoryChunks);
 
-            stitchedMdlPhysicalPageIndex += chunkMdl->GetPhysicalPageCount();
+            RtlCopyMemory(&m_StitchedMdl->GetPfnArray()[stitchedMdlPhysicalPageIndex],
+                          chunkMdl->GetPfnArray(),
+                          chunkMdl->GetPfnArrayCount() * sizeof(PFN_NUMBER));
+
+            stitchedMdlPhysicalPageIndex += chunkMdl->GetPfnArrayCount();
         }
 
-        NT_FRE_ASSERT(stitchedMdlPhysicalPageIndex == m_StitchedMdl->GetPhysicalPageCount());
+        NT_FRE_ASSERT(stitchedMdlPhysicalPageIndex == m_StitchedMdl->GetPfnArrayCount());
 
         PVOID mappedVa =
             MmMapLockedPagesWithReservedMapping(m_BaseVirtualAddress,
                                                 BUFFER_MANAGER_POOL_TAG,
-                                                m_StitchedMdl->GetMdl(),
+                                                m_StitchedMdl.get(),
                                                 MmCached);
 
         NT_FRE_ASSERT(mappedVa == m_BaseVirtualAddress);
@@ -317,10 +247,10 @@ NxBufferPool::FillBufferPool()
 
 NONPAGED
 NTSTATUS
-NxBufferPool::Allocate(_Out_ PVOID* VirtualAddress,
+NxBufferPool::Allocate(_Out_ void ** VirtualAddress,
                        _Out_ LOGICAL_ADDRESS * LogicalAddress,
-                       _Out_ size_t* Offset,
-                       _Out_ size_t* AllocatedSize)
+                       _Out_ SIZE_T * Offset,
+                       _Out_ SIZE_T * AllocatedSize)
 {
     CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES,
                           m_NumBuffersInUse >= m_PopulatedPoolSize);

@@ -135,22 +135,6 @@ NxExecutionContext::Terminate()
 void
 NxExecutionContext::Start()
 {
-#if _KERNEL_MODE
-    UINT64 cpuCycleTime;
-
-    (void)KeQueryTotalCycleTimeThread(
-        KeGetCurrentThread(),
-        &cpuCycleTime);
-
-    m_ecCounters.CpuCycleTime = cpuCycleTime;
-    m_ecCounters.ThreadCycleTime = 0;
-    m_ecCounters.TotalCpuCycleTime = 0;
-#else
-    m_ecCounters.CpuCycleTime = 0;
-    m_ecCounters.ThreadCycleTime = 0;
-    m_ecCounters.TotalCpuCycleTime = 0;
-#endif
-
     SetStarted();
 }
 
@@ -233,60 +217,6 @@ NxExecutionContext::SetDebugNameHint(
 #else
     SetThreadDescription(m_workerThreadObject.get(), mib.Alias);
 #endif
-}
-
-void
-NxExecutionContext::UpdateCounters(
-    _In_ bool IsIdleIteration
-)
-{
-    m_ecCounters.IterationCount++;
-    UINT64 threadCycleTime = 0;
-    UINT64 threadTimeDelta = 0;
-
-#if _KERNEL_MODE
-    UINT64 cpuCycleTime = 0;
-    UINT64 cpuTimeDelta = 0;
-
-    threadCycleTime = KeQueryTotalCycleTimeThread(
-        KeGetCurrentThread(),
-        &cpuCycleTime);
-
-    cpuTimeDelta = cpuCycleTime - m_ecCounters.CpuCycleTime;
-    m_ecCounters.CpuCycleTime = cpuCycleTime;
-
-    threadTimeDelta = threadCycleTime - m_ecCounters.ThreadCycleTime;
-    m_ecCounters.ThreadCycleTime = threadCycleTime;
-
-    m_ecCounters.TotalCpuCycleTime += cpuTimeDelta;
-
-    if (cpuTimeDelta > threadTimeDelta)
-    {
-        m_ecCounters.IdleCycles += (cpuTimeDelta - threadTimeDelta);
-    }
-#else
-    if (QueryThreadCycleTime(GetCurrentThread(), &threadCycleTime))
-    {
-        threadTimeDelta = threadCycleTime - m_ecCounters.ThreadCycleTime;
-        m_ecCounters.ThreadCycleTime = threadCycleTime;
-    }
-#endif
-
-    if (IsIdleIteration)
-    {
-        m_ecCounters.BusyWaitIterationCount++;
-        m_ecCounters.BusyWaitCycles += threadTimeDelta;
-    }
-    else
-    {
-        m_ecCounters.ProcessingCycles += threadTimeDelta;
-    }
-}
-
-NxExecutionContextCounters
-NxExecutionContext::GetExecutionContextCounters() const
-{
-    return m_ecCounters;
 }
 
 ULONG

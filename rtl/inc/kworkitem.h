@@ -1,7 +1,7 @@
 
 #pragma once
 
-#include "KMacros.h"
+#include <KMacros.h>
 
 template <typename TCONTEXT, typename TBASE>
 class KWorkItemBase

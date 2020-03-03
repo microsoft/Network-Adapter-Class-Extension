@@ -16,40 +16,34 @@
 
 #endif // _KERNEL_MODE
 
-#include <FxObjectBase.hpp>
 #include <KWaitEvent.h>
-#include <mx.h>
+#include <wmistr.h>
 #include <smfx.h>
 #include <KPtr.h>
 
 #include "NxDeviceStateMachine.h"
 #include "NxAdapterCollection.hpp"
+#include "powerpolicy/NxPowerPolicy.hpp"
 #include "NxUtility.hpp"
 #include "netadaptercx_triage.h"
 
-#if (FX_CORE_MODE==FX_CORE_KERNEL_MODE)
-using CxRemoveLock = IO_REMOVE_LOCK;
-#else
-using CxRemoveLock = WUDF_IO_REMOVE_LOCK;
-#endif // _FX_CORE_MODE
-
 struct NX_PRIVATE_GLOBALS;
-
-class NxDevice;
 class NxDriver;
+
+NTSTATUS
+WdfCxDeviceInitAssignPreprocessorRoutines(
+    _Inout_ WDFCXDEVICE_INIT *CxDeviceInit
+    );
 
 void
 SetCxPnpPowerCallbacks(
     _Inout_ WDFCXDEVICE_INIT * CxDeviceInit
 );
 
-FORCEINLINE
-NxDevice *
-GetNxDeviceFromHandle(
-    _In_ WDFDEVICE Device
+void
+SetCxPowerPolicyCallbacks(
+    _Inout_ WDFCXDEVICE_INIT *CxDeviceInit
 );
-
-ULONG const MAX_DEVICE_RESET_ATTEMPTS = 5;
 
 typedef struct _FUNCTION_LEVEL_RESET_PARAMETERS {
     FUNCTION_LEVEL_DEVICE_RESET_PARAMETERS CompletionParameters;
@@ -76,110 +70,176 @@ typedef union _DeviceFlags
     ULONG Flags;
 } DeviceFlags;
 
-class NxDevice : public CFxObject<WDFDEVICE,
-                                  NxDevice,
-                                  GetNxDeviceFromHandle,
-                                  false>,
-                 public NxDeviceStateMachine<NxDevice>
+class NxDevice : public NxDeviceStateMachine<NxDevice>
 {
     using PowerIrpParameters = decltype(IO_STACK_LOCATION::Parameters.Power);
 
 private:
+
     //
     // The triage block contains the offsets to dynamically allocated class
     // members. Do not add a class member before this. If a class member has
     // to be added, make sure to update NETADAPTERCX_TRIAGE_INFO_OFFSET.
     //
-    NETADAPTERCX_GLOBAL_TRIAGE_BLOCK * m_NetAdapterCxTriageBlock;
+    NETADAPTERCX_GLOBAL_TRIAGE_BLOCK *
+        m_netAdapterCxTriageBlock = nullptr;
 
-    NxDriver *                   m_NxDriver;
+    WDFDEVICE
+        m_device = nullptr;
 
-    void * m_PlugPlayNotificationHandle;
+    NxDriver *
+        m_nxDriver = nullptr;
+
+    void *
+        m_plugPlayNotificationHandle = nullptr;
 
     //
     // Collection of adapters created on top of this device
     //
-    NxAdapterCollection          m_AdapterCollection;
+    NxAdapterCollection
+        m_adapterCollection;
 
     //
     // Number of adapters that had NdisMiniportInitializeEx
     // callback completed
     //
-    _Interlocked_ ULONG          m_NdisInitializeCount;
-
-    //
-    // WDM Remove Lock
-    //
-    CxRemoveLock                 m_RemoveLock;
+    _Interlocked_ ULONG
+        m_ndisInitializeCount = 0;
 
     //
     // Device Bus Address, indicating the bus slot this device belongs to
     // This value is used for telemetry and test purpose.
     // This value is defaulted to 0xffffffff
     //
-    UINT32                      m_DeviceBusAddress = 0xFFFFFFFF;
+    UINT32
+        m_deviceBusAddress = 0xFFFFFFFF;
 
-    DeviceFlags                 m_Flags = {};
+    DeviceFlags
+        m_flags = {};
 
-    DeviceState m_State = DeviceState::Initialized;
+    DeviceState
+        m_state = DeviceState::Initialized;
 
-    USHORT m_cGuidToOidMap = 0;
-    KPoolPtrNP<NDIS_GUID> m_pGuidToOidMap;
+    USHORT
+        m_cGuidToOidMap = 0;
 
-    size_t m_oidListCount = 0;
-    KPoolPtrNP<NDIS_OID> m_oidList;
+    KPoolPtrNP<NDIS_GUID>
+        m_pGuidToOidMap;
 
-#ifdef _KERNEL_MODE
-    //
-    // WdfDeviceGetSystemPowerAction relies on system power information stored
-    // in the D-IRP. The power manager marks D-IRPs with a system sleep power
-    // action as long as a system power broadcast is in progress. e.g. if
-    // device goes into S0-Idle while system power broadcast is still in
-    // progress then the API's returned action cannot be trusted. So we track
-    // Sx IRPs ourselves to ensure the correct value is reported.
-    //
-    POWER_ACTION                m_SystemPowerAction = PowerActionNone;
+    size_t
+        m_oidListCount = 0;
 
-    SYSTEM_POWER_STATE          m_TargetSystemPowerState = PowerSystemUnspecified;
-    DEVICE_POWER_STATE          m_TargetDevicePowerState = PowerDeviceUnspecified;
+    KPoolPtrNP<NDIS_OID>
+        m_oidList;
 
-#endif // _KERNEL_MODE
+    WDF_POWER_DEVICE_STATE
+        m_targetDevicePowerState = WdfPowerDeviceInvalid;
 
-    //
-    // Track WdfDeviceStopIdle failures so as to avoid imbalance of stop idle
-    // and resume idle. This relieves the caller (NDIS) from needing to keep
-    // track of failures.
-    //
-    _Interlocked_ LONG m_PowerRefFailureCount = 0;
+    bool
+        m_isDisarmInProgress = false;
 
     //
     // Used to track the device reset interface
     //
-    DEVICE_RESET_INTERFACE_STANDARD m_ResetInterface = {};
+    DEVICE_RESET_INTERFACE_STANDARD
+        m_resetInterface = {};
 
     //
-    // BOOLEAN to track whether we are the failing device that will be used
+    // Track whether we are the failing device that will be used
     // to provide hint to ACPI by returning STATUS_DEVICE_HUNG
     //
-    BOOLEAN                     m_FailingDeviceRequestingReset = FALSE;
+    bool
+        m_failingDeviceRequestingReset = false;
 
     //
     //  Used to track the number of device reset attempts requested on this device
     //
-    ULONG                       m_ResetAttempts = 0;
+    ULONG
+        m_resetAttempts = 0;
 
+    PFN_NET_DEVICE_RESET
+        m_evtNetDeviceReset = nullptr;
 
-    PFN_NET_DEVICE_RESET        m_EvtNetDeviceReset = nullptr;
+    NET_DEVICE_POWER_POLICY_EVENT_CALLBACKS
+        m_powerPolicyEventCallbacks = {};
 
-    _Interlocked_ ULONG         m_wakePatternCount = 0;
-    ULONG                       m_wakePatternMax = ULONG_MAX;
+    // Declare the base device state machine class as friend so that we
+    // can declare the state machine operations as private
+    friend class
+        NxDeviceStateMachine<NxDevice>;
 
-private:
-    friend class NxDeviceStateMachine<NxDevice>;
+    //
+    // State machine events
+    //
+    EvtLogTransitionFunc
+        EvtLogTransition;
 
-    NxDevice(
-        _In_ NX_PRIVATE_GLOBALS *          NxPrivateGlobals,
-        _In_ WDFDEVICE                     Device
+    EvtLogEventEnqueueFunc
+        EvtLogEventEnqueue;
+
+    EvtLogMachineExceptionFunc
+        EvtLogMachineException;
+
+    EvtMachineDestroyedFunc
+        EvtMachineDestroyed;
+
+    //
+    // State machine operations
+    //
+    SyncOperationDispatch
+        ReleasingIsSurpriseRemoved;
+
+    SyncOperationPassive
+        ReleasingReportPreReleaseToNdis;
+
+    SyncOperationDispatch
+        ReleasingReportSurpriseRemoveToNdis;
+
+    SyncOperationDispatch
+        ReleasingReportDeviceAddFailureToNdis;
+
+    SyncOperationDispatch
+        RemovedReportRemoveToNdis;
+
+    SyncOperationDispatch
+        ReleasingReportPostReleaseToNdis;
+
+    SyncOperationDispatch
+        CheckPowerPolicyOwnership;
+
+    SyncOperationDispatch
+        InitializeSelfManagedIo;
+
+    SyncOperationDispatch
+        ReinitializeSelfManagedIo;
+
+    SyncOperationDispatch
+        SuspendSelfManagedIo;
+
+    SyncOperationDispatch
+        RestartSelfManagedIo;
+
+    SyncOperationDispatch
+        PrepareForRebalance;
+
+    SyncOperationPassive
+        Started;
+
+    SyncOperationDispatch
+        PrepareHardware;
+
+    SyncOperationDispatch
+        PrepareHardwareFailedCleanup;
+
+    SyncOperationDispatch
+        AreAllAdaptersHalted;
+
+    AsyncOperationDispatch
+        RefreshAdapterList;
+
+    NTSTATUS
+    Initialize(
+        _In_ WDFDEVICE Device
     );
 
     bool
@@ -193,74 +253,71 @@ private:
         void
     );
 
-    // State machine events
-    EvtLogTransitionFunc EvtLogTransition;
-    EvtLogEventEnqueueFunc EvtLogEventEnqueue;
-    EvtLogMachineExceptionFunc EvtLogMachineException;
-    EvtMachineDestroyedFunc EvtMachineDestroyed;
+public:
 
-    // State machine operations
-    SyncOperationDispatch ReleasingIsSurpriseRemoved;
-    SyncOperationPassive ReleasingReportPreReleaseToNdis;
-    SyncOperationDispatch ReleasingReportSurpriseRemoveToNdis;
-    SyncOperationDispatch ReleasingReportDeviceAddFailureToNdis;
-    SyncOperationDispatch RemovedReportRemoveToNdis;
-    SyncOperationDispatch ReleasingReportPostReleaseToNdis;
-    SyncOperationDispatch CheckPowerPolicyOwnership;
-    SyncOperationDispatch InitializeSelfManagedIo;
-    SyncOperationDispatch ReinitializeSelfManagedIo;
-    SyncOperationDispatch SuspendSelfManagedIo;
-    SyncOperationDispatch RestartSelfManagedIo;
-    SyncOperationDispatch PrepareForRebalance;
-    SyncOperationPassive Started;
-    SyncOperationDispatch PrepareHardware;
-    SyncOperationDispatch PrepareHardwareFailedCleanup;
-    SyncOperationDispatch SelfManagedIoCleanup;
-    SyncOperationDispatch AreAllAdaptersHalted;
+    //
+    // Events used to synchronize our state machine with WDF's own
+    // state machine
+    //
+    AsyncResult
+        CxPrePrepareHardwareHandled;
 
-    AsyncOperationDispatch RefreshAdapterList;
+    KAutoEvent
+        CxSelfManagedIoHandled;
+
+    KAutoEvent
+        CxPrePrepareHardwareFailedCleanupHandled;
+
+    KAutoEvent
+        CxPreSelfManagedIoSuspendHandled;
+
+    KAutoEvent
+        CxPreReleaseHardwareHandled;
+
+    KAutoEvent
+        CxPostReleaseHardwareHandled;
+
+    KAutoEvent
+        WdfDeviceObjectCleanupHandled;
 
 public:
 
-    AsyncResult CxPrePrepareHardwareHandled;
-    AsyncResult CxPostSelfManagedIoInitHandled;
+    NxDevice(
+        _In_ NX_PRIVATE_GLOBALS * NxPrivateGlobals
+    );
 
-    KAutoEvent CxPrePrepareHardwareFailedCleanupHandled;
-    KAutoEvent CxPostSelfManagedIoRestartHandled;
-    KAutoEvent CxPreSelfManagedIoSuspendHandled;
-    KAutoEvent CxPostSelfManagedIoCleanupHandled;
-    KAutoEvent CxPreReleaseHardwareHandled;
-    KAutoEvent CxPostReleaseHardwareHandled;
-    KAutoEvent WdfDeviceObjectCleanupHandled;
-
-public:
-
-    ~NxDevice();
-
-    UINT32 GetDeviceBusAddress() { return m_DeviceBusAddress; }
+    UINT32
+    GetDeviceBusAddress(
+        void
+    ) const;
 
     static
     NTSTATUS
     _Create(
-        _In_  NX_PRIVATE_GLOBALS *          PrivateGlobals,
-        _In_  WDFDEVICE                     Device,
-        _Out_ NxDevice **                   NxDeviceParam
-    );
-
-    static
-    VOID
-    _EvtCleanup(
-        _In_  WDFOBJECT NetAdatper
+        _In_  NX_PRIVATE_GLOBALS * PrivateGlobals,
+        _In_  WDFDEVICE_INIT * DeviceInit
     );
 
     NTSTATUS
-    Init(
-        VOID
+    EnsureInitialized(
+        _In_ WDFDEVICE Device
     );
 
+    WDFDEVICE
+    GetFxObject(
+        void
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    RegisterPlugPlayNotification(
+        void
+    );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
     void
-    ReleaseRemoveLock(
-        _In_ IRP *Irp
+    UnregisterPlugPlayNotification(
+        void
     );
 
     void
@@ -280,7 +337,7 @@ public:
 
     RECORDER_LOG
     GetRecorderLog(
-        VOID
+        void
     );
 
     NxDriver *
@@ -290,41 +347,41 @@ public:
 
     void
     AdapterCreated(
-        _In_  NxAdapter *Adapter
+        _In_ NxAdapter * Adapter
     );
 
     void
     AdapterDestroyed(
-        _In_ NxAdapter *Adapter
+        _In_ NxAdapter * Adapter
     );
 
-    VOID
+    void
     StartComplete(
-        VOID
+        void
     );
 
     NTSTATUS
-    NxDevice::WdmCreateIrpPreProcess(
+    WdmCreateIrpPreProcess(
         _Inout_ IRP * Irp,
         _In_ WDFCONTEXT DispatchContext
     );
 
     NTSTATUS
-    NxDevice::WdmCloseIrpPreProcess(
+    WdmCloseIrpPreProcess(
         _Inout_ IRP * Irp,
         _In_ WDFCONTEXT DispatchContext
     );
 
     NTSTATUS
-    NxDevice::WdmIoIrpPreProcess(
+    WdmIoIrpPreProcess(
         _Inout_ IRP * Irp,
         _In_ WDFCONTEXT DispatchContext
     );
 
     NTSTATUS
-    NxDevice::WdmSystemControlIrpPreProcess(
-        _Inout_ PIRP       Irp,
-        _In_    WDFCONTEXT DispatchContext
+    WdmSystemControlIrpPreProcess(
+        _Inout_ IRP * Irp,
+        _In_ WDFCONTEXT DispatchContext
     );
 
     _IRQL_requires_(PASSIVE_LEVEL)
@@ -407,24 +464,18 @@ public:
     );
 
     NTSTATUS
-    NxDevice::WdmPnPIrpPreProcess(
-        _Inout_ PIRP Irp
+    WdmPnPIrpPreProcess(
+        _Inout_ IRP * Irp
     );
 
-    BOOLEAN
+    bool
     IsDeviceInPowerTransition(
-        VOID
+        void
     );
 
-    NTSTATUS
-    PowerReference(
-        _In_ bool WaitForD0,
-        _In_ void *Tag
-    );
-
-    void
-    PowerDereference(
-        _In_ void *Tag
+    bool
+    IsDisarmInProgress(
+        void
     );
 
     bool
@@ -433,13 +484,28 @@ public:
     ) const;
 
     void
-    PreSetPowerIrp(
-        _In_ PowerIrpParameters const & PowerParameters
+    EnableWakeReasonReporting(
+        void
     );
 
     void
-    PostSetPowerIrp(
-        _In_ PowerIrpParameters const & PowerParameters
+    DisableWakeReasonReporting(
+        void
+    );
+
+    void
+    PreSelfManagedIoSuspend(
+        _In_ WDF_POWER_DEVICE_STATE TargetState
+    );
+
+    void
+    GetPowerOffloadList(
+        _Inout_ NxPowerOffloadList * PowerList
+    );
+
+    void
+    GetWakeSourceList(
+        _Inout_ NxWakeSourceList * PowerList
     );
 
     _IRQL_requires_(PASSIVE_LEVEL)
@@ -455,7 +521,7 @@ public:
 
     bool
     GetSupportedDeviceResetType(
-        _Inout_ PULONG SupportedDeviceResetTypes
+        _Inout_ ULONG * SupportedDeviceResetTypes
     ) const;
 
     NTSTATUS
@@ -469,30 +535,20 @@ public:
         PFN_NET_DEVICE_RESET NetDeviceReset
     );
 
+    void
+    SetPowerPolicyEventCallbacks(
+        _In_ NET_DEVICE_POWER_POLICY_EVENT_CALLBACKS const * Callbacks
+    );
+
     static
     void
     GetTriageInfo(
         void
     );
 
-    void
-    SetMaximumNumberOfWakePatterns(
-        _In_ NET_ADAPTER_POWER_CAPABILITIES const & PowerCapabilities
-    );
-
-    bool
-    IncreaseWakePatternReference(
-        void
-    );
-
-    void
-    DecreaseWakePatternReference(
-        void
-    );
-
     NTSTATUS
     AssignSupportedOidList(
-        _In_ NDIS_OID const * SupportedOids,
+        _In_reads_(SupportedOidsCount) NDIS_OID const * SupportedOids,
         _In_ size_t SupportedOidsCount
     );
 
@@ -505,30 +561,11 @@ public:
     GetOidListCount(
         void
     ) const;
+
+    NET_DEVICE_POWER_POLICY_EVENT_CALLBACKS const &
+    GetPowerPolicyEventCallbacks(
+        void
+    ) const;
 };
 
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxDevice, _GetNxDeviceFromHandle);
-
-FORCEINLINE
-NxDevice *
-GetNxDeviceFromHandle(
-    _In_ WDFDEVICE     Device
-    )
-/*++
-Routine Description:
-
-    This routine is just a wrapper around the _GetNxDeviceFromHandle function.
-    To be able to define a the NxDevice class above, we need a forward declaration of the
-    accessor function. Since _GetNxDeviceFromHandle is defined by Wdf, we dont want to
-    assume a prototype of that function for the foward declaration.
-
---*/
-
-{
-    return _GetNxDeviceFromHandle(Device);
-}
-
-NTSTATUS
-WdfCxDeviceInitAssignPreprocessorRoutines(
-    _Inout_ WDFCXDEVICE_INIT *CxDeviceInit
-    );
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxDevice, GetNxDeviceFromHandle);

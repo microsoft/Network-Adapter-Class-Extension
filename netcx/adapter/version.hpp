@@ -14,6 +14,7 @@ extern WDFWAITLOCK g_RegistrationLock;
 #define NX_PRIVATE_GLOBALS_SIG          'IxNG'
 
 class NxDriver;
+enum class MediaExtensionType;
 
 struct NX_PRIVATE_GLOBALS {
     //
@@ -41,12 +42,7 @@ struct NX_PRIVATE_GLOBALS {
     //
     WDF_DRIVER_GLOBALS *ClientDriverGlobals;
 
-    //
-    // True if the client driver is a media specific
-    // extension. For the list of such client drivers
-    // see Verifier_VerifyIsMediaExtension
-    //
-    bool IsMediaExtension;
+    MediaExtensionType ExtensionType;
 };
 
 class CxDriverContext
@@ -66,7 +62,7 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(CxDriverContext, GetCxDriverContextFromHandle
 
 
 FORCEINLINE
-VOID
+void
 NxDbgBreak(
     NX_PRIVATE_GLOBALS * PrivateGlobals
     )

@@ -60,19 +60,6 @@ using EC_START_ROUTINE = wistd::remove_pointer<PTHREAD_START_ROUTINE>::type;
 using EC_RETURN = DWORD;
 #endif
 
-struct NxExecutionContextCounters
-{
-    ULONG64 IterationCount = 0; // # of times polling loop runs
-    ULONG64 BusyWaitIterationCount = 0; // # of times polling loop didn't do anything
-
-    ULONG64 CpuCycleTime = 0;
-    ULONG64 ThreadCycleTime = 0;
-    ULONG64 TotalCpuCycleTime = 0;
-    ULONG64 ProcessingCycles = 0;
-    ULONG64 BusyWaitCycles = 0;
-    ULONG64 IdleCycles = 0;
-};
-
 /// Encapsulates single-threaded execution of a task that can be suspended and
 /// resumed
 class NxExecutionContext
@@ -145,14 +132,6 @@ public:
         _In_ NET_LUID networkInterface
     );
 
-    void
-    UpdateCounters(
-        _In_ bool IsIdleIteration
-    );
-
-    NxExecutionContextCounters
-    GetExecutionContextCounters() const;
-
     ULONG
     GetExecutionContextIdentifier() const;
 
@@ -193,8 +172,6 @@ private:
     KAutoEvent m_work;
     KAutoEvent m_stopped;
     KAutoEvent m_changed;
-
-    NxExecutionContextCounters m_ecCounters;
 
 #if _KERNEL_MODE
     unique_zw_handle m_threadHandle;

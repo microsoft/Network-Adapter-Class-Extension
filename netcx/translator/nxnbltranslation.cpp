@@ -6,29 +6,72 @@
 #include "NxNblTranslation.tmh"
 #include "NxNblTranslation.hpp"
 
+#include <net/fragment.h>
 #include <net/checksum_p.h>
+#include <net/logicaladdress_p.h>
 #include <net/lso_p.h>
+#include <net/mdl_p.h>
+#include <net/rsc_p.h>
+#include <net/virtualaddress_p.h>
 
 #include "NxPacketLayout.hpp"
 #include "NxChecksumInfo.hpp"
 #include "NxLargeSend.hpp"
+#include "NxReceiveCoalescing.hpp"
+#include "NxStatistics.hpp"
+
+MdlTranlationResult::MdlTranlationResult(
+    NxNblTranslationStatus XlatStatus
+)
+    : Status(XlatStatus)
+{
+    NT_FRE_ASSERT(Status != NxNblTranslationStatus::Success);
+}
+
+MdlTranlationResult::MdlTranlationResult(
+    NxNblTranslationStatus XlatStatus,
+    UINT32 Index,
+    UINT16 Count
+)
+    : Status(XlatStatus)
+    , FragmentIndex(Index)
+    , FragmentCount(Count)
+{
+    NT_FRE_ASSERT(Status == NxNblTranslationStatus::Success);
+}
 
 NxNblTranslator::NxNblTranslator(
+    TxExtensions const & Extensions,
     NxNblTranslationStats &Stats,
     NET_RING_COLLECTION * Rings,
     const NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES & DatapathCapabilities,
     const NxDmaAdapter *DmaAdapter,
     const NxRingContext & ContextBuffer,
-    NDIS_MEDIUM MediaType
+    NDIS_MEDIUM MediaType,
+    NxStatistics & GenStats
 ) :
+    m_extensions(Extensions),
     m_stats(Stats),
     m_rings(Rings),
     m_datapathCapabilities(DatapathCapabilities),
     m_contextBuffer(ContextBuffer),
     m_mediaType(MediaType),
-    m_dmaAdapter(DmaAdapter)
+    m_dmaAdapter(DmaAdapter),
+    m_genStats(GenStats)
 {
+    //
+    // The maximum number of fragments per packet is either the maximum number
+    // of fragments the NIC driver supports or the maximum number of elements
+    // in the fragment ring, whichever is smaller
+    //
+    m_maxFragmentsPerPacket = min(
+        m_datapathCapabilities.MaximumNumberOfTxFragments,
+        NetRingCollectionGetFragmentRing(m_rings)->NumberOfElements - 1);
 
+    //
+    // Also take in account NET_PACKET::FragmentCount being an UINT16
+    //
+    m_maxFragmentsPerPacket = min(m_maxFragmentsPerPacket, UINT16_MAX);
 }
 
 bool
@@ -37,22 +80,6 @@ NxNblTranslator::RequiresDmaMapping(
 ) const
 {
     return m_datapathCapabilities.TxMemoryConstraints.MappingRequirement == NET_CLIENT_MEMORY_MAPPING_REQUIREMENT_DMA_MAPPED;
-}
-
-NetRbFragmentRange
-NxNblTranslator::EmptyFragmentRange(
-    void
-) const
-{
-    return { *NetRingCollectionGetFragmentRing(m_rings), 0, 0 };
-}
-
-size_t
-NxNblTranslator::MaximumNumberOfFragments(
-    void
-) const
-{
-    return NetRingCollectionGetFragmentRing(m_rings)->NumberOfElements - 1;
 }
 
 _Use_decl_annotations_
@@ -67,10 +94,11 @@ NxNblTranslator::TranslateNetBufferListOOBDataToNetPacketExtensions(
     // translator (NET_PACKET owner) zeroes existing data and fill in new data
 
     // Checksum
-    if (IsPacketChecksumEnabled())
+    auto const & checksumExtension = m_extensions.Extension.Checksum;
+    if (checksumExtension.Enabled)
     {
         NET_PACKET_CHECKSUM* checksumExt =
-            NetExtensionGetPacketChecksum(&m_netPacketChecksumExtension, packetIndex);
+            NetExtensionGetPacketChecksum(&checksumExtension, packetIndex);
         RtlZeroMemory(checksumExt, NET_PACKET_EXTENSION_CHECKSUM_VERSION_1_SIZE);
 
         auto const &checksumInfo =
@@ -78,7 +106,7 @@ NxNblTranslator::TranslateNetBufferListOOBDataToNetPacketExtensions(
             &netBufferList.NetBufferListInfo[TcpIpChecksumNetBufferListInfo];
 
 #if DBG
-        if (checksumInfo.Transmit.TcpChecksum && netPacket->Layout.Layer4Type == NET_PACKET_LAYER4_TYPE_TCP)
+        if (checksumInfo.Transmit.TcpChecksum && netPacket->Layout.Layer4Type == NetPacketLayer4TypeTcp)
         {
             NT_ASSERT(checksumInfo.Transmit.TcpHeaderOffset == (ULONG)(netPacket->Layout.Layer2HeaderLength + netPacket->Layout.Layer3HeaderLength));
         }
@@ -87,13 +115,13 @@ NxNblTranslator::TranslateNetBufferListOOBDataToNetPacketExtensions(
         *checksumExt = NxTranslateTxPacketChecksum(*netPacket, checksumInfo);
     }
 
-    if (IsPacketLargeSendSegmentationEnabled())
+    auto const & lsoExtension =  m_extensions.Extension.Lso;
+    if (lsoExtension.Enabled)
     {
-        NET_PACKET_LARGE_SEND_SEGMENTATION* lsoExt =
-            NetExtensionGetPacketLargeSendSegmentation(&m_netPacketLsoExtension, packetIndex);
+        auto lsoExt = NetExtensionGetPacketLso(&lsoExtension, packetIndex);
         RtlZeroMemory(lsoExt, NET_PACKET_EXTENSION_LSO_VERSION_1_SIZE);
 
-        if (netPacket->Layout.Layer4Type == NET_PACKET_LAYER4_TYPE_TCP)
+        if (netPacket->Layout.Layer4Type == NetPacketLayer4TypeTcp)
         {
             auto const &lsoInfo =
                 *(NDIS_TCP_LARGE_SEND_OFFLOAD_NET_BUFFER_LIST_INFO*)
@@ -165,34 +193,20 @@ NxNblTranslator::TranslateNetBufferToNetPacket(
         return NxNblTranslationStatus::CannotTranslate;
     }
 
-    auto& fragmentRing = *NetRingCollectionGetFragmentRing(m_rings);
-    auto const availableFragments = NetRbFragmentRange::OsRange(fragmentRing);
+    auto const result =
+        RequiresDmaMapping()
+            ? TranslateMdlChainToDmaMappedFragmentRange(*mdl, mdlOffset, bytesToCopy, *netPacket)
+            : TranslateMdlChainToFragmentRangeKvmOnly(*mdl, mdlOffset, bytesToCopy);
 
-    auto const result = RequiresDmaMapping() ?
-        TranslateMdlChainToDmaMappedFragmentRange(*mdl, mdlOffset, bytesToCopy, *netPacket, availableFragments) :
-        TranslateMdlChainToFragmentRangeKvmOnly(*mdl, mdlOffset, bytesToCopy, availableFragments);
-
-    if (result.Status == NxNblTranslationStatus::Success)
+    if (result.Status == NxNblTranslationStatus::Success &&
+        result.FragmentCount > 0)
     {
-        if (result.FragmentChain.Count() > 0)
-        {
-            // Commit the fragment chain to the packet
-            netPacket->FragmentCount = static_cast<UINT16>(result.FragmentChain.Count());
-            netPacket->FragmentIndex = result.FragmentChain.begin().GetIndex();
-            fragmentRing.EndIndex = result.FragmentChain.end().GetIndex();
+        auto fr = NetRingCollectionGetFragmentRing(m_rings);
 
-            if (backfill > 0)
-            {
-                // If the client driver requested any amount of backfill we need to take
-                // that space out of the first fragment's valid length
-                auto & firstFragment = *result.FragmentChain.begin();
-
-                NT_ASSERT(firstFragment.Offset + backfill <= firstFragment.Capacity);
-
-                firstFragment.Offset += backfill;
-                firstFragment.ValidLength -= backfill;
-            }
-        }
+        // Commit the fragment chain to the packet
+        netPacket->FragmentCount = result.FragmentCount;
+        netPacket->FragmentIndex = result.FragmentIndex;
+        fr->EndIndex = (fr->EndIndex + result.FragmentCount) & fr->ElementIndexMask;
     }
 
     return result.Status;
@@ -201,31 +215,37 @@ NxNblTranslator::TranslateNetBufferToNetPacket(
 inline
 bool
 IsAddressAligned(
-    _In_ void *Address,
+    _In_ ULONG_PTR Address,
     _In_ size_t Alignment
 )
 {
-    return (reinterpret_cast<ULONG_PTR>(Address) & (Alignment - 1)) == 0;
+    return (Address & (Alignment - 1)) == 0;
 }
 
 _Use_decl_annotations_
 bool
 NxNblTranslator::ShouldBounceFragment(
-    NET_FRAGMENT const & Fragment
+    NET_FRAGMENT const * const Fragment,
+    NET_FRAGMENT_VIRTUAL_ADDRESS const * const VirtualAddress,
+    NET_FRAGMENT_LOGICAL_ADDRESS const * const LogicalAddress
 ) const
 {
     auto const alignment = m_datapathCapabilities.TxMemoryConstraints.AlignmentRequirement;
     auto const maxPhysicalAddress = m_datapathCapabilities.TxMemoryConstraints.Dma.MaximumPhysicalAddress;
 
-    if (!IsAddressAligned(Fragment.VirtualAddress, alignment))
+    auto const address =
+        reinterpret_cast<ULONG_PTR>(VirtualAddress->VirtualAddress) +
+        static_cast<ULONG_PTR>(Fragment->Offset);
+
+    if (!IsAddressAligned(address, alignment))
     {
         m_stats.Packet.UnalignedBuffer += 1;
         return true;
     }
 
-    auto const maxLogicalAddress = static_cast<LOGICAL_ADDRESS>(maxPhysicalAddress.QuadPart);
+    auto const maxLogicalAddress = static_cast<UINT64>(maxPhysicalAddress.QuadPart);
     auto const checkMaxPhysicalAddress = RequiresDmaMapping() && maxLogicalAddress != 0;
-    if (checkMaxPhysicalAddress && Fragment.Mapping.DmaLogicalAddress > maxLogicalAddress)
+    if (checkMaxPhysicalAddress && LogicalAddress->LogicalAddress > maxLogicalAddress)
     {
         m_stats.DMA.PhysicalAddressTooLarge += 1;
         return true;
@@ -239,93 +259,95 @@ MdlTranlationResult
 NxNblTranslator::TranslateMdlChainToFragmentRangeKvmOnly(
     MDL &Mdl,
     size_t MdlOffset,
-    size_t BytesToCopy,
-    NetRbFragmentRange const &AvailableFragments
+    size_t BytesToCopy
 ) const
 {
-    auto it = AvailableFragments.begin();
+    auto const fr = NetRingCollectionGetFragmentRing(m_rings);
+    auto const frOsBegin = fr->EndIndex;
+    auto const frOsEnd = (fr->BeginIndex - 1) & fr->ElementIndexMask;
+
+    auto const availableFragments = NetRingGetRangeCount(fr, frOsBegin, frOsEnd);
+    auto const maximumFragmentCount = min(availableFragments, m_maxFragmentsPerPacket);
 
     //
     // While there is remaining data to be copied, and we have MDLs to walk...
     //
     auto mdl = &Mdl;
+    UINT16 i = 0;
     for (auto remain = BytesToCopy; remain > 0; mdl = mdl->Next)
     {
-        auto numberOfFragments = NetRbFragmentRange(AvailableFragments.begin(), it).Count();
-
-        if (numberOfFragments > m_datapathCapabilities.MaximumNumberOfTxFragments)
-        {
-            return { NxNblTranslationStatus::BounceRequired, EmptyFragmentRange() };
-        }
-
-        if (it == AvailableFragments.end())
-        {
-            // We need to know how many fragments this packet has
-            // because we might never have enough fragments to
-            // translate it
-            while (mdl)
-            {
-                numberOfFragments++;
-                mdl = mdl->Next;
-            }
-
-            if (numberOfFragments > MaximumNumberOfFragments())
-            {
-                return { NxNblTranslationStatus::BounceRequired, EmptyFragmentRange() };
-            }
-
-            return { NxNblTranslationStatus::InsufficientResources, EmptyFragmentRange() };
-        }
-
         //
         // Skip zero length MDLs.
         //
-
         size_t const mdlByteCount = MmGetMdlByteCount(mdl);
         if (mdlByteCount == 0)
         {
             continue;
         }
 
+        if (i == maximumFragmentCount)
+        {
+            //
+            // We're out of fragments to complete the translation. We could
+            // be in this situation for two reasons:
+            //
+            // 1) We don't have enough fragments at the moment but will have
+            // it at some point in the future
+            //
+            // 2) The packet requires more fragments than m_maxFragmentsPerPacket
+            //
+            // This logic assumes that 1) is the common case, returing insufficient
+            // resources from this funcion (try again) until we have at least
+            // m_maxFragmentsPerPacket available fragments, at which point we bounce
+            // the entire packet if we still can't finish the translation.
+            //
+
+            if (maximumFragmentCount == m_maxFragmentsPerPacket)
+            {
+                return { NxNblTranslationStatus::BounceRequired };
+            }
+
+            return { NxNblTranslationStatus::InsufficientResources };
+        }
+
         //
-        // Get the current fragment, increment the iterator
+        // Get the current fragment, increment the index
         //
 
-        auto& currentFragment = *(it++);
-        RtlZeroMemory(&currentFragment, NetPacketFragmentGetSize());
+        auto const frIndex = (frOsBegin + i) & fr->ElementIndexMask;
+        i += 1;
+
+        auto fragment = NetRingGetFragmentAtIndex(fr, frIndex);
+        auto virtualAddress = NetExtensionGetFragmentVirtualAddress(
+            &m_extensions.Extension.VirtualAddress, frIndex);
+        auto const logicalAddress = NetExtensionGetFragmentLogicalAddress(
+            &m_extensions.Extension.LogicalAddress, frIndex);
+        auto fragmentMdl = NetExtensionGetFragmentMdl(
+            &m_extensions.Extension.Mdl, frIndex);
 
         //
         // Compute the amount to transfer this time.
         //
-
-        ASSERT(MdlOffset < mdlByteCount);
         size_t const copySize = min(remain, mdlByteCount - MdlOffset);
 
-        //
-        // Perform the transfer
-        //
-        currentFragment.Offset = MdlOffset;
+        RtlZeroMemory(fragment, sizeof(NET_FRAGMENT));
+        fragment->Offset = MdlOffset;
+        fragment->Capacity = mdlByteCount;
+        fragment->ValidLength = copySize;
+        virtualAddress->VirtualAddress = MmGetSystemAddressForMdlSafe(
+            mdl, LowPagePriority | MdlMappingNoExecute);
+        fragmentMdl->Mdl = mdl;
 
-        // NDIS6 requires MDLs to be mapped to system address space, so
-        // retrieving SystemAddress should not fail.
-        currentFragment.VirtualAddress = MmGetSystemAddressForMdlSafe(mdl, LowPagePriority | MdlMappingNoExecute);
-        NT_ASSERT(currentFragment.VirtualAddress);
-
-        if (ShouldBounceFragment(currentFragment))
+        if (ShouldBounceFragment(fragment, virtualAddress, logicalAddress))
         {
-            return { NxNblTranslationStatus::BounceRequired, EmptyFragmentRange() };
+            return { NxNblTranslationStatus::BounceRequired };
         }
-
-        currentFragment.Mapping.Mdl = mdl;
-
-        currentFragment.Capacity = mdlByteCount;
-        currentFragment.ValidLength = copySize;
 
         MdlOffset = 0;
         remain -= copySize;
     }
 
-    return { NxNblTranslationStatus::Success, NetRbFragmentRange(AvailableFragments.begin(), it) };
+    return { NxNblTranslationStatus::Success, frOsBegin, i };
 }
 
 MdlTranlationResult
@@ -333,13 +355,12 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRange(
     MDL &Mdl,
     size_t MdlOffset,
     size_t BytesToCopy,
-    NET_PACKET const &Packet,
-    NetRbFragmentRange const &AvailableFragments
+    NET_PACKET const &Packet
 ) const
 {
     if (m_dmaAdapter->AlwaysBounce())
     {
-        return { NxNblTranslationStatus::BounceRequired, EmptyFragmentRange() };
+        return { NxNblTranslationStatus::BounceRequired };
     }
 
     if (m_dmaAdapter->BypassHal())
@@ -347,8 +368,7 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRange(
         return TranslateMdlChainToDmaMappedFragmentRangeBypassHal(
             Mdl,
             MdlOffset,
-            BytesToCopy,
-            AvailableFragments);
+            BytesToCopy);
     }
     else
     {
@@ -356,15 +376,14 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRange(
 
         if (!dmaTransfer)
         {
-            return { NxNblTranslationStatus::InsufficientResources, EmptyFragmentRange() };
+            return { NxNblTranslationStatus::InsufficientResources };
         }
 
         return TranslateMdlChainToDmaMappedFragmentRangeUseHal(
             Mdl,
             MdlOffset,
             BytesToCopy,
-            dmaTransfer,
-            AvailableFragments);
+            dmaTransfer);
     }
 }
 
@@ -390,16 +409,24 @@ NxNblTranslator::TranslateScatterGatherListToFragmentRange(
     MDL &MappedMdl,
     size_t BytesToCopy,
     size_t MdlOffset,
-    NxScatterGatherList const &Sgl,
-    NetRbFragmentRange const &AvailableFragments
+    NxScatterGatherList const &Sgl
 ) const
 {
-    if (Sgl->NumberOfElements > m_datapathCapabilities.MaximumNumberOfTxFragments)
+    if (Sgl->NumberOfElements > m_maxFragmentsPerPacket)
     {
-        return { NxNblTranslationStatus::BounceRequired, EmptyFragmentRange() };
+        return { NxNblTranslationStatus::BounceRequired };
     }
 
-    auto it = AvailableFragments.begin();
+    auto const fr = NetRingCollectionGetFragmentRing(m_rings);
+    auto const frOsBegin = fr->EndIndex;
+    auto const frOsEnd = (fr->BeginIndex - 1) & fr->ElementIndexMask;
+
+    auto const availableFragments = NetRingGetRangeCount(fr, frOsBegin, frOsEnd);
+
+    if (Sgl->NumberOfElements > availableFragments)
+    {
+        return { NxNblTranslationStatus::InsufficientResources };
+    }
 
     MDL *currentMdl = &MappedMdl;
     size_t currentMdlBytesToCopy = MmGetMdlByteCount(currentMdl) - MdlOffset;
@@ -408,46 +435,37 @@ NxNblTranslator::TranslateScatterGatherListToFragmentRange(
 
     for (auto i = 0u; i < Sgl->NumberOfElements; i++)
     {
-        if (it == AvailableFragments.end())
-        {
-            auto numberOfFragments = NetRbFragmentRange(AvailableFragments.begin(), it).Count();
-            numberOfFragments += Sgl->NumberOfElements - i;
+        auto const frIndex = (frOsBegin + i) & fr->ElementIndexMask;
+        auto fragment = NetRingGetFragmentAtIndex(fr, frIndex);
+        auto virtualAddress = NetExtensionGetFragmentVirtualAddress(
+            &m_extensions.Extension.VirtualAddress, frIndex);
+        auto logicalAddress = NetExtensionGetFragmentLogicalAddress(
+            &m_extensions.Extension.LogicalAddress, frIndex);
 
-            // We might never have enough fragments to translate this packet. Bounce the buffers.
-            if (numberOfFragments > MaximumNumberOfFragments())
-            {
-                return { NxNblTranslationStatus::BounceRequired, EmptyFragmentRange() };
-            }
-
-            return { NxNblTranslationStatus::InsufficientResources, EmptyFragmentRange() };
-        }
-
-        auto& currentFragment = *(it++);
-        RtlZeroMemory(&currentFragment, NetPacketFragmentGetSize());
+        auto const kva = static_cast<unsigned char *>(
+            MmGetSystemAddressForMdlSafe(currentMdl, LowPagePriority | MdlMappingNoExecute));
 
         SCATTER_GATHER_ELEMENT const &sge = Sgl->Elements[i];
 
-        currentFragment.Capacity = sge.Length;
-        currentFragment.ValidLength = sge.Length;
-        currentFragment.Offset = 0;
-        currentFragment.Mapping.DmaLogicalAddress = sge.Address.QuadPart;
+        RtlZeroMemory(fragment, sizeof(NET_FRAGMENT));
+        fragment->Capacity = sge.Length;
+        fragment->ValidLength = sge.Length;
+        fragment->Offset = 0;
 
-        void *kvm = MmGetSystemAddressForMdlSafe(currentMdl, LowPagePriority | MdlMappingNoExecute);
+        // The fragment offset has to be zero because Scatter/Gather elements do
+        // not have an offset, so we need to adjust the virtual address as appropriate
+        virtualAddress->VirtualAddress = kva + currentMdlOffset;
+        logicalAddress->LogicalAddress = sge.Address.QuadPart;
 
-        NT_ASSERT(kvm != nullptr);
-
-        // The fragment offset has to be zero because Scatter/Gather elements do not have an offset, so we need to adjust the virtual address
-        // as appropriate
-        currentFragment.VirtualAddress = static_cast<UCHAR *>(kvm) + currentMdlOffset;
-
-        if (ShouldBounceFragment(currentFragment))
+        if (ShouldBounceFragment(fragment, virtualAddress, logicalAddress))
         {
-            return { NxNblTranslationStatus::BounceRequired, EmptyFragmentRange() };
+            return { NxNblTranslationStatus::BounceRequired };
         }
 
-        currentMdlBytesToCopy -= static_cast<size_t>(currentFragment.ValidLength);
-        remain -= static_cast<size_t>(currentFragment.ValidLength);
-        currentMdlOffset += static_cast<size_t>(currentFragment.ValidLength);
+        auto const fragmentLength = static_cast<size_t>(fragment->ValidLength);
+        currentMdlBytesToCopy -= fragmentLength;
+        remain -= fragmentLength;
+        currentMdlOffset += fragmentLength;
 
         if (currentMdlBytesToCopy == 0 && currentMdl->Next != nullptr)
         {
@@ -461,10 +479,10 @@ NxNblTranslator::TranslateScatterGatherListToFragmentRange(
     if (remain != 0)
     {
         // Something went wrong, we need to bounce this packet
-        return { NxNblTranslationStatus::BounceRequired, EmptyFragmentRange() };
+        return { NxNblTranslationStatus::BounceRequired };
     }
 
-    return { NxNblTranslationStatus::Success, NetRbFragmentRange(AvailableFragments.begin(), it) };
+    return { NxNblTranslationStatus::Success, frOsBegin, static_cast<UINT16>(Sgl->NumberOfElements) };
 }
 
 _Use_decl_annotations_
@@ -532,8 +550,7 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeUseHal(
     MDL &Mdl,
     size_t MdlOffset,
     size_t BytesToCopy,
-    NxDmaTransfer const &DmaTransfer,
-    NetRbFragmentRange const &AvailableFragments
+    NxDmaTransfer const &DmaTransfer
 ) const
 {
     NxScatterGatherList sgl { *m_dmaAdapter };
@@ -550,19 +567,19 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeUseHal(
     {
         // DMA engine might be out of map registers or some other resource, let's try again later
         m_stats.DMA.InsufficientResouces += 1;
-        return { NxNblTranslationStatus::InsufficientResources, EmptyFragmentRange() };
+        return { NxNblTranslationStatus::InsufficientResources };
     }
     else if (buildSglStatus == STATUS_BUFFER_TOO_SMALL)
     {
         // Our pre-allocated SGL did not have enough space to hold the Scatter/Gather list, bounce the packet
         m_stats.DMA.BufferTooSmall += 1;
-        return { NxNblTranslationStatus::BounceRequired, EmptyFragmentRange() };
+        return { NxNblTranslationStatus::BounceRequired };
     }
     else if (buildSglStatus != STATUS_SUCCESS)
     {
         // If we can't map this packet using HAL APIs let's try to bounce it
         m_stats.DMA.OtherErrors += 1;
-        return { NxNblTranslationStatus::BounceRequired, EmptyFragmentRange() };
+        return { NxNblTranslationStatus::BounceRequired };
     }
 
     auto const mappedMdl = m_dmaAdapter->GetMappedMdl(
@@ -573,7 +590,7 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeUseHal(
     {
         // We need the mapped MDL chain to be able to translate the Scatter/Gather list
         // to a chain of NET_FRAGMENT, if we don't have it we need to bounce
-        return { NxNblTranslationStatus::BounceRequired, EmptyFragmentRange() };
+        return { NxNblTranslationStatus::BounceRequired };
     }
 
     if (!CanTranslateSglToNetPacket(*sgl, *mappedMdl))
@@ -581,7 +598,7 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeUseHal(
         // If this is the case we can't calculate the VAs of each physical fragment. This should be really rare,
         // so instead of trying to create MDLs and map each physical fragment into VA space just bounce the buffers
         m_stats.DMA.CannotMapSglToFragments += 1;
-        return { NxNblTranslationStatus::BounceRequired, EmptyFragmentRange() };
+        return { NxNblTranslationStatus::BounceRequired };
     }
 
     auto& dmaContext = DmaTransfer.GetTransferContext();
@@ -599,7 +616,7 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeUseHal(
         }
         else
         {
-            return { NxNblTranslationStatus::BounceRequired, EmptyFragmentRange() };
+            return { NxNblTranslationStatus::BounceRequired };
         }
     }
 
@@ -607,8 +624,7 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeUseHal(
         *mappedMdl,
         BytesToCopy,
         MdlOffset,
-        sgl,
-        AvailableFragments);
+        sgl);
 
     if (result.Status == NxNblTranslationStatus::Success)
     {
@@ -621,60 +637,27 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeUseHal(
     return result;
 }
 
-static
-size_t
-CountNumberOfPages(
-    _In_ MDL &MdlChain,
-    _In_ size_t MdlOffset,
-    _In_ size_t ByteCount
-)
-{
-    size_t numberOfPages = 0;
-    auto mdl = &MdlChain;
-
-    for (size_t remain = ByteCount; mdl && (remain > 0); mdl = mdl->Next)
-    {
-        // Skip zero length MDLs.
-        auto const mdlByteCount = MmGetMdlByteCount(mdl);
-        if (mdlByteCount == 0)
-        {
-            continue;
-        }
-
-        auto const copySize = min(remain, mdlByteCount - MdlOffset);
-
-        ULONG_PTR vaStart = reinterpret_cast<ULONG_PTR>(MmGetSystemAddressForMdlSafe(mdl, LowPagePriority | MdlMappingNoExecute)) + MdlOffset;
-        ULONG_PTR vaEnd = vaStart + static_cast<ULONG>(copySize);
-
-        if (vaStart == vaEnd)
-        {
-            continue;
-        }
-
-        numberOfPages += ADDRESS_AND_SIZE_TO_SPAN_PAGES(vaStart, copySize);
-        remain -= copySize;
-        MdlOffset = 0;
-    }
-
-    return numberOfPages;
-}
-
 _Use_decl_annotations_
 MdlTranlationResult
 NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeBypassHal(
     MDL &Mdl,
     size_t MdlOffset,
-    size_t BytesToCopy,
-    NetRbFragmentRange const &AvailableFragments
+    size_t BytesToCopy
 ) const
 {
-    auto it = AvailableFragments.begin();
+    auto const fr = NetRingCollectionGetFragmentRing(m_rings);
+    auto const frOsBegin = fr->EndIndex;
+    auto const frOsEnd = (fr->BeginIndex - 1) & fr->ElementIndexMask;
+
+    auto const availableFragments = NetRingGetRangeCount(fr, frOsBegin, frOsEnd);
+    auto const maximumFragmentCount = min(availableFragments, m_maxFragmentsPerPacket);
 
     //
     // While there is remaining data to be copied, and we have MDLs to walk...
     //
 
     auto mdl = &Mdl;
+    UINT16 i = 0;
     for (size_t remain = BytesToCopy; mdl && (remain > 0); mdl = mdl->Next)
     {
         // Skip zero length MDLs.
@@ -696,53 +679,59 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeBypassHal(
 
         for (auto va = vaStart; va < vaEnd; va = reinterpret_cast<ULONG_PTR>((PAGE_ALIGN(va))) + PAGE_SIZE)
         {
-            size_t numberOfFragments = NetRbFragmentRange(AvailableFragments.begin(), it).Count();
-
-            if (numberOfFragments > m_datapathCapabilities.MaximumNumberOfTxFragments)
+            if (i == maximumFragmentCount)
             {
-                return { NxNblTranslationStatus::BounceRequired, EmptyFragmentRange() };
-            }
+                //
+                // We're out of fragments to complete the translation. We could
+                // be in this situation for two reasons:
+                //
+                // 1) We don't have enough fragments at the moment but will have
+                // it at some point in the future
+                //
+                // 2) The packet requires more fragments than m_maxFragmentsPerPacket
+                //
+                // This logic assumes that 1) is the common case, returing insufficient
+                // resources from this funcion (try again) until we have at least
+                // m_maxFragmentsPerPacket available fragments, at which point we bounce
+                // the entire packet if we still can't finish the translation.
+                //
 
-            if (it == AvailableFragments.end())
-            {
-                size_t const currentMdlOffset = va - vaStart + MdlOffset;
-
-                // The total number of fragments is whatever we translated so far plus the number of
-                // remaining pages in the mdl chain
-                numberOfFragments += CountNumberOfPages(
-                    *mdl,
-                    currentMdlOffset,
-                    remain);
-
-                if (numberOfFragments > MaximumNumberOfFragments())
+                if (maximumFragmentCount == m_maxFragmentsPerPacket)
                 {
-                    return { NxNblTranslationStatus::BounceRequired, EmptyFragmentRange() };
+                    return { NxNblTranslationStatus::BounceRequired };
                 }
 
-                return { NxNblTranslationStatus::InsufficientResources, EmptyFragmentRange() };
+                return { NxNblTranslationStatus::InsufficientResources };
             }
 
-            // Get the current fragment, increment the iterator
-            auto& currentFragment = *(it++);
-            RtlZeroMemory(&currentFragment, NetPacketFragmentGetSize());
+            // Get the current fragment, increment the index
+            auto const frIndex = (frOsBegin + i) & fr->ElementIndexMask;
+            i += 1;
 
-            // Performance can be optimized by coalescing adjacent fragments
-
-            currentFragment.Mapping.DmaLogicalAddress = MmGetPhysicalAddress(reinterpret_cast<void *>(va)).QuadPart;
-            currentFragment.VirtualAddress = reinterpret_cast<void *>(va);
-
-            if (ShouldBounceFragment(currentFragment))
-            {
-                return { NxNblTranslationStatus::BounceRequired, EmptyFragmentRange() };
-            }
-
-            auto fragmentLength = PAGE_ALIGN(va) != PAGE_ALIGN(vaEnd) ?
+            auto const fragmentLength = PAGE_ALIGN(va) != PAGE_ALIGN(vaEnd) ?
                 PAGE_SIZE - BYTE_OFFSET(va) :
                 (ULONG)(vaEnd - va);
 
-            currentFragment.ValidLength = fragmentLength;
-            currentFragment.Offset = 0;
-            currentFragment.Capacity = currentFragment.ValidLength;
+            auto fragment = NetRingGetFragmentAtIndex(fr, frIndex);
+            auto virtualAddress = NetExtensionGetFragmentVirtualAddress(
+                &m_extensions.Extension.VirtualAddress, frIndex);
+            auto logicalAddress = NetExtensionGetFragmentLogicalAddress(
+                &m_extensions.Extension.LogicalAddress, frIndex);
+
+            // Performance can be optimized by coalescing adjacent fragments
+
+            RtlZeroMemory(fragment, sizeof(NET_FRAGMENT));
+            fragment->ValidLength = fragmentLength;
+            fragment->Capacity = fragmentLength;
+            fragment->Offset = 0;
+
+            virtualAddress->VirtualAddress = reinterpret_cast<void *>(va);
+            logicalAddress->LogicalAddress = MmGetPhysicalAddress(reinterpret_cast<void *>(va)).QuadPart;
+
+            if (ShouldBounceFragment(fragment, virtualAddress, logicalAddress))
+            {
+                return { NxNblTranslationStatus::BounceRequired };
+            }
 
             remain -= fragmentLength;
         }
@@ -750,11 +739,30 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeBypassHal(
         MdlOffset = 0;
     }
 
-    return { NxNblTranslationStatus::Success, NetRbFragmentRange(AvailableFragments.begin(), it) };
+    return { NxNblTranslationStatus::Success, frOsBegin, i };
+}
+
+UINT32
+GetPacketBytes(
+    _In_ NET_RING_COLLECTION const * descriptor,
+    _In_ NET_PACKET const * packet
+)
+{
+    NT_ASSERT(packet->FragmentCount != 0);
+    
+    UINT32 bytes = 0;
+    for (UINT32 i = 0; i < packet->FragmentCount; ++i)
+    {
+        auto fr = NetRingCollectionGetFragmentRing(descriptor);
+        auto const fragment = NetRingGetFragmentAtIndex(fr, i);
+        bytes += (UINT32) fragment->ValidLength;
+    }
+
+    return bytes;
 }
 
 _Use_decl_annotations_
-bool
+ULONG
 NxNblTranslator::TranslateNbls(
     NET_BUFFER_LIST *&currentNbl,
     NET_BUFFER *&currentNetBuffer,
@@ -787,6 +795,7 @@ NxNblTranslator::TranslateNbls(
                     // current packet was marked to be ignored we should *not*
                     // try to translate it again.
                     m_stats.Packet.CannotTranslate += 1;
+                    m_genStats.Increment(NxStatisticsCounters::NumberOfErrors);
                     break;
                 }
                 else
@@ -802,8 +811,10 @@ NxNblTranslator::TranslateNbls(
             __fallthrough;
 
         case NxNblTranslationStatus::Success:
-            currentPacket->Layout = NxGetPacketLayout(m_mediaType, m_rings, currentPacket);
+            currentPacket->Layout = NxGetPacketLayout(m_mediaType, m_rings, m_extensions.Extension.VirtualAddress, currentPacket, m_datapathCapabilities.TxPayloadBackfill);
             TranslateNetBufferListOOBDataToNetPacketExtensions(*currentNbl, currentPacket, pr->EndIndex);
+            m_genStats.Increment(NxStatisticsCounters::NumberOfPackets);
+            m_genStats.IncrementBy(NxStatisticsCounters::BytesOfData, (ULONG64)GetPacketBytes(m_rings, currentPacket));
             break;
 
         case NxNblTranslationStatus::InsufficientResources:
@@ -818,6 +829,7 @@ NxNblTranslator::TranslateNbls(
             currentPacket->Ignore = true;
             currentPacket->FragmentCount = 0;
             m_stats.Packet.CannotTranslate += 1;
+            m_genStats.Increment(NxStatisticsCounters::NumberOfErrors);
             break;
         }
 
@@ -838,7 +850,7 @@ NxNblTranslator::TranslateNbls(
         pr->EndIndex = NetRingIncrementIndex(pr, pr->EndIndex);
     }
 
-    return endIndex != pr->EndIndex;
+    return NetRingGetRangeCount(pr, endIndex, pr->EndIndex);
 }
 
 _Use_decl_annotations_
@@ -848,8 +860,8 @@ NxNblTranslator::TranslateNetPacketExtensionsCompletionToNetBufferList(
     PNET_BUFFER_LIST netBufferList
 ) const
 {
-    if ((netPacket->Layout.Layer4Type == NET_PACKET_LAYER4_TYPE_TCP) &&
-        (IsPacketLargeSendSegmentationEnabled()))
+    auto const & lsoExtension = m_extensions.Extension.Lso;
+    if (lsoExtension.Enabled && netPacket->Layout.Layer4Type == NetPacketLayer4TypeTcp)
     {
         // lso requires special markings upon completion.
         auto &lsoInfo =
@@ -940,19 +952,8 @@ NxNblTranslator::CompletePackets(
         RtlZeroMemory(packet, pr->ElementStride);
     }
 
-    result.CompletedPackets = osreserved0 != pr->OSReserved0;
+    result.CompletedPackets = NetRingGetRangeCount(pr, osreserved0, pr->OSReserved0);
 
     return result;
 }
 
-bool
-NxNblTranslator::IsPacketChecksumEnabled() const
-{
-    return m_netPacketChecksumExtension.Enabled;
-}
-
-bool
-NxNblTranslator::IsPacketLargeSendSegmentationEnabled() const
-{
-    return m_netPacketLsoExtension.Enabled;
-}

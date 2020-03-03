@@ -13,17 +13,6 @@ Abstract:
 
 #include "NxRingBufferRange.hpp"
 
-struct NxRingBufferCounters
-{
-    ULONG64 NumberOfNetPacketsProduced = 0;
-    ULONG64 NumberOfNetPacketsConsumed = 0;
-    ULONG64 CumulativeRingBufferDepthInLastInterval = 0; // from begin index to end index
-    ULONG64 IterationCountInLastInterval = 0;
-    ULONG64 RingbufferFullyOccupiedCount = 0;
-    ULONG64 RingbufferEmptyCount = 0;
-    ULONG64 RingbufferPartiallyOccupiedCount = 0;
-};
-
 /// Encapsulates a NET_RING
 class NxRingBuffer
 {
@@ -165,29 +154,7 @@ public:
     _IRQL_requires_max_(DISPATCH_LEVEL)
     UINT32 const &GetNextOSIndex() const { return m_rb->OSReserved0; }
 
-    _IRQL_requires_max_(DISPATCH_LEVEL)
-    void
-    UpdateRingbufferPacketCounters(
-        _In_ NxRingBufferCounters const &Delta
-    );
-
-    _IRQL_requires_max_(DISPATCH_LEVEL)
-    void
-    UpdateRingbufferDepthCounters();
-
-    _IRQL_requires_max_(DISPATCH_LEVEL)
-    NxRingBufferCounters
-    GetRingbufferCounters() const;
-
-    _IRQL_requires_max_(DISPATCH_LEVEL)
-    void
-    ResetRingbufferCounters();
-
 private:
-    _IRQL_requires_max_(DISPATCH_LEVEL)
-    UINT32
-    GetRingbufferDepth() const;
 
     NET_RING * m_rb = nullptr;
-    NxRingBufferCounters m_rbCounters;
 };

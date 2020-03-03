@@ -97,7 +97,7 @@ public:
 
             m_DmaAdapter->DmaOperations->FreeCommonBuffer(
                 m_DmaAdapter,
-                m_AllocatedLength,
+                m_Length,
                 m_LogicalAddress,
                 m_VirtualAddress,
                 m_CacheEnabled);
@@ -129,8 +129,7 @@ private:
 
     PVOID               m_VirtualAddress = nullptr;
     PHYSICAL_ADDRESS    m_LogicalAddress = { 0L, 0L };
-    size_t              m_Length = 0;
-    ULONG               m_AllocatedLength = 0;
+    ULONG               m_Length = 0;
     bool                m_CacheEnabled;
     PDMA_ADAPTER        m_DmaAdapter;
 };
@@ -164,7 +163,6 @@ public:
         _In_ NODE_REQUIREMENT PreferredNode)
     {
         NODE_REQUIREMENT node = (PreferredNode == MM_ANY_NODE_OK) ? m_PreferredNode : PreferredNode;
-        size_t allocationSize = 0;
 
         wistd::unique_ptr<NxCommonBufferMemoryChunk> memoryChunk =
             wil::make_unique_nothrow<NxCommonBufferMemoryChunk>(m_DmaAdapter);
@@ -174,14 +172,7 @@ public:
             return nullptr;
         }
 
-        allocationSize = ALIGN_UP_BY(Size, PAGE_SIZE);
-
-        if (allocationSize < Size)
-        {
-            return nullptr;
-        }
-
-        if (!NT_SUCCESS(RtlSizeTToULong(allocationSize, &memoryChunk->m_AllocatedLength)))
+        if (!NT_SUCCESS(RtlSizeTToULong(Size, &memoryChunk->m_Length)))
         {
             return nullptr;
         }
@@ -200,7 +191,7 @@ public:
             m_DmaAdapter->DmaOperations->AllocateCommonBufferEx(
                 m_DmaAdapter,
                 m_MaximumPhysicalAddress.QuadPart != 0 ? &m_MaximumPhysicalAddress : nullptr,
-                memoryChunk->m_AllocatedLength,
+                memoryChunk->m_Length,
                 &memoryChunk->m_LogicalAddress,
                 m_CacheEnabled,
                 node);
@@ -212,7 +203,6 @@ public:
         else
         {
             memoryChunk->m_CacheEnabled = m_CacheEnabled;
-            memoryChunk->m_Length = Size;
             return memoryChunk.release();
         }
     }
@@ -234,16 +224,9 @@ public:
         _In_ size_t Size,
         _In_ NODE_REQUIREMENT PreferredNode)
     {
-        size_t allocateSize = 0;
         UNREFERENCED_PARAMETER(PreferredNode);
 
         NT_ASSERT(Size != 0);
-
-        allocateSize = ALIGN_UP_BY(Size, PAGE_SIZE);
-        if (allocateSize < Size)
-        {
-            return nullptr;
-        }
 
         wistd::unique_ptr<NxPoolMemoryChunk> memoryChunk =
             wil::make_unique_nothrow<NxPoolMemoryChunk>();
@@ -253,7 +236,7 @@ public:
             return nullptr;
         }
 
-        memoryChunk->m_VirtualAddress = ExAllocatePoolWithTag(NonPagedPoolNx, allocateSize, BUFFER_MANAGER_POOL_TAG);
+        memoryChunk->m_VirtualAddress = ExAllocatePoolWithTag(NonPagedPoolNx, Size, BUFFER_MANAGER_POOL_TAG);
 
         if (memoryChunk->m_VirtualAddress == nullptr)
         {
@@ -320,7 +303,7 @@ NxBufferManager::InitializeMemoryChunkAllocator()
 
 NTSTATUS
 NxBufferManager::AllocateMemoryChunks(
-    _In_ size_t TotalRequestedSize,
+    _In_ size_t MinimumRequestedSize,
     _In_ size_t MinimumChunkSize,
     _In_ NODE_REQUIREMENT PreferredNode,
     _Inout_ Rtl::KArray<wistd::unique_ptr<INxMemoryChunk>>& MemoryChunks)
@@ -335,10 +318,16 @@ NxBufferManager::AllocateMemoryChunks(
 
     LoadValueFromTestHookIfPresent(&numMemoryChunks);
 
-    size_t chunkSize = TotalRequestedSize / numMemoryChunks;
+    auto chunkSize = MinimumRequestedSize / numMemoryChunks;
 
     while (MinimumChunkSize < chunkSize)
     {
+        auto const alignedChunkSize = ALIGN_UP_BY(chunkSize, PAGE_SIZE);
+
+        CX_RETURN_NTSTATUS_IF(
+            STATUS_INTEGER_OVERFLOW,
+            alignedChunkSize < chunkSize);
+
         CX_RETURN_NTSTATUS_IF(
             STATUS_INSUFFICIENT_RESOURCES,
             !MemoryChunks.reserve(numMemoryChunks));
@@ -348,7 +337,7 @@ NxBufferManager::AllocateMemoryChunks(
             // memory has already been pre-allocated - there's
             // no reason this append call should fail.
             NT_FRE_ASSERT(MemoryChunks.append(wistd::unique_ptr<INxMemoryChunk>(
-                m_MemoryChunkAllocator->AllocateMemoryChunk(chunkSize, PreferredNode))));
+                m_MemoryChunkAllocator->AllocateMemoryChunk(alignedChunkSize, PreferredNode))));
 
             if (!MemoryChunks[i])
             {

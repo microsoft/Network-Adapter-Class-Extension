@@ -8,6 +8,8 @@
 #include "NxRingContext.tmh"
 #include "NxRingContext.hpp"
 
+#include <net/ring.h>
+
 NxRingContext::NxRingContext(
     _In_ NET_RING_COLLECTION const & Rings,
     _In_ size_t RingIndex

@@ -2,8 +2,8 @@
 #pragma once
 
 #if !_KERNEL_MODE
-#include "KLockHolder.h"
-#include "KWaitEvent.h"
+#include <KLockHolder.h>
+#include <KWaitEvent.h>
 #endif
 
 class KRTL_CLASS KRundownBase

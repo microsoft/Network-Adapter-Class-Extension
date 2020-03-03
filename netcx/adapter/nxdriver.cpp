@@ -155,7 +155,7 @@ NxDriver::_CreateAndRegisterIfNeeded(
 )
 /*++
 Routine Description:
-    This routine is called when a client driver calls NetAdapterDeviceInitConfig.
+    This routine is called when a client driver calls NetDeviceInitConfig.
 
     In response this routine registers with Ndis.sys it it hasnt already
     registered.

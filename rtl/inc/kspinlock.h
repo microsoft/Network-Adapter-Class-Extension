@@ -1,6 +1,6 @@
 #pragma once
 
-#include "KMacros.h"
+#include <KMacros.h>
 
 class KSpinLock
 {

@@ -94,14 +94,14 @@ public:
     );
 
     static
-    VOID
+    void
     _EvtCleanup(
         _In_  WDFOBJECT Configuration
     );
 
     NTSTATUS
     Open(
-        VOID
+        void
     );
 
     NTSTATUS
@@ -109,14 +109,14 @@ public:
         PCUNICODE_STRING  SubConfigurationName
     );
 
-    VOID
+    void
     DeleteFromFailedOpen(
-        VOID
+        void
     );
 
-    VOID
+    void
     Close(
-        VOID
+        void
     );
 
     NTSTATUS
@@ -126,7 +126,7 @@ public:
 
     RECORDER_LOG
     GetRecorderLog(
-        VOID
+        void
     );
 
     _Must_inspect_result_
@@ -195,7 +195,7 @@ public:
     NTSTATUS
     AssignBinary(
         _In_                                PCUNICODE_STRING    ValueName,
-        _In_reads_bytes_(BufferLength)      PVOID               Buffer,
+        _In_reads_bytes_(BufferLength)      void *               Buffer,
         _In_                                ULONG               BufferLength
     );
 

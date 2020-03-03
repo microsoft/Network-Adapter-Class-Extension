@@ -1,10 +1,12 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
 
 #pragma once
 
-#include "umwdm.h"
-#include "KDebug.h"
-#include "KMacros.h"
 #include <new.h>
+
+#include <pooltypes.h>
+#include <KDebug.h>
+#include <KMacros.h>
 
 //
 //                                           KALLOCATOR           KALLOCATOR_NONPAGED
@@ -29,6 +31,28 @@ PAGED void *operator new[](size_t s, std::nothrow_t const &, ULONG tag);
 PAGED void operator delete[](void *p, ULONG tag);
 PAGEDX void __cdecl operator delete[](void *p);
 void __cdecl operator delete(void *p);
+
+#ifndef _KERNEL_MODE
+
+PVOID
+ExAllocatePoolWithTag(
+    POOL_TYPE PoolType,
+    SIZE_T NumberOfBytes,
+    ULONG Tag
+    );
+
+VOID
+ExFreePoolWithTag(
+    _Pre_notnull_ __drv_freesMem(Mem) PVOID P,
+    _In_ ULONG Tag
+    );
+
+VOID
+ExFreePool(
+    _Pre_notnull_ __drv_freesMem(Mem) PVOID P
+    );
+
+#endif // _KERNEL_MODE
 
 template <ULONG TAG, ULONG ARENA = PagedPool>
 struct KRTL_CLASS KALLOCATION_TAG

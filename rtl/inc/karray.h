@@ -26,13 +26,13 @@ Notes:
 
 #pragma once
 
-#include "KMacros.h"
-#include "KNew.h"
+#include <KMacros.h>
+#include <KNew.h>
 #include <ntintsafe.h>
-#include <wil\wistd_type_traits.h>
+#include <wil/wistd_type_traits.h>
 
 class ndisTriageClass;
-extern "C" VOID ndisInitGlobalTriageBlock();
+VOID ndisInitGlobalTriageBlock();
 
 namespace Rtl
 {
@@ -43,7 +43,9 @@ class KRTL_CLASS KArray :
 {
 public:
 
-    static_assert(alignof(T) <= MEMORY_ALLOCATION_ALIGNMENT, "This container allocates items with a fixed alignment");
+    static_assert(((PoolType == NonPagedPoolNxCacheAligned) && (alignof(T) <= SYSTEM_CACHE_ALIGNMENT_SIZE)) ||
+                  (alignof(T) <= MEMORY_ALLOCATION_ALIGNMENT), 
+                  "This container allocates items with a fixed alignment");
 
     // This iterator is not a full implementation of a STL-style iterator.
     // Mostly this is only here to get C++'s syntax "for(x : y)" to work.
@@ -153,7 +155,7 @@ public:
         if (!p)
             return false;
 
-        if (isBlittableType())
+        if constexpr(__is_trivially_copyable(T))
         {
             memcpy(p, _p, m_numElements * sizeof(T));
         }
@@ -182,14 +184,27 @@ public:
         if (!reserve(count))
             return false;
 
-        for (size_t i = m_numElements; i < count; i++)
+        if constexpr(wistd::is_trivially_default_constructible_v<T>)
         {
-            new(wistd::addressof(_p[i])) T;
+            if (count > m_numElements)
+            {
+                memset(wistd::addressof(_p[m_numElements]), 0, (count - m_numElements) * sizeof(T));
+            }
+        }
+        else
+        {
+            for (size_t i = m_numElements; i < count; i++)
+            {
+                new(wistd::addressof(_p[i])) T();
+            }
         }
 
-        for (size_t i = count; i < m_numElements; i++)
+        if constexpr(!wistd::is_trivially_destructible_v<T>)
         {
-            _p[i].~T();
+            for (size_t i = count; i < m_numElements; i++)
+            {
+                _p[i].~T();
+            }
         }
 
         m_numElements = static_cast<ULONG>(count);
@@ -363,9 +378,12 @@ private:
     {
         if (_p)
         {
-            for (auto i = m_numElements; i > 0; i--)
+            if constexpr(!wistd::is_trivially_destructible_v<T>)
             {
-                _p[i-1].~T();
+                for (auto i = m_numElements; i > 0; i--)
+                {
+                    _p[i-1].~T();
+                }
             }
 
             ExFreePoolWithTag(_p, 'rrAK');
@@ -381,7 +399,7 @@ private:
         {
             NOTHING;
         }
-        else if (isBlittableType())
+        else if constexpr(__is_trivially_copyable(T))
         {
             memmove(_p + to, _p + from, number * sizeof(T));
         }
@@ -431,11 +449,6 @@ private:
                 _p[i].~T();
             }
         }
-    }
-
-    static constexpr PAGED bool isBlittableType()
-    {
-        return __is_trivially_copyable(T);
     }
 
     PAGED bool grow(size_t count)

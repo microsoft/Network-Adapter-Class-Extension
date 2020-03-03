@@ -12,6 +12,7 @@ Abstract:
 #pragma once
 
 #include <KSpinLock.h>
+#include <nblutil.h>
 
 class NxNblQueue
 {

@@ -1,8 +1,8 @@
 
 #pragma once
 
-#include <wil\resource.h>
-#include "KMacros.h"
+#include <wil/resource.h>
+#include <KMacros.h>
 
 template<typename T>
 using KDeletePtr = wistd::default_delete<T>;

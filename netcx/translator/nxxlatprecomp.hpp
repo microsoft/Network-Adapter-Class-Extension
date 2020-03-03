@@ -14,65 +14,32 @@ Abstract:
 
 #pragma once
 
-#if _KERNEL_MODE
-#  include <Ntddk.h>
-#  include <wdm.h>
-#  define NDIS682 1
-#  include <ndis.h>
-#else
-#  include "umwdm.h"
-#  define UM_NDIS682 1
-#  include <ntddndis.h>
-
-#  define NDIS_STATUS_SUCCESS                     ((NDIS_STATUS)STATUS_SUCCESS)
-#  define NDIS_STATUS_PAUSED                      ((NDIS_STATUS)STATUS_NDIS_PAUSED)
-
-typedef PVOID NDIS_HANDLE;
-typedef PHYSICAL_ADDRESS NDIS_PHYSICAL_ADDRESS, *PNDIS_PHYSICAL_ADDRESS;
-#  define NOTHING
-#  define EXPORT extern "C"
-
-#  include <ndisbuf.h>
-#  include <ndistoe.h>
-
-extern "C"
-__declspec(dllimport)
-VOID
-NdisMSendNetBufferListsComplete(
-    __in NDIS_HANDLE              MiniportAdapterHandle,
-    __in PNET_BUFFER_LIST         NetBufferList,
-    __in ULONG                    SendCompleteFlags
-);
-
-extern "C"
-__declspec(dllimport)
-VOID
-NdisMIndicateReceiveNetBufferLists(
-    __in  NDIS_HANDLE             MiniportAdapterHandle,
-    __in  PNET_BUFFER_LIST        NetBufferLists,
-    __in  NDIS_PORT_NUMBER        PortNumber,
-    __in  ULONG                   NumberOfNetBufferLists,
-    __in  ULONG                   ReceiveFlags
-);
-
-#endif
-
-
-#include <ntstatus.h>
-#include <ntintsafe.h>
+#ifdef _KERNEL_MODE
+#include <ntddk.h>
 #include <ntassert.h>
+#else
+#include <nt.h>
+#include <ntintsafe.h>
+#include <ntrtl.h>
+#include <nturtl.h>
+#endif // _KERNEL_MODE
 
-#include <nblutil.h>
-#include <netiodef.h>
+#ifdef _KERNEL_MODE
+#include <ndis.h>
+#include <ndis_p.h>
+#else
+#include "umwdm.h"
+#include <ntddndis.h>
+#endif // _KERNEL_MODE
 
-#define NETCX_ADAPTER_2
-#include <net/extension.h>
-#include <net/fragment.h>
-#include <net/packet.h>
-#include <net/ring.h>
-#include <net/ringcollection.h>
+#include <ndis/types.h>
 
-#include <NetPacketPool.h>
+#ifndef _KERNEL_MODE
+typedef PHYSICAL_ADDRESS NDIS_PHYSICAL_ADDRESS, *PNDIS_PHYSICAL_ADDRESS;
+#define EXPORT extern "C"
+#include <ndisbuf.h>
+#include <ndistoe.h>
+#endif // _KERNEL_MODE
 
 #include <KNew.h>
 #include <KMacros.h>
@@ -80,8 +47,3 @@ NdisMIndicateReceiveNetBufferLists(
 #include <KIntrusiveList.h>
 #include <KArray.h>
 
-#include <NetPacketExtensionPrivate.h>
-
-MAKE_INTRUSIVE_LIST_ENUMERABLE(MDL, Next);
-MAKE_INTRUSIVE_LIST_ENUMERABLE(NET_BUFFER, Next);
-MAKE_INTRUSIVE_LIST_ENUMERABLE(NET_BUFFER_LIST, Next);

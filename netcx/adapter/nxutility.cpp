@@ -264,15 +264,14 @@ DefaultTxPacketQueueAdvance(
 )
 {
     auto txQueue = GetTxQueueFromHandle(Queue);
-    auto nxAdapter = txQueue->GetAdapter();
-
-    auto rings = NETEXPORT(NetTxQueueGetRingCollection)(
-        nxAdapter->GetPublicGlobals(),
-        Queue);
+    auto rings = txQueue->GetRingCollection();
 
     // Complete any new transmit packets to avoid NDIS NBL leaking watchdog firing
-    auto packetRing = NetRingCollectionGetPacketRing(rings);
-    packetRing->BeginIndex = packetRing->EndIndex;
+    auto pr = NetRingCollectionGetPacketRing(rings);
+    auto fr = NetRingCollectionGetFragmentRing(rings);
+
+    pr->BeginIndex = pr->EndIndex;
+    fr->BeginIndex = fr->EndIndex;
 }
 
 _Use_decl_annotations_
@@ -312,12 +311,17 @@ DefaultRxPacketQueueCancel(
 )
 {
     auto rxQueue = GetRxQueueFromHandle(Queue);
-    auto nxAdapter = rxQueue->GetAdapter();
+    auto rings = rxQueue->GetRingCollection();
 
-    auto rings = NETEXPORT(NetRxQueueGetRingCollection)(
-        nxAdapter->GetPublicGlobals(),
-        Queue);
+    auto pr = NetRingCollectionGetPacketRing(rings);
+    auto fr = NetRingCollectionGetFragmentRing(rings);
 
-    auto packetRing = NetRingCollectionGetPacketRing(rings);
-    packetRing->BeginIndex = packetRing->EndIndex;
+    for (UINT32 i = pr->BeginIndex; i != pr->EndIndex; i = NetRingIncrementIndex(pr, i))
+    {
+        auto packet = NetRingGetPacketAtIndex(pr, i);
+        packet->Ignore = 1;
+    }
+
+    pr->BeginIndex = pr->EndIndex;
+    fr->BeginIndex = fr->EndIndex;
 }

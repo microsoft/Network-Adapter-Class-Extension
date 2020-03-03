@@ -15,8 +15,8 @@ IsIPv4(
 )
 {
     return
-        layout.Layer3Type >= NET_PACKET_LAYER3_TYPE_IPV4_UNSPECIFIED_OPTIONS &&
-        layout.Layer3Type <= NET_PACKET_LAYER3_TYPE_IPV4_NO_OPTIONS;
+        layout.Layer3Type >= NetPacketLayer3TypeIPv4UnspecifiedOptions &&
+        layout.Layer3Type <= NetPacketLayer3TypeIPv4NoOptions;
 }
 
 static
@@ -26,8 +26,8 @@ IsIPv6(
 )
 {
     return
-        layout.Layer3Type >= NET_PACKET_LAYER3_TYPE_IPV6_UNSPECIFIED_EXTENSIONS &&
-        layout.Layer3Type <= NET_PACKET_LAYER3_TYPE_IPV6_NO_EXTENSIONS;
+        layout.Layer3Type >= NetPacketLayer3TypeIPv6UnspecifiedExtensions &&
+        layout.Layer3Type <= NetPacketLayer3TypeIPv6NoExtensions;
 }
 
 NET_PACKET_CHECKSUM
@@ -44,18 +44,18 @@ NxTranslateTxPacketChecksum(
         {
             if ((info.Transmit.IsIPv4 && IsIPv4(packet.Layout)) || (info.Transmit.IsIPv6 && IsIPv6(packet.Layout)))
             {
-                checksum.Layer3 = NET_PACKET_TX_CHECKSUM_REQUIRED;
+                checksum.Layer3 = NetPacketTxChecksumActionRequired;
             }
         }
     }
 
-    if (info.Transmit.TcpChecksum && packet.Layout.Layer4Type == NET_PACKET_LAYER4_TYPE_TCP)
+    if (info.Transmit.TcpChecksum && packet.Layout.Layer4Type == NetPacketLayer4TypeTcp)
     {
-        checksum.Layer4 = NET_PACKET_TX_CHECKSUM_REQUIRED;
+        checksum.Layer4 = NetPacketTxChecksumActionRequired;
     }
-    else if (info.Transmit.UdpChecksum && packet.Layout.Layer4Type == NET_PACKET_LAYER4_TYPE_UDP)
+    else if (info.Transmit.UdpChecksum && packet.Layout.Layer4Type == NetPacketLayer4TypeUdp)
     {
-        checksum.Layer4 = NET_PACKET_TX_CHECKSUM_REQUIRED;
+        checksum.Layer4 = NetPacketTxChecksumActionRequired;
     }
 
     return checksum;
@@ -71,33 +71,33 @@ NxTranslateRxPacketChecksum(
     NDIS_TCP_IP_CHECKSUM_NET_BUFFER_LIST_INFO checksumInfo = {};
     auto const checksumExt = NetExtensionGetPacketChecksum(checksumExtension, packetIndex);
 
-    if (checksumExt->Layer3 == NET_PACKET_RX_CHECKSUM_VALID)
+    if (checksumExt->Layer3 == NetPacketRxChecksumEvaluationValid)
     {
         checksumInfo.Receive.IpChecksumSucceeded = true;
     }
-    else if (checksumExt->Layer3 == NET_PACKET_RX_CHECKSUM_INVALID)
+    else if (checksumExt->Layer3 == NetPacketRxChecksumEvaluationInvalid)
     {
         checksumInfo.Receive.IpChecksumFailed = true;
     }
 
-    if (packet->Layout.Layer4Type == NET_PACKET_LAYER4_TYPE_TCP)
+    if (packet->Layout.Layer4Type == NetPacketLayer4TypeTcp)
     {
-        if (checksumExt->Layer4 == NET_PACKET_RX_CHECKSUM_VALID)
+        if (checksumExt->Layer4 == NetPacketRxChecksumEvaluationValid)
         {
             checksumInfo.Receive.TcpChecksumSucceeded = true;
         }
-        else if (checksumExt->Layer4 == NET_PACKET_RX_CHECKSUM_INVALID)
+        else if (checksumExt->Layer4 == NetPacketRxChecksumEvaluationInvalid)
         {
             checksumInfo.Receive.TcpChecksumFailed = true;
         }
     }
-    else if (packet->Layout.Layer4Type == NET_PACKET_LAYER4_TYPE_UDP)
+    else if (packet->Layout.Layer4Type == NetPacketLayer4TypeUdp)
     {
-        if (checksumExt->Layer4 == NET_PACKET_RX_CHECKSUM_VALID)
+        if (checksumExt->Layer4 == NetPacketRxChecksumEvaluationValid)
         {
             checksumInfo.Receive.UdpChecksumSucceeded = true;
         }
-        else if (checksumExt->Layer4 == NET_PACKET_RX_CHECKSUM_INVALID)
+        else if (checksumExt->Layer4 == NetPacketRxChecksumEvaluationInvalid)
         {
             checksumInfo.Receive.UdpChecksumFailed = true;
         }

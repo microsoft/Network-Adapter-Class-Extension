@@ -20,7 +20,7 @@ Abstract:
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
-VOID
+void
 NETEXPORT(NetConfigurationClose)(
     _In_ NET_DRIVER_GLOBALS *              Globals,
     _In_ NETCONFIGURATION                  Configuration
@@ -39,10 +39,10 @@ Arguments:
 
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
 
     GetNxConfigurationFromHandle(Configuration)->Close();
 
@@ -85,17 +85,17 @@ Arguments:
 {
     NTSTATUS                 status;
 
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
 
 
     *SubConfiguration = NULL;
 
     NxConfiguration * subNxConfiguration;
     auto nxConfiguration = GetNxConfigurationFromHandle(Configuration);
-    status = NxConfiguration::_Create(pNxPrivateGlobals,
+    status = NxConfiguration::_Create(nxPrivateGlobals,
                                       nxConfiguration->m_NxAdapter,
                                       nxConfiguration,
                                       &subNxConfiguration);
@@ -164,11 +164,11 @@ Arguments:
 {
     NTSTATUS status;
 
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyQueryAsUlongFlags(pNxPrivateGlobals, Flags);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyQueryAsUlongFlags(nxPrivateGlobals, Flags);
 
     auto nxConfiguration = GetNxConfigurationFromHandle(Configuration);
 
@@ -218,10 +218,10 @@ Arguments:
 
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
 
     return GetNxConfigurationFromHandle(Configuration)->QueryString(ValueName, StringAttributes, WdfString);
 }
@@ -260,10 +260,10 @@ Arguments:
 
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
 
     return GetNxConfigurationFromHandle(Configuration)->QueryMultiString(ValueName, StringsAttributes, Collection);
 }
@@ -304,10 +304,10 @@ Arguments:
     WdfMemory - Output WDFMEMORY object representing the Data read
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
 
     return GetNxConfigurationFromHandle(Configuration)->QueryBinary(ValueName,
                                           PoolType,
@@ -345,13 +345,13 @@ Returns:
 
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
     auto nxConfiguration = GetNxConfigurationFromHandle(Configuration);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyNotNull(pNxPrivateGlobals, LinkLayerAddress);
-    Verifier_VerifyNotNull(pNxPrivateGlobals, nxConfiguration->m_NxAdapter);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyNotNull(nxPrivateGlobals, LinkLayerAddress);
+    Verifier_VerifyNotNull(nxPrivateGlobals, nxConfiguration->m_NxAdapter);
 
     return nxConfiguration->QueryLinkLayerAddress(LinkLayerAddress);
 }
@@ -385,10 +385,10 @@ Arguments:
 
 --*/
 {
-    auto  pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
 
     return GetNxConfigurationFromHandle(Configuration)->AssignUlong(ValueName, Value);
 }
@@ -420,10 +420,10 @@ Arguments:
 
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
 
     return GetNxConfigurationFromHandle(Configuration)->AssignUnicodeString(ValueName, Value);
 }
@@ -437,7 +437,7 @@ NETEXPORT(NetConfigurationAssignBinary)(
     _In_                               NET_DRIVER_GLOBALS *      Globals,
     _In_                               NETCONFIGURATION          Configuration,
     _In_                               PCUNICODE_STRING          ValueName,
-    _In_reads_bytes_(BufferLength)     PVOID                     Buffer,
+    _In_reads_bytes_(BufferLength)     void *                     Buffer,
     _In_                               ULONG                     BufferLength
 )
 /*++
@@ -458,10 +458,10 @@ Arguments:
     BufferLength - The length of the buffer in bytes.
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
 
     return GetNxConfigurationFromHandle(Configuration)->AssignBinary(ValueName, Buffer, BufferLength);
 }
@@ -494,10 +494,10 @@ Arguments:
 
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
 
     return GetNxConfigurationFromHandle(Configuration)->AssignMultiString(ValueName, StringsCollection);
 }

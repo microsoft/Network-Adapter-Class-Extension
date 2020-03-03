@@ -68,13 +68,13 @@ Return Value:
     //
     // Parameter Validation.
     //
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(pNxPrivateGlobals);
-    Verifier_VerifyTypeSize<NET_REQUEST_QUEUE_CONFIG>(pNxPrivateGlobals, Configuration);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTypeSize<NET_REQUEST_QUEUE_CONFIG>(nxPrivateGlobals, Configuration);
 
-    status = Verifier_VerifyQueueConfiguration(pNxPrivateGlobals, Configuration);
+    status = Verifier_VerifyQueueConfiguration(nxPrivateGlobals, Configuration);
 
     if (!NT_SUCCESS(status)) {
         goto Exit;
@@ -84,7 +84,7 @@ Return Value:
     // Create the NxRequestQueue
     //
     NxRequestQueue * nxRequestQueue;
-    status = NxRequestQueue::_Create(pNxPrivateGlobals,
+    status = NxRequestQueue::_Create(nxPrivateGlobals,
                                  GetNxAdapterFromHandle(Configuration->Adapter),
                                  QueueAttributes,
                                  Configuration,
@@ -135,9 +135,9 @@ Returns:
 
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
+    Verifier_VerifyIrqlLessThanOrEqualDispatch(nxPrivateGlobals);
 
     return GetNxRequestQueueFromHandle(NetRequestQueue)->m_NxAdapter->GetFxObject();
 }

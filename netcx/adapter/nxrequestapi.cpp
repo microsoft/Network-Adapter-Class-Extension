@@ -34,7 +34,7 @@ Abstract:
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
-VOID
+void
 NETEXPORT(NetRequestCompleteWithoutInformation)(
     _In_ NET_DRIVER_GLOBALS * Globals,
     _In_ NETREQUEST          Request,
@@ -53,11 +53,11 @@ Arguments:
 
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
-    Verifier_VerifyNetRequestCompletionStatusNotPending(pNxPrivateGlobals, Request, CompletionStatus);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlLessThanOrEqualDispatch(nxPrivateGlobals);
+    Verifier_VerifyNetRequestCompletionStatusNotPending(nxPrivateGlobals, Request, CompletionStatus);
 
     GetNxRequestFromHandle(Request)->Complete(CompletionStatus);
 
@@ -66,7 +66,7 @@ Arguments:
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
-VOID
+void
 NETEXPORT(NetRequestSetDataComplete)(
     _In_ NET_DRIVER_GLOBALS * Globals,
     _In_ NETREQUEST          Request,
@@ -89,15 +89,15 @@ Arguments:
 
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
-    Verifier_VerifyNetRequestCompletionStatusNotPending(pNxPrivateGlobals, Request, CompletionStatus);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlLessThanOrEqualDispatch(nxPrivateGlobals);
+    Verifier_VerifyNetRequestCompletionStatusNotPending(nxPrivateGlobals, Request, CompletionStatus);
 
     auto nxRequest = GetNxRequestFromHandle(Request);
 
-    Verifier_VerifyNetRequestType(pNxPrivateGlobals, nxRequest, NdisRequestSetInformation);
+    Verifier_VerifyNetRequestType(nxPrivateGlobals, nxRequest, NdisRequestSetInformation);
 
     nxRequest->m_NdisOidRequest->DATA.SET_INFORMATION.BytesRead = BytesRead;
     nxRequest->Complete(CompletionStatus);
@@ -107,7 +107,7 @@ Arguments:
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
-VOID
+void
 NETEXPORT(NetRequestQueryDataComplete)(
     _In_ NET_DRIVER_GLOBALS * Globals,
     _In_ NETREQUEST          Request,
@@ -130,15 +130,15 @@ Arguments:
 
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
-    Verifier_VerifyNetRequestCompletionStatusNotPending(pNxPrivateGlobals, Request, CompletionStatus);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlLessThanOrEqualDispatch(nxPrivateGlobals);
+    Verifier_VerifyNetRequestCompletionStatusNotPending(nxPrivateGlobals, Request, CompletionStatus);
 
     auto nxRequest = GetNxRequestFromHandle(Request);
 
-    Verifier_VerifyNetRequestIsQuery(pNxPrivateGlobals, nxRequest);
+    Verifier_VerifyNetRequestIsQuery(nxPrivateGlobals, nxRequest);
 
     nxRequest->m_NdisOidRequest->DATA.QUERY_INFORMATION.BytesWritten = BytesWritten;
     nxRequest->Complete(CompletionStatus);
@@ -148,7 +148,7 @@ Arguments:
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
-VOID
+void
 NETEXPORT(NetRequestMethodComplete)(
     _In_ NET_DRIVER_GLOBALS * Globals,
     _In_ NETREQUEST          Request,
@@ -174,15 +174,15 @@ Arguments:
         InputOutputBuffer
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
-    Verifier_VerifyNetRequestCompletionStatusNotPending(pNxPrivateGlobals, Request, CompletionStatus);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlLessThanOrEqualDispatch(nxPrivateGlobals);
+    Verifier_VerifyNetRequestCompletionStatusNotPending(nxPrivateGlobals, Request, CompletionStatus);
 
     auto nxRequest = GetNxRequestFromHandle(Request);
 
-    Verifier_VerifyNetRequestType(pNxPrivateGlobals, nxRequest, NdisRequestMethod);
+    Verifier_VerifyNetRequestType(nxPrivateGlobals, nxRequest, NdisRequestMethod);
 
     nxRequest->m_NdisOidRequest->DATA.METHOD_INFORMATION.BytesWritten = BytesWritten;
     nxRequest->m_NdisOidRequest->DATA.METHOD_INFORMATION.BytesRead = BytesRead;
@@ -194,7 +194,7 @@ Arguments:
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
 WDFAPI
-VOID
+void
 NETEXPORT(NetRequestSetBytesNeeded)(
     _In_ NET_DRIVER_GLOBALS * Globals,
     _In_ NETREQUEST          Request,
@@ -220,14 +220,14 @@ Arguments:
 
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlLessThanOrEqualDispatch(nxPrivateGlobals);
 
     auto nxRequest = GetNxRequestFromHandle(Request);
 
-    Verifier_VerifyNetRequest(pNxPrivateGlobals, nxRequest);
+    Verifier_VerifyNetRequest(nxPrivateGlobals, nxRequest);
 
     switch (nxRequest->m_NdisOidRequest->RequestType) {
     case NdisRequestSetInformation:
@@ -269,10 +269,10 @@ Returns:
     The NDIS_OID Id of the NETREQUEST.
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlLessThanOrEqualDispatch(nxPrivateGlobals);
 
     return GetNxRequestFromHandle(Request)->m_Oid;
 }
@@ -286,7 +286,7 @@ NETEXPORT(NetRequestRetrieveInputOutputBuffer)(
     _In_      UINT                MininumInputLengthRequired,
     _In_      UINT                MininumOutputLengthRequired,
     _Outptr_result_bytebuffer_(max(*InputBufferLength,*OutputBufferLength))
-              PVOID*              InputOutputBuffer,
+              void **              InputOutputBuffer,
     _Out_opt_ PUINT               InputBufferLength,
     _Out_opt_ PUINT               OutputBufferLength
 
@@ -320,10 +320,10 @@ Arguments:
         length of the InputOutputBuffer
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlLessThanOrEqualDispatch(nxPrivateGlobals);
 
     auto nxRequest = GetNxRequestFromHandle(Request);
 
@@ -399,10 +399,10 @@ Returns:
 
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlLessThanOrEqualDispatch(nxPrivateGlobals);
 
     return GetNxRequestFromHandle(Request)->m_NdisOidRequest;
 }
@@ -429,10 +429,10 @@ Returns:
 
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlLessThanOrEqualDispatch(nxPrivateGlobals);
 
     return GetNxRequestFromHandle(Request)->m_NdisOidRequest->PortNumber;
 }
@@ -458,10 +458,10 @@ Returns:
 
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlLessThanOrEqualDispatch(nxPrivateGlobals);
 
     return GetNxRequestFromHandle(Request)->m_NdisOidRequest->SwitchId;
 }
@@ -487,10 +487,10 @@ Returns:
 
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlLessThanOrEqualDispatch(nxPrivateGlobals);
 
     return GetNxRequestFromHandle(Request)->m_NdisOidRequest->VPortId;
 }
@@ -516,10 +516,10 @@ Returns:
 
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(Globals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlLessThanOrEqualDispatch(nxPrivateGlobals);
 
     return GetNxRequestFromHandle(Request)->m_NdisOidRequest->RequestType;
 }
@@ -544,10 +544,10 @@ Returns:
 
 --*/
 {
-    auto pNxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
-    Verifier_VerifyPrivateGlobals(pNxPrivateGlobals);
-    Verifier_VerifyIrqlLessThanOrEqualDispatch(pNxPrivateGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlLessThanOrEqualDispatch(nxPrivateGlobals);
 
     return GetNxRequestFromHandle(Request)->GetNxAdapter()->GetFxObject();
 }

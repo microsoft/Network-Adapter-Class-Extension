@@ -8,18 +8,18 @@
 
 #include <net/lso.h>
 
-NET_PACKET_LARGE_SEND_SEGMENTATION
+NET_PACKET_LSO
 NxTranslateTxPacketLargeSendSegmentation(
     NET_PACKET const & packet,
     NDIS_TCP_LARGE_SEND_OFFLOAD_NET_BUFFER_LIST_INFO const & info
 )
 {
-    ASSERT(packet.Layout.Layer4Type == NET_PACKET_LAYER4_TYPE_TCP);
+    ASSERT(packet.Layout.Layer4Type == NetPacketLayer4TypeTcp);
     const USHORT layer4HeaderOffset =
         packet.Layout.Layer2HeaderLength +
         packet.Layout.Layer3HeaderLength;
 
-    NET_PACKET_LARGE_SEND_SEGMENTATION lso = {};
+    NET_PACKET_LSO lso = {};
     if (info.Value != 0)
     {
         if (info.Transmit.Type == NDIS_TCP_LARGE_SEND_OFFLOAD_V1_TYPE)

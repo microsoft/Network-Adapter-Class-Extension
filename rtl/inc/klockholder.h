@@ -1,8 +1,8 @@
 
 #pragma once
 
-#include "KCriticalRegion.h"
-#include "KPushLock.h"
+#include <KCriticalRegion.h>
+#include <KPushLock.h>
 
 class KRTL_CLASS KLockHolder
 {

@@ -18,11 +18,11 @@ Environment:
 
 #pragma once
 
-#include "KMacros.h"
-#include "KPtr.h"
-#include "KString.h"
+#include <KMacros.h>
+#include <KPtr.h>
+#include <KString.h>
 #include <ntstrsafe.h>
-#include <wil\resource.h>
+#include <wil/resource.h>
 
 #ifdef _KERNEL_MODE
 #define CloseRegistryHandle ZwClose

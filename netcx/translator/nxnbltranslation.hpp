@@ -2,11 +2,15 @@
 
 #pragma once
 
-#include "NxRingBufferRange.hpp"
 #include "NxRingContext.hpp"
 #include "NxDma.hpp"
 #include "NxScatterGatherList.hpp"
 #include "NxBounceBufferPool.hpp"
+#include "NxExtensions.hpp"
+#include "NxStatistics.hpp"
+
+#include <net/virtualaddresstypes_p.h>
+#include <net/logicaladdresstypes_p.h>
 
 struct NxNblTranslationStats
 {
@@ -38,8 +42,24 @@ enum class NxNblTranslationStatus
 
 struct MdlTranlationResult
 {
-    NxNblTranslationStatus Status;
-    NetRbFragmentRange FragmentChain;
+    MdlTranlationResult(
+        NxNblTranslationStatus XlatStatus
+    );
+
+    MdlTranlationResult(
+        NxNblTranslationStatus XlatStatus,
+        UINT32 Index,
+        UINT16 Count
+    );
+
+    NxNblTranslationStatus const
+        Status;
+
+    UINT32 const
+        FragmentIndex = 0;
+
+    UINT16 const
+        FragmentCount = 0;
 };
 
 struct TxPacketCompletionStatus
@@ -50,8 +70,8 @@ struct TxPacketCompletionStatus
     ULONG
         NumCompletedNbls = 0;
 
-    bool
-        CompletedPackets = false;
+    ULONG
+        CompletedPackets = 0;
 
 };
 
@@ -67,12 +87,17 @@ struct TxPacketCompletionStatus
 // NET_FRAGMENT pool, but it should be added with a mind for test-ability.
 class NONPAGED NxNblTranslator
 {
+    TxExtensions const &
+        m_extensions;
+
     NxNblTranslationStats &m_stats;
     const NxRingContext & m_contextBuffer;
     const NxDmaAdapter * m_dmaAdapter;
     const NDIS_MEDIUM m_mediaType;
     NET_RING_COLLECTION * m_rings;
     const NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES & m_datapathCapabilities;
+    size_t m_maxFragmentsPerPacket;
+    NxStatistics & m_genStats;
 
     void
     TranslateNetBufferListOOBDataToNetPacketExtensions(
@@ -88,37 +113,22 @@ class NONPAGED NxNblTranslator
     ) const;
 
     bool
-    IsPacketChecksumEnabled() const;
-
-    bool
-    IsPacketLargeSendSegmentationEnabled() const;
-
-    bool
     RequiresDmaMapping(
-        void
-    ) const;
-
-    NetRbFragmentRange
-    EmptyFragmentRange(
-        void
-    ) const;
-
-    size_t
-    MaximumNumberOfFragments(
         void
     ) const;
 
     bool
     ShouldBounceFragment(
-        _In_ NET_FRAGMENT const & Fragment
+        _In_ NET_FRAGMENT const * const Fragment,
+        _In_ NET_FRAGMENT_VIRTUAL_ADDRESS const * const VirtualAddress,
+        _In_ NET_FRAGMENT_LOGICAL_ADDRESS const * const LogicalAddress
     ) const;
 
     MdlTranlationResult
     TranslateMdlChainToFragmentRangeKvmOnly(
         _In_ MDL &Mdl,
         _In_ size_t MdlOffset,
-        _In_ size_t BytesToCopy,
-        _In_ NetRbFragmentRange const &AvailableFragments
+        _In_ size_t BytesToCopy
     ) const;
 
     MdlTranlationResult
@@ -126,16 +136,14 @@ class NONPAGED NxNblTranslator
         _In_ MDL &Mdl,
         _In_ size_t MdlOffset,
         _In_ size_t BytesToCopy,
-        _In_ NET_PACKET const &Packet,
-        _In_ NetRbFragmentRange const &AvailableFragments
+        _In_ NET_PACKET const &Packet
     ) const;
 
     MdlTranlationResult
     TranslateMdlChainToDmaMappedFragmentRangeBypassHal(
         _In_ MDL &Mdl,
         _In_ size_t MdlOffset,
-        _In_ size_t BytesToCopy,
-        _In_ NetRbFragmentRange const &AvailableFragments
+        _In_ size_t BytesToCopy
     ) const;
 
     MdlTranlationResult
@@ -143,8 +151,7 @@ class NONPAGED NxNblTranslator
         _In_ MDL &Mdl,
         _In_ size_t MdlOffset,
         _In_ size_t BytesToCopy,
-        _In_ NxDmaTransfer const &DmaTransfer,
-        _In_ NetRbFragmentRange const &AvailableFragments
+        _In_ NxDmaTransfer const &DmaTransfer
     ) const;
 
     bool
@@ -157,8 +164,7 @@ class NONPAGED NxNblTranslator
         _In_ MDL &MappedMdl,
         _In_ size_t MdlOffset,
         _In_ size_t BytesToCopy,
-        _In_ NxScatterGatherList const &Sgl,
-        _In_ NetRbFragmentRange const &AvailableFragments
+        _In_ NxScatterGatherList const &Sgl
     ) const;
 
 public:
@@ -168,12 +174,14 @@ public:
     };
 
     NxNblTranslator(
+        TxExtensions const & Extensions,
         NxNblTranslationStats &Stats,
         NET_RING_COLLECTION * Rings,
         const NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES & DatapathCapabilities,
         const NxDmaAdapter *DmaAdapter,
         const NxRingContext & ContextBuffer,
-        NDIS_MEDIUM MediaType
+        NDIS_MEDIUM MediaType,
+        NxStatistics & GenStats
     );
 
     NxNblTranslationStatus
@@ -182,7 +190,7 @@ public:
         _Inout_ NET_PACKET* netPacket
     ) const;
 
-    bool
+    ULONG
     TranslateNbls(
         _Inout_ NET_BUFFER_LIST *&currentNbl,
         _Inout_ NET_BUFFER *&currentNetBuffer,
@@ -194,7 +202,4 @@ public:
         _In_ NxBounceBufferPool &BouncePool
     ) const;
 
-    // packet extension offsets
-    NET_EXTENSION m_netPacketChecksumExtension = {};
-    NET_EXTENSION m_netPacketLsoExtension = {};
 };

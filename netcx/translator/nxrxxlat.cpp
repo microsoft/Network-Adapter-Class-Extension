@@ -17,12 +17,80 @@ Abstract:
 
 #include <net/ring.h>
 #include <net/packet.h>
+#include <netiodef.h>
+
 #include <net/checksumtypes_p.h>
+#include <net/logicaladdress_p.h>
+#include <net/virtualaddress_p.h>
+#include <net/mdl_p.h>
+#include <net/returncontext_p.h>
+#include <net/rsctypes_p.h>
 
 #include "NxPerfTuner.hpp"
 #include "NxPacketLayout.hpp"
 #include "NxChecksumInfo.hpp"
+#include "NxReceiveCoalescing.hpp"
 #include "NxNblSequence.h"
+
+static
+NET_CLIENT_EXTENSION RxQueueExtensions[] = {
+    {
+        sizeof(NET_CLIENT_EXTENSION),
+        NET_PACKET_EXTENSION_CHECKSUM_NAME,
+        NET_PACKET_EXTENSION_CHECKSUM_VERSION_1,
+        0,
+        NET_PACKET_EXTENSION_CHECKSUM_VERSION_1_SIZE,
+        NetExtensionTypePacket,
+    },
+    {
+        sizeof(NET_CLIENT_EXTENSION),
+        NET_PACKET_EXTENSION_RSC_NAME,
+        NET_PACKET_EXTENSION_RSC_VERSION_1,
+        0,
+        NET_PACKET_EXTENSION_RSC_VERSION_1_SIZE,
+        NetExtensionTypePacket,
+    },
+    {
+        sizeof(NET_CLIENT_EXTENSION),
+        NET_PACKET_EXTENSION_RSC_TIMESTAMP_NAME,
+        NET_PACKET_EXTENSION_RSC_TIMESTAMP_VERSION_1,
+        0,
+        NET_PACKET_EXTENSION_RSC_TIMESTAMP_VERSION_1_SIZE,
+        NetExtensionTypePacket,
+    },
+    {
+        sizeof(NET_CLIENT_EXTENSION),
+        NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_NAME,
+        NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_VERSION_1,
+        0,
+        NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_VERSION_1_SIZE,
+        NetExtensionTypeFragment,
+    },
+    {
+        sizeof(NET_CLIENT_EXTENSION),
+        NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_NAME,
+        NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_VERSION_1,
+        0,
+        NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_VERSION_1_SIZE,
+        NetExtensionTypeFragment,
+    },
+    {
+        sizeof(NET_CLIENT_EXTENSION),
+        NET_FRAGMENT_EXTENSION_MDL_NAME,
+        NET_FRAGMENT_EXTENSION_MDL_VERSION_1,
+        0,
+        NET_FRAGMENT_EXTENSION_MDL_VERSION_1_SIZE,
+        NetExtensionTypeFragment,
+    },
+    {
+        sizeof(NET_CLIENT_EXTENSION),
+        NET_FRAGMENT_EXTENSION_RETURN_CONTEXT_NAME,
+        NET_FRAGMENT_EXTENSION_RETURN_CONTEXT_VERSION_1,
+        0,
+        NET_FRAGMENT_EXTENSION_RETURN_CONTEXT_VERSION_1_SIZE,
+        NetExtensionTypeFragment,
+    },
+};
 
 struct RX_NBL_CONTEXT
 {
@@ -44,9 +112,9 @@ struct RX_NB_CONTEXT
     union
     {
         //used when system fully manages the Rx buffers (doing both allocate and attach)
-        LONGLONG DmaLogicalAddress;
+        UINT64 DmaLogicalAddress;
         //used when driver manages the buffers
-        PVOID RxBufferReturnContext;
+        NET_FRAGMENT_RETURN_CONTEXT_HANDLE RxBufferReturnContext;
     } DUMMYUNIONNAME;
 };
 
@@ -160,14 +228,16 @@ NxRxXlat::NxRxXlat(
     size_t QueueId,
     NET_CLIENT_DISPATCH const * Dispatch,
     NET_CLIENT_ADAPTER Adapter,
-    NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
+    NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch,
+    NxStatistics & Statistics
 ) noexcept :
     m_queueId(QueueId),
     m_dispatch(Dispatch),
     m_adapter(Adapter),
     m_adapterDispatch(AdapterDispatch),
-    m_packetContext(m_rings, NET_RING_TYPE_PACKET),
-    m_fragmentContext(m_rings, NET_RING_TYPE_FRAGMENT)
+    m_packetContext(m_rings, NetRingTypePacket),
+    m_fragmentContext(m_rings, NetRingTypeFragment),
+    m_statistics(Statistics)
 {
     m_adapterDispatch->GetProperties(m_adapter, &m_adapterProperties);
     m_nblDispatcher = static_cast<INxNblDispatcher *>(m_adapterProperties.NblDispatcher);
@@ -215,11 +285,11 @@ NxRxXlat::GetNotificationsToArm()
 {
     ArmedNotifications notifications;
 
-    if (m_postedPackets == 0 && m_returnedPackets == 0)
+    if (m_completedPackets == 0 && m_returnedNbls == 0)
     {
-        notifications.Flags.ShouldArmNblReturned = true;
+        notifications.Flags.ShouldArmNblReturned = m_outstandingNbls != 0;
 
-        notifications.Flags.ShouldArmRxIndication = m_outstandingPackets != 0;
+        notifications.Flags.ShouldArmRxIndication = true;
     }
 
     return notifications;
@@ -257,7 +327,7 @@ NxRxXlat::ArmAdapterRxNotification()
 void
 NxRxXlat::EcReturnBuffers()
 {
-    m_returnedPackets = 0;
+    m_returnedNbls = 0;
 
     NBL_QUEUE nblsToReturn;
     m_returnedNblQueue.DequeueAll(&nblsToReturn);
@@ -267,7 +337,8 @@ NxRxXlat::EcReturnBuffers()
 
     while (currNbl)
     {
-        ++m_returnedPackets;
+        --m_outstandingNbls;
+        ++m_returnedNbls;
         currNbl = FreeReceivedDataBuffer(currNbl);
     }
 }
@@ -275,8 +346,6 @@ NxRxXlat::EcReturnBuffers()
 void
 NxRxXlat::EcPrepareBuffersForNetAdapter()
 {
-    m_returnedPackets = 0;
-
     auto pr = NetRingCollectionGetPacketRing(&m_rings);
     auto fr = NetRingCollectionGetFragmentRing(&m_rings);
     auto const lastIndex = (pr->OSReserved0 - 1) & pr->ElementIndexMask;
@@ -284,7 +353,6 @@ NxRxXlat::EcPrepareBuffersForNetAdapter()
     NT_FRE_ASSERT(pr->EndIndex == fr->EndIndex);
     NT_FRE_ASSERT(pr->OSReserved0 == fr->OSReserved0);
 
-    // 1:1 packet:fragment, iterate packet,fragment owned by framework
     for (; ! NblStackIsEmpty() && pr->EndIndex != lastIndex;
         fr->EndIndex = pr->EndIndex = NetRingIncrementIndex(pr, pr->EndIndex))
     {
@@ -306,19 +374,26 @@ NxRxXlat::EcPrepareBuffersForNetAdapter()
         {
             auto nb = NET_BUFFER_LIST_FIRST_NB(context.NetBufferList);
             auto mdl = NET_BUFFER_CURRENT_MDL(nb);
+            auto virtualAddress = NetExtensionGetFragmentVirtualAddress(
+                &m_extensions.Extension.VirtualAddress, fr->EndIndex);
 
-            fragment->VirtualAddress = MmGetMdlVirtualAddress(mdl);
-            fragment->Mapping.DmaLogicalAddress = GetRxContextFromNb(nb)->DmaLogicalAddress;
             fragment->Capacity = MmGetMdlByteCount(mdl);
             fragment->Offset = m_backfillSize;
             fragment->Scratch = 0;
+
+            virtualAddress->VirtualAddress = MmGetMdlVirtualAddress(mdl);
+
+            if (m_extensions.Extension.LogicalAddress.Enabled)
+            {
+                auto logicalAddress = NetExtensionGetFragmentLogicalAddress(
+                    &m_extensions.Extension.LogicalAddress, fr->EndIndex);
+                logicalAddress->LogicalAddress = GetRxContextFromNb(nb)->DmaLogicalAddress;
+            }
         }
         else
         {
             RtlZeroMemory(fragment, fr->ElementStride);
         }
-
-        --m_outstandingPackets;
     }
 }
 
@@ -369,9 +444,11 @@ PrefetchNblForReceiveIndication(
 
 void
 PrefetchPacketPayloadForReceiveIndication(
-    _In_ NET_FRAGMENT const * firstFragment)
+    _In_ void * Address,
+    _In_ size_t Offset
+)
 {
-    auto payload = (UCHAR*)firstFragment->VirtualAddress + firstFragment->Offset;
+    auto payload = static_cast<unsigned char *>(Address) + Offset;
 
     // This offset is best-suited for Ethernet, where perf is most important.
     auto firstReadFieldOffset = FIELD_OFFSET(ETHERNET_HEADER, Type);
@@ -389,6 +466,9 @@ NxRxXlat::EcIndicateNblsToNdis()
     NT_FRE_ASSERT(pr->BeginIndex == fr->BeginIndex);
 
     NxNblSequence nblsToIndicate;
+
+    m_completedPackets = NetRingGetRangeCount(pr, pr->OSReserved0, pr->BeginIndex);
+
     for (; pr->OSReserved0 != pr->BeginIndex;
         fr->OSReserved0 = pr->OSReserved0 = NetRingIncrementIndex(pr, pr->OSReserved0))
     {
@@ -402,6 +482,7 @@ NxRxXlat::EcIndicateNblsToNdis()
             TransferDataBufferFromNetPacketToNbl(packet, context.NetBufferList, pr->OSReserved0))
         {
             nblsToIndicate.AddNbl(context.NetBufferList);
+            m_statistics.Increment(NxStatisticsCounters::NumberOfPackets);
         }
         else
         {
@@ -411,30 +492,39 @@ NxRxXlat::EcIndicateNblsToNdis()
         context.NetBufferList = nullptr;
     }
 
-    m_postedPackets = nblsToIndicate.GetCount();
-
-    if (!nblsToIndicate)
-        return;
-
-    m_outstandingPackets += nblsToIndicate.GetCount();
-
-    if (!m_nblDispatcher->IndicateReceiveNetBufferLists(
-            nblsToIndicate.GetNblQueue().First,
-            NDIS_DEFAULT_PORT_NUMBER,
-            nblsToIndicate.GetCount(),
-            nblsToIndicate.GetReceiveFlags()))
+    if (nblsToIndicate)
     {
-        // While stopping the queue, the NBL packet gate may close while this thread
-        // is still trying to indicate a receive.
-        //
-        // If that happens, we're in the process of tearing down this queue, so just
-        // mark the NBLs as returned and bail out.
-        ndisAppendNblQueueToNblQueueFast(&m_discardedNbl, &nblsToIndicate.GetNblQueue());
+        m_outstandingNbls += nblsToIndicate.GetCount();
+
+        if (!m_nblDispatcher->IndicateReceiveNetBufferLists(
+                nblsToIndicate.GetNblQueue().First,
+                NDIS_DEFAULT_PORT_NUMBER,
+                nblsToIndicate.GetCount(),
+                nblsToIndicate.GetReceiveFlags()))
+        {
+            // While stopping the queue, the NBL packet gate may close while this thread
+            // is still trying to indicate a receive.
+            //
+            // If that happens, we're in the process of tearing down this queue, so just
+            // mark the NBLs as returned and bail out.
+            ndisAppendNblQueueToNblQueueFast(&m_discardedNbl, &nblsToIndicate.GetNblQueue());
+        }
     }
 }
 
 void
-NxRxXlat::WaitForWork()
+NxRxXlat::EcUpdatePerfCounter()
+{
+    auto pr = NetRingCollectionGetPacketRing(&m_rings);
+
+    m_statistics.Increment(NxStatisticsCounters::IterationCount);
+    m_statistics.IncrementBy(NxStatisticsCounters::NblPending, m_outstandingNbls);
+    m_statistics.IncrementBy(NxStatisticsCounters::PacketsCompleted, m_returnedNbls);
+    m_statistics.IncrementBy(NxStatisticsCounters::QueueDepth, NetRingGetRangeCount(pr, pr->BeginIndex, pr->EndIndex));
+}
+
+void
+NxRxXlat::EcWaitForWork()
 {
     auto notificationsToArm = GetNotificationsToArm();
 
@@ -522,8 +612,8 @@ NxRxXlat::ReceiveThread()
             EcUpdateAffinity();
             EcYieldToNetAdapter();
             EcIndicateNblsToNdis();
-
-            WaitForWork();
+            EcUpdatePerfCounter();
+            EcWaitForWork();
 
             // This represents the wind down of Rx
             if (m_executionContext.IsStopping())
@@ -561,6 +651,8 @@ NxRxXlat::Initialize(
     void
 )
 {
+    NT_FRE_ASSERT(ARRAYSIZE(RxQueueExtensions) == ARRAYSIZE(m_extensions.Extensions));
+
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(CreateVariousPools(),
                                     "Failed to create pools");
 
@@ -570,17 +662,8 @@ NxRxXlat::Initialize(
         m_rxNumPackets,
         m_rxNumFragments);
 
-    Rtl::KArray<NET_CLIENT_PACKET_EXTENSION> addedPacketExtensions;
-
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        PreparePacketExtensions(addedPacketExtensions),
-        "Failed to add packet extensions to the RxQueue");
-
-    if (addedPacketExtensions.count() != 0)
-    {
-        config.PacketExtensions = &addedPacketExtensions[0];
-        config.NumberOfPacketExtensions = addedPacketExtensions.count();
-    }
+    config.Extensions = &RxQueueExtensions[0];
+    config.NumberOfExtensions = ARRAYSIZE(RxQueueExtensions);
 
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         m_adapterDispatch->CreateRxQueue(
@@ -592,14 +675,14 @@ NxRxXlat::Initialize(
             &m_queueDispatch),
         "Failed to create Rx queue. NxRxXlat=%p", this);
 
-    // now we use the app to store offsets, however, this should be a in per-queue context
-    // once NET_CLIENT has it's own queue context.
-
-    // checksum offset
-    GetPacketExtension(
-        NET_PACKET_EXTENSION_CHECKSUM_NAME,
-        NET_PACKET_EXTENSION_CHECKSUM_VERSION_1,
-        &m_checksumExtension);
+    // query extensions for what was enabled
+    for (size_t i = 0; i < ARRAYSIZE(RxQueueExtensions); i++)
+    {
+        m_queueDispatch->GetExtension(
+            m_queue,
+            &RxQueueExtensions[i],
+            &m_extensions.Extensions[i]);
+    }
 
     RtlCopyMemory(&m_rings, m_queueDispatch->GetNetDatapathDescriptor(m_queue), sizeof(m_rings));
 
@@ -723,6 +806,9 @@ NxRxXlat::CreateVariousPools()
                                                   &m_bufferPoolDispatch));
     }
 
+    NET_CLIENT_ADAPTER_PROPERTIES adapterProperties;
+    m_adapterDispatch->GetProperties(m_adapter, &adapterProperties);
+
     for (size_t i = 0; i < perfParameters.NumberOfNbls; i++)
     {
         PNET_BUFFER_LIST nbl =
@@ -755,21 +841,38 @@ NxRxXlat::CreateVariousPools()
 
 
 
-            NET_FRAGMENT data;
+            void * address;
+            SIZE_T offset, capacity;
+            CX_RETURN_IF_NOT_NT_SUCCESS(
+                m_bufferPoolDispatch->NetClientAllocateBuffer(
+                    m_bufferPool,
+                    &address,
+                    &GetRxContextFromNb(nb)->DmaLogicalAddress,
+                    &offset,
+                    &capacity));
 
-            CX_RETURN_NTSTATUS_IF(
-                STATUS_INSUFFICIENT_RESOURCES,
-                1 != m_bufferPoolDispatch->NetClientAllocateBuffers(m_bufferPool,
-                                                                    &data,
-                                                                    1));
-
-            GetRxContextFromNb(nb)->DmaLogicalAddress = data.Mapping.DmaLogicalAddress;
-
-            MmInitializeMdl(mdl, data.VirtualAddress, data.Capacity);
+            MmInitializeMdl(mdl, address, capacity);
             MmBuildMdlForNonPagedPool(mdl);
         }
 
         NblStackPush(nbl);
+
+        if (adapterProperties.MediaType == NdisMediumNative802_11)
+        {
+            auto dot11Context = MakePoolPtr<DOT11_EXTSTA_RECV_CONTEXT>('eWtX');
+
+            CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !dot11Context);
+
+            dot11Context->Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+            dot11Context->Header.Revision = DOT11_EXTSTA_RECV_CONTEXT_REVISION_1;
+            dot11Context->Header.Size = sizeof(*dot11Context);
+            dot11Context->uPhyId = dot11_phy_type_erp;
+            dot11Context->uChCenterFrequency = 2437;
+            dot11Context->usNumberOfMPDUsReceived = 1;
+
+            // Transfer ownership to the NBL. The memory will be freed in ~NxRxXlat()
+            nbl->NetBufferListInfo[MediaSpecificInformation] = dot11Context.release();
+        }
     }
 
     return STATUS_SUCCESS;
@@ -779,45 +882,6 @@ void
 NxRxXlat::Notify()
 {
     m_executionContext.SignalWork();
-}
-
-void
-NxRxXlat::GetPacketExtension(
-    PCWSTR ExtensionName,
-    ULONG ExtensionVersion,
-    NET_EXTENSION * Extension
-) const
-{
-    NET_CLIENT_PACKET_EXTENSION extension = {};
-    extension.Name = ExtensionName;
-    extension.Version = ExtensionVersion;
-    return m_queueDispatch->GetExtension(m_queue, &extension, Extension);
-}
-
-NTSTATUS
-NxRxXlat::PreparePacketExtensions(
-    _Inout_ Rtl::KArray<NET_CLIENT_PACKET_EXTENSION>& addedPacketExtensions
-)
-{
-    // checksum
-    NET_CLIENT_PACKET_EXTENSION extension = {};
-    extension.Name = NET_PACKET_EXTENSION_CHECKSUM_NAME;
-    extension.Version = NET_PACKET_EXTENSION_CHECKSUM_VERSION_1;
-
-    //
-    // Need to figure out how this would inter-op with capabilities interception
-    // ideally here we should check both (Registered) && (Enabled) before we add
-    // this extension to queue config.
-    //
-    if (NT_SUCCESS(m_adapterDispatch->QueryRegisteredPacketExtension(m_adapter, &extension)))
-    {
-        CX_RETURN_NTSTATUS_IF(
-            STATUS_INSUFFICIENT_RESOURCES,
-            !addedPacketExtensions.append(extension));
-    }
-
-    // more to come later!
-    return STATUS_SUCCESS;
 }
 
 void
@@ -850,13 +914,13 @@ NxRxXlat::EcRecoverBuffers()
         {
             for (UINT32 i = 0; i < packet->FragmentCount; i++)
             {
-                auto fragment = NetRingGetFragmentAtIndex(fr, fr->OSReserved0);
+                auto returnContext = NetExtensionGetFragmentReturnContext(
+                    &m_extensions.Extension.ReturnContext, fr->OSReserved0);
 
                 m_adapterDispatch->ReturnRxBuffer(
                     m_adapter,
-                    fragment->VirtualAddress,
-                    fragment->RxBufferReturnContext);
-                fragment->RxBufferReturnContext = nullptr;
+                    returnContext->Handle);
+                returnContext->Handle = nullptr;
             }
         }
     }
@@ -880,6 +944,11 @@ NxRxXlat::~NxRxXlat()
             m_bufferPoolDispatch->NetClientFreeBuffers(m_bufferPool,
                                                        &va,
                                                        1);
+        }
+
+        if (nbl->NetBufferListInfo[MediaSpecificInformation] != nullptr)
+        {
+            ExFreePool(nbl->NetBufferListInfo[MediaSpecificInformation]);
         }
 
         NdisFreeNetBufferList(nbl);
@@ -918,13 +987,14 @@ static
 USHORT
 CalculateNblFrameTypeForEthernetPacket(
     _In_ NET_RING_COLLECTION const * descriptor,
+    _In_ NET_EXTENSION const & virtualAddressExtension,
     _In_ NET_PACKET const *packet
 )
 {
     NT_ASSERT(packet->Layout.Layer2HeaderLength >= sizeof(ETHERNET_HEADER));
 
     USHORT ethertype;
-    if (!NxGetPacketEtherType(descriptor, packet, &ethertype))
+    if (!NxGetPacketEtherType(descriptor, virtualAddressExtension, packet, &ethertype))
         return 0;
 
     return RtlUshortByteSwap(ethertype);
@@ -934,22 +1004,23 @@ static
 USHORT
 CalculateNblFrameTypeForPacket(
     _In_ NET_RING_COLLECTION const * descriptor,
+    _In_ NET_EXTENSION const & virtualAddressExtension,
     _In_ NET_PACKET const &packet
 )
 {
     switch (packet.Layout.Layer3Type)
     {
-    case NET_PACKET_LAYER3_TYPE_IPV4_UNSPECIFIED_OPTIONS:
-    case NET_PACKET_LAYER3_TYPE_IPV4_WITH_OPTIONS:
-    case NET_PACKET_LAYER3_TYPE_IPV4_NO_OPTIONS:
+    case NetPacketLayer3TypeIPv4UnspecifiedOptions:
+    case NetPacketLayer3TypeIPv4WithOptions:
+    case NetPacketLayer3TypeIPv4NoOptions:
         return ByteSwap(ETHERNET_TYPE_IPV4);
 
-    case NET_PACKET_LAYER3_TYPE_IPV6_UNSPECIFIED_EXTENSIONS:
-    case NET_PACKET_LAYER3_TYPE_IPV6_WITH_EXTENSIONS:
-    case NET_PACKET_LAYER3_TYPE_IPV6_NO_EXTENSIONS:
+    case NetPacketLayer3TypeIPv6UnspecifiedExtensions:
+    case NetPacketLayer3TypeIPv6WithExtensions:
+    case NetPacketLayer3TypeIPv6NoExtensions:
         return ByteSwap(ETHERNET_TYPE_IPV6);
 
-    case NET_PACKET_LAYER3_TYPE_UNSPECIFIED:
+    case NetPacketLayer3TypeUnspecified:
     default:
         // The NIC didn't tell us the frame type. Keep going and we'll try
         // to compute it ourselves.
@@ -959,11 +1030,11 @@ CalculateNblFrameTypeForPacket(
     // Next try to compute it by parsing the layer2 header.
     switch (packet.Layout.Layer2Type)
     {
-    case NET_PACKET_LAYER2_TYPE_ETHERNET:
-        return CalculateNblFrameTypeForEthernetPacket(descriptor, &packet);
+    case NetPacketLayer2TypeEthernet:
+        return CalculateNblFrameTypeForEthernetPacket(descriptor, virtualAddressExtension, &packet);
 
-    case NET_PACKET_LAYER2_TYPE_UNSPECIFIED:
-    case NET_PACKET_LAYER2_TYPE_NULL:
+    case NetPacketLayer2TypeUnspecified:
+    case NetPacketLayer2TypeNull:
         // We don't know how to compute the Frame Type for non-Ethernet.
         __fallthrough;
     default:
@@ -983,28 +1054,53 @@ NxRxXlat::TransferDataBufferFromNetPacketToNbl(
     Nbl->Next = nullptr;
 
     auto fr = NetRingCollectionGetFragmentRing(&m_rings);
-    const auto firstFragment = NetRingGetFragmentAtIndex(fr, Packet->FragmentIndex);
-    PrefetchPacketPayloadForReceiveIndication(firstFragment);
+    auto const firstFragment = NetRingGetFragmentAtIndex(fr, Packet->FragmentIndex);
+    auto const firstVirtualAddress = NetExtensionGetFragmentVirtualAddress(
+        &m_extensions.Extension.VirtualAddress, Packet->FragmentIndex);
+    auto const firstReturnContext = NetExtensionGetFragmentReturnContext(
+        &m_extensions.Extension.ReturnContext, Packet->FragmentIndex);
+    PrefetchPacketPayloadForReceiveIndication(firstVirtualAddress->VirtualAddress, firstFragment->Offset);
+
+    // Used for populating statistics
+    auto frameSize = firstFragment->ValidLength;
 
     //
     //1. packet metadata
-    //
+
 
 
 
     // Always compute packet layout in software on RX path now.
-    Packet->Layout = NxGetPacketLayout(m_adapterProperties.MediaType, &m_rings, Packet);
+    Packet->Layout = NxGetPacketLayout(m_adapterProperties.MediaType, &m_rings, m_extensions.Extension.VirtualAddress, Packet);
 
     Nbl->NetBufferListInfo[TcpIpChecksumNetBufferListInfo] = 0;
 
-    if (IsPacketChecksumEnabled())
+    auto const & checksumExtension = m_extensions.Extension.Checksum;
+    if (checksumExtension.Enabled)
     {
-        Nbl->NetBufferListInfo[TcpIpChecksumNetBufferListInfo] = NxTranslateRxPacketChecksum(Packet, &m_checksumExtension, PacketIndex).Value;
+        Nbl->NetBufferListInfo[TcpIpChecksumNetBufferListInfo] =
+            NxTranslateRxPacketChecksum(Packet, &checksumExtension, PacketIndex).Value;
+    }
+
+    auto const & rscExtension = m_extensions.Extension.Rsc;
+    if (rscExtension.Enabled)
+    {
+        Nbl->NetBufferListInfo[TcpRecvSegCoalesceInfo] =
+            NxTranslateRxPacketRsc(Packet, &rscExtension, PacketIndex).Value;
+    }
+
+    auto const & rscTimestampExtension = m_extensions.Extension.RscTimestamp;
+    if (rscTimestampExtension.Enabled)
+    {
+        Nbl->NetBufferListInfo[RscTcpTimestampDelta] =
+            NxTranslateRxPacketRscTimestamp(Packet,
+                &rscTimestampExtension,
+                PacketIndex);
     }
 
     Nbl->NblFlags = 0;
 
-    auto frameType = CalculateNblFrameTypeForPacket(&m_rings, *Packet);
+    auto frameType = CalculateNblFrameTypeForPacket(&m_rings, m_extensions.Extension.VirtualAddress, *Packet);
     Nbl->NetBufferListInfo[NetBufferListFrameType] = (PVOID)frameType;
     switch (frameType)
     {
@@ -1031,10 +1127,13 @@ NxRxXlat::TransferDataBufferFromNetPacketToNbl(
 
     NET_BUFFER_CURRENT_MDL_OFFSET(nb) = firstFragment->Offset;
 
-    shouldIndicate = ReInitializeMdlForDataBuffer(nb,
-                                                  firstFragment,
-                                                  currMdl,
-                                                  true);
+    shouldIndicate = ReInitializeMdlForDataBuffer(
+        nb,
+        firstFragment,
+        firstVirtualAddress,
+        firstReturnContext,
+        currMdl,
+        true);
 
     //
     //3. packet's additonal fragments
@@ -1042,9 +1141,14 @@ NxRxXlat::TransferDataBufferFromNetPacketToNbl(
 
     for (UINT32 i = 1; i < Packet->FragmentCount; ++i)
     {
-        auto currFragment = NetRingGetFragmentAtIndex(fr, (Packet->FragmentIndex + i) & fr->ElementIndexMask);
+        auto const index = (Packet->FragmentIndex + i) & fr->ElementIndexMask;
+        auto const fragment = NetRingGetFragmentAtIndex(fr, index);
+        auto const virtualAddress = NetExtensionGetFragmentVirtualAddress(
+            &m_extensions.Extension.VirtualAddress, index);
+        auto const returnContext = NetExtensionGetFragmentReturnContext(
+            &m_extensions.Extension.ReturnContext, index);
 
-        NET_BUFFER_DATA_LENGTH(nb) += (ULONG)currFragment->ValidLength;
+        NET_BUFFER_DATA_LENGTH(nb) += (ULONG)fragment->ValidLength;
 
 
 
@@ -1053,12 +1157,16 @@ NxRxXlat::TransferDataBufferFromNetPacketToNbl(
         currMdl = NDIS_MDL_LINKAGE(currMdl);
 
         shouldIndicate &= ReInitializeMdlForDataBuffer(nb,
-            currFragment,
+            fragment,
+            virtualAddress,
+            returnContext,
             currMdl,
             false);
 
+        frameSize += fragment->ValidLength;
     }
 
+    m_statistics.IncrementBy(NxStatisticsCounters::BytesOfData, frameSize);
     return shouldIndicate;
 }
 
@@ -1066,6 +1174,8 @@ bool
 NxRxXlat::ReInitializeMdlForDataBuffer(
     _In_ PNET_BUFFER nb,
     _In_ NET_FRAGMENT const * fragment,
+    _In_ NET_FRAGMENT_VIRTUAL_ADDRESS const * VirtualAddress,
+    _In_ NET_FRAGMENT_RETURN_CONTEXT const * ReturnContext,
     _In_ PMDL fragmentMdl,
     _In_ bool isFirstFragment)
 {
@@ -1083,7 +1193,7 @@ NxRxXlat::ReInitializeMdlForDataBuffer(
             //the data buffer size must confront to the rx capability declared by the NIC
             if (fragment->Capacity <= m_rxDataBufferSize)
             {
-                MmInitializeMdl(fragmentMdl, fragment->VirtualAddress, fragment->Capacity);
+                MmInitializeMdl(fragmentMdl, VirtualAddress->VirtualAddress, fragment->Capacity);
                 MmBuildMdlForNonPagedPool(fragmentMdl);
 
                 NT_ASSERT(fragmentMdl->Next == nullptr);
@@ -1093,14 +1203,14 @@ NxRxXlat::ReInitializeMdlForDataBuffer(
                     if (isFirstFragment)
                     {
                         //first fragment's rx return context will be used for all fragments
-                        GetRxContextFromNb(nb)->RxBufferReturnContext = fragment->RxBufferReturnContext;
+                        GetRxContextFromNb(nb)->RxBufferReturnContext = ReturnContext->Handle;
                         mdlBuilt = true;
                     }
                     else
                     {
                         //if the NB has more than 1 fragment, all framgents must have the same
                         //return context
-                        if (GetRxContextFromNb(nb)->RxBufferReturnContext == fragment->RxBufferReturnContext)
+                        if (GetRxContextFromNb(nb)->RxBufferReturnContext == ReturnContext->Handle)
                         {
                             mdlBuilt = true;
                         }
@@ -1119,7 +1229,7 @@ NxRxXlat::ReInitializeMdlForDataBuffer(
                 mdlBuilt = false;
 
                 //we still need to return the rx data buffer of the dropped packet back to the NIC
-                GetRxContextFromNb(nb)->RxBufferReturnContext = fragment->RxBufferReturnContext;
+                GetRxContextFromNb(nb)->RxBufferReturnContext = ReturnContext->Handle;
             }
         }
     }
@@ -1163,15 +1273,15 @@ NxRxXlat::FreeReceivedDataBuffer(PNET_BUFFER_LIST nbl)
         {
             PNET_BUFFER nb = NET_BUFFER_LIST_FIRST_NB(nbl);
 
-            PVOID rxReturnContext = GetRxContextFromNb(nb)->RxBufferReturnContext;
             PMDL currMdl = NET_BUFFER_CURRENT_MDL(NET_BUFFER_LIST_FIRST_NB(nbl));
 
             NT_ASSERT(currMdl->Next == nullptr);
 
             while (currMdl)
             {
-                PVOID va = MmGetMdlVirtualAddress(currMdl);
-                m_adapterDispatch->ReturnRxBuffer(m_adapter, va, rxReturnContext);
+                m_adapterDispatch->ReturnRxBuffer(
+                    m_adapter,
+                    GetRxContextFromNb(nb)->RxBufferReturnContext);
 
                 currMdl = NDIS_MDL_LINKAGE(currMdl);
             }
@@ -1215,10 +1325,3 @@ NxRxXlat::NblStackIsEmpty(
 {
     return m_nblStackIndex == 0;
 }
-
-bool
-NxRxXlat::IsPacketChecksumEnabled() const
-{
-    return m_checksumExtension.Enabled;
-}
-

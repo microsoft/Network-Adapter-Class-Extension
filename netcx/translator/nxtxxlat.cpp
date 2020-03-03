@@ -16,10 +16,61 @@ Abstract:
 #include "NxTxXlat.hpp"
 
 #include <net/checksumtypes_p.h>
+#include <net/logicaladdresstypes_p.h>
 #include <net/lsotypes_p.h>
+#include <net/mdltypes_p.h>
+#include <net/virtualaddresstypes_p.h>
 
 #include "NxPacketLayout.hpp"
 #include "NxChecksumInfo.hpp"
+
+#ifndef _KERNEL_MODE
+#define NDIS_STATUS_PAUSED ((NDIS_STATUS)STATUS_NDIS_PAUSED)
+#endif // _KERNEL_MODE
+
+static
+NET_CLIENT_EXTENSION TxQueueExtensions[] = {
+    {
+        sizeof(NET_CLIENT_EXTENSION),
+        NET_PACKET_EXTENSION_CHECKSUM_NAME,
+        NET_PACKET_EXTENSION_CHECKSUM_VERSION_1,
+        0,
+        NET_PACKET_EXTENSION_CHECKSUM_VERSION_1_SIZE,
+        NetExtensionTypePacket,
+    },
+    {
+        sizeof(NET_CLIENT_EXTENSION),
+        NET_PACKET_EXTENSION_LSO_NAME,
+        NET_PACKET_EXTENSION_LSO_VERSION_1,
+        0,
+        NET_PACKET_EXTENSION_LSO_VERSION_1_SIZE,
+        NetExtensionTypePacket,
+    },
+    {
+        sizeof(NET_CLIENT_EXTENSION),
+        NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_NAME,
+        NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_VERSION_1,
+        0,
+        NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_VERSION_1_SIZE,
+        NetExtensionTypeFragment,
+    },
+    {
+        sizeof(NET_CLIENT_EXTENSION),
+        NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_NAME,
+        NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_VERSION_1,
+        0,
+        NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_VERSION_1_SIZE,
+        NetExtensionTypeFragment,
+    },
+    {
+        sizeof(NET_CLIENT_EXTENSION),
+        NET_FRAGMENT_EXTENSION_MDL_NAME,
+        NET_FRAGMENT_EXTENSION_MDL_VERSION_1,
+        0,
+        NET_FRAGMENT_EXTENSION_MDL_VERSION_1_SIZE,
+        NetExtensionTypeFragment,
+    },
+};
 
 static
 void
@@ -43,13 +94,19 @@ NxTxXlat::NxTxXlat(
     size_t QueueId,
     NET_CLIENT_DISPATCH const * Dispatch,
     NET_CLIENT_ADAPTER Adapter,
-    NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
+    NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch,
+    NxStatistics & Statistics
 ) noexcept :
     m_queueId(QueueId),
     m_dispatch(Dispatch),
     m_adapter(Adapter),
     m_adapterDispatch(AdapterDispatch),
-    m_packetContext(m_rings, NET_RING_TYPE_PACKET)
+    m_bounceBufferPool(
+        m_rings,
+        m_extensions.Extension.VirtualAddress,
+        m_extensions.Extension.LogicalAddress),
+    m_packetContext(m_rings, NetRingTypePacket),
+    m_statistics(Statistics)
 {
     m_adapterDispatch->GetProperties(m_adapter, &m_adapterProperties);
     m_adapterDispatch->GetDatapathCapabilities(m_adapter, &m_datapathCapabilities);
@@ -104,7 +161,7 @@ NxTxXlat::GetNotificationsToArm()
     ArmedNotifications notifications;
 
     // Shouldn't arm any notifications if we don't want to halt
-    if (!m_producedPackets && !m_completedPackets)
+    if ((m_producedPackets == 0) && (m_completedPackets == 0))
     {
         // If the ringbuffer is not full (if there is room for OS to give more packets to NIC),
         // arm the translater serialization queue notification so that when new NBL is sent
@@ -222,6 +279,8 @@ NxTxXlat::TransmitThread()
             // NET_PACKET.
             DrainCompletions();
 
+            UpdatePerfCounter();
+
             // Arms notifications if no forward progress was made in
             // this loop.
             WaitForWork();
@@ -271,8 +330,16 @@ NxTxXlat::TransmitThread()
 void
 NxTxXlat::DrainCompletions()
 {
-    NxNblTranslator translator{ m_nblTranslationStats, &m_rings, m_datapathCapabilities, m_dmaAdapter.get(), m_packetContext, m_adapterProperties.MediaType };
-    translator.m_netPacketLsoExtension = m_lsoExtension;
+    NxNblTranslator translator{
+        m_extensions,
+        m_nblTranslationStats,
+        &m_rings,
+        m_datapathCapabilities,
+        m_dmaAdapter.get(),
+        m_packetContext,
+        m_adapterProperties.MediaType,
+        m_statistics
+    };
 
     auto const result = translator.CompletePackets(m_bounceBufferPool);
 
@@ -288,16 +355,34 @@ NxTxXlat::DrainCompletions()
 void
 NxTxXlat::TranslateNbls()
 {
-    m_producedPackets = false;
+    m_producedPackets = 0;
 
     if (!m_currentNbl)
         return;
 
-    NxNblTranslator translator{ m_nblTranslationStats, &m_rings, m_datapathCapabilities, m_dmaAdapter.get(), m_packetContext, m_adapterProperties.MediaType };
-    translator.m_netPacketChecksumExtension = m_checksumExtension;
-    translator.m_netPacketLsoExtension = m_lsoExtension;
+    NxNblTranslator translator{
+        m_extensions,
+        m_nblTranslationStats,
+        &m_rings,
+        m_datapathCapabilities,
+        m_dmaAdapter.get(),
+        m_packetContext,
+        m_adapterProperties.MediaType,
+        m_statistics
+    };
 
     m_producedPackets = translator.TranslateNbls(m_currentNbl, m_currentNetBuffer, m_bounceBufferPool);
+}
+
+void
+NxTxXlat::UpdatePerfCounter()
+{
+    auto pr = NetRingCollectionGetPacketRing(&m_rings);
+
+    m_statistics.Increment(NxStatisticsCounters::IterationCount);
+    m_statistics.IncrementBy(NxStatisticsCounters::NblPending, m_synchronizedNblQueue.GetNblQueueDepth());
+    m_statistics.IncrementBy(NxStatisticsCounters::PacketsCompleted, m_completedPackets);
+    m_statistics.IncrementBy(NxStatisticsCounters::QueueDepth, NetRingGetRangeCount(pr, pr->BeginIndex, pr->EndIndex));
 }
 
 void
@@ -426,6 +511,8 @@ NxTxXlat::Initialize(
     void
 )
 {
+    NT_FRE_ASSERT(ARRAYSIZE(TxQueueExtensions) == ARRAYSIZE(m_extensions.Extensions));
+
     m_adapterDispatch->GetDatapathCapabilities(m_adapter, &m_datapathCapabilities);
 
     NX_PERF_TX_NIC_CHARACTERISTICS perfCharacteristics = {};
@@ -445,17 +532,8 @@ NxTxXlat::Initialize(
         perfParameters.PacketRingElementCount,
         perfParameters.FragmentRingElementCount);
 
-    Rtl::KArray<NET_CLIENT_PACKET_EXTENSION> addedPacketExtensions;
-
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        PreparePacketExtensions(addedPacketExtensions),
-        "Failed to add packet extensions to the RxQueue");
-
-    if (addedPacketExtensions.count() != 0)
-    {
-        config.PacketExtensions = &addedPacketExtensions[0];
-        config.NumberOfPacketExtensions = addedPacketExtensions.count();
-    }
+    config.Extensions = &TxQueueExtensions[0];
+    config.NumberOfExtensions = ARRAYSIZE(TxQueueExtensions);
 
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         m_adapterDispatch->CreateTxQueue(
@@ -467,16 +545,14 @@ NxTxXlat::Initialize(
             &m_queueDispatch),
         "Failed to create Tx queue. NxTxXlat=%p", this);
 
-    // checksum extension
-    GetPacketExtension(
-        NET_PACKET_EXTENSION_CHECKSUM_NAME,
-        NET_PACKET_EXTENSION_CHECKSUM_VERSION_1,
-        &m_checksumExtension);
-
-    GetPacketExtension(
-        NET_PACKET_EXTENSION_LSO_NAME, 
-        NET_PACKET_EXTENSION_LSO_VERSION_1,
-        &m_lsoExtension);
+    // query extensions for what was enabled
+    for (size_t i = 0; i < ARRAYSIZE(TxQueueExtensions); i++)
+    {
+        m_queueDispatch->GetExtension(
+            m_queue,
+            &TxQueueExtensions[i],
+            &m_extensions.Extensions[i]);
+    }
 
     RtlCopyMemory(&m_rings, m_queueDispatch->GetNetDatapathDescriptor(m_queue), sizeof(m_rings));
 
@@ -503,7 +579,6 @@ NxTxXlat::Initialize(
     CX_RETURN_IF_NOT_NT_SUCCESS(
         m_bounceBufferPool.Initialize(
             *m_dispatch,
-            &m_rings,
             m_datapathCapabilities,
             perfParameters.NumberOfBounceBuffers));
 
@@ -549,57 +624,7 @@ NxTxXlat::Stop(
 }
 
 void
-NxTxXlat::GetPacketExtension(
-    PCWSTR ExtensionName,
-    ULONG ExtensionVersion,
-    NET_EXTENSION * Extension
-) const
-{
-    NET_CLIENT_PACKET_EXTENSION extension = {};
-    extension.Name = ExtensionName;
-    extension.Version = ExtensionVersion;
-    return m_queueDispatch->GetExtension(m_queue, &extension, Extension);
-}
-
-NTSTATUS
-NxTxXlat::PreparePacketExtensions(
-    _Inout_ Rtl::KArray<NET_CLIENT_PACKET_EXTENSION>& addedPacketExtensions
-)
-{
-    // checksum
-    NET_CLIENT_PACKET_EXTENSION extension = {};
-    extension.Name = NET_PACKET_EXTENSION_CHECKSUM_NAME;
-    extension.Version = NET_PACKET_EXTENSION_CHECKSUM_VERSION_1;
-
-    //
-    // Need to figure out how this would inter-op with capabilities interception
-    // ideally here we should check both (Registered) && (Enabled) before we add
-    // this extension to queue config.
-    //
-    if (NT_SUCCESS(m_adapterDispatch->QueryRegisteredPacketExtension(m_adapter, &extension)))
-    {
-        CX_RETURN_NTSTATUS_IF(
-            STATUS_INSUFFICIENT_RESOURCES,
-            !addedPacketExtensions.append(extension));
-    }
-
-    extension.Name = NET_PACKET_EXTENSION_LSO_NAME;
-    extension.Version = NET_PACKET_EXTENSION_LSO_VERSION_1;
-
-    if (NT_SUCCESS(m_adapterDispatch->QueryRegisteredPacketExtension(m_adapter, &extension)))
-    {
-        CX_RETURN_NTSTATUS_IF(
-            STATUS_INSUFFICIENT_RESOURCES,
-            !addedPacketExtensions.append(extension));
-    }
-
-    // more to come later!
-    return STATUS_SUCCESS;
-}
-
-void
 NxTxXlat::Notify()
 {
     m_executionContext.SignalWork();
 }
-

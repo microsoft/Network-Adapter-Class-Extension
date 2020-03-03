@@ -1,9 +1,10 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
 
 #pragma once
 
-#include <wil\wistd_type_traits.h>
+#include <wil/common.h>
 
-#if _KERNEL_MODE
+#ifdef _KERNEL_MODE
 
     // nullptr_t is normally automatically defined by the CRT headers, but it
     // doesn't get included by kernel code.
@@ -46,6 +47,17 @@
 /// Use on code that must always be locked in memory, where you don't want SAL IRQL annotations.
 #define NONPAGEDX CODE_SEG(KRTL_NONPAGED_SEGMENT)
 
+#ifndef _KERNEL_MODE
+
+#ifndef PAGED_CODE
+#define PAGED_CODE() (void)0
+#endif // PAGED_CODE
+
+#ifndef INIT_CODE
+#define INIT_CODE() (void)0
+#endif // INIT_CODE
+
+#endif // _KERNEL_MODE
 
 /// Use on classes or structs.  Class member functions & compiler-generated code
 /// will default to the PAGE segment.  You can override any member function with `NONPAGED`.
@@ -68,6 +80,4 @@ enum CallRunMode
     //  need your thread.)
     RunAsynchronousButOkayToBlock,
 };
-
-
 
