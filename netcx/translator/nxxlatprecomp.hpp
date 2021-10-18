@@ -15,7 +15,8 @@ Abstract:
 #pragma once
 
 #ifdef _KERNEL_MODE
-#include <ntddk.h>
+#include <ntosp.h>
+#include <zwapi.h>
 #include <ntassert.h>
 #else
 #include <nt.h>
@@ -36,9 +37,9 @@ Abstract:
 
 #ifndef _KERNEL_MODE
 typedef PHYSICAL_ADDRESS NDIS_PHYSICAL_ADDRESS, *PNDIS_PHYSICAL_ADDRESS;
-#define EXPORT extern "C"
-#include <ndisbuf.h>
-#include <ndistoe.h>
+#include <ndis/nbl.h>
+#include <ndis/nblapi.h>
+#include <ndis/nblaccessors.h>
 #endif // _KERNEL_MODE
 
 #include <KNew.h>

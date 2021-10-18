@@ -13,20 +13,27 @@ struct AdapterExtensionInit;
 struct AdapterInit;
 struct QUEUE_CREATION_CONTEXT;
 struct NX_PRIVATE_GLOBALS;
+struct NET_RECEIVE_FILTER;
 
-struct _NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES;
-typedef _NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES;
+struct _NET_ADAPTER_OFFLOAD_GSO_CAPABILITIES;
+typedef _NET_ADAPTER_OFFLOAD_GSO_CAPABILITIES NET_ADAPTER_OFFLOAD_GSO_CAPABILITIES;
 
 struct _NET_REQUEST_QUEUE_CONFIG;
 typedef _NET_REQUEST_QUEUE_CONFIG NET_REQUEST_QUEUE_CONFIG;
 
-struct _NET_ADAPTER_PACKET_FILTER_CAPABILITIES;
-typedef _NET_ADAPTER_PACKET_FILTER_CAPABILITIES NET_ADAPTER_PACKET_FILTER_CAPABILITIES;
+struct _NET_ADAPTER_RECEIVE_FILTER_CAPABILITIES;
+typedef _NET_ADAPTER_RECEIVE_FILTER_CAPABILITIES NET_ADAPTER_RECEIVE_FILTER_CAPABILITIES;
+
+struct _NET_EXECUTION_CONTEXT_CONFIG;
+typedef _NET_EXECUTION_CONTEXT_CONFIG NET_EXECUTION_CONTEXT_CONFIG;
+
+struct _NET_ADAPTER_OFFLOAD_TX_CHECKSUM_CAPABILITIES;
+typedef _NET_ADAPTER_OFFLOAD_TX_CHECKSUM_CAPABILITIES NET_ADAPTER_OFFLOAD_TX_CHECKSUM_CAPABILITIES;
 
 class NxAdapter;
 class NxAdapterCollection;
 class NxDevice;
-class NxRequest;
+class NxExecutionContextTask;
 
 #define NDIS_MBB_WAKEUP_SUPPORTED_FLAGS ( \
     NDIS_WWAN_WAKE_ON_REGISTER_STATE_SUPPORTED | \
@@ -41,19 +48,22 @@ class NxRequest;
     NDIS_WLAN_WAKE_ON_GTK_HANDSHAKE_ERROR_SUPPORTED | \
     NDIS_WLAN_WAKE_ON_4WAY_HANDSHAKE_REQUEST_SUPPORTED) \
 
-#define NET_PACKET_FILTER_SUPPORTED_FLAGS              (NetPacketFilterFlagDirected                             | \
-                                                        NetPacketFilterFlagMulticast                            | \
-                                                        NetPacketFilterFlagAllMulticast                        | \
-                                                        NetPacketFilterFlagBroadcast                            | \
-                                                        NetPacketFilterFlagPromiscuous)
+#define NET_PACKET_FILTER_SUPPORTED_FLAGS ( \
+    NetPacketFilterFlagDirected | \
+    NetPacketFilterFlagMulticast | \
+    NetPacketFilterFlagAllMulticast | \
+    NetPacketFilterFlagBroadcast | \
+    NetPacketFilterFlagPromiscuous)
 
-#define NDIS_AUTO_NEGOTIATION_SUPPORTED_FLAGS          (NetAdapterAutoNegotiationFlagXmitLinkSpeedAutoNegotiated      | \
-                                                        NetAdapterAutoNegotiationFlagRcvLinkSpeedautoNegotiated       | \
-                                                        NetAdapterAutoNegotiationFlagDuplexAutoNegotiated               | \
-                                                        NetAdapterAutoNegotiationFlagPauseFunctionsAutoNegotiated)       \
+#define NDIS_AUTO_NEGOTIATION_SUPPORTED_FLAGS ( \
+    NetAdapterAutoNegotiationFlagXmitLinkSpeedAutoNegotiated | \
+    NetAdapterAutoNegotiationFlagRcvLinkSpeedautoNegotiated | \
+    NetAdapterAutoNegotiationFlagDuplexAutoNegotiated | \
+    NetAdapterAutoNegotiationFlagPauseFunctionsAutoNegotiated)
 
-#define NET_CONFIGURATION_QUERY_ULONG_SUPPORTED_FLAGS  (NET_CONFIGURATION_QUERY_ULONG_NO_FLAGS                      | \
-                                                        NET_CONFIGURATION_QUERY_ULONG_MAY_BE_STORED_AS_HEX_STRING)    \
+#define NET_CONFIGURATION_QUERY_ULONG_SUPPORTED_FLAGS ( \
+    NET_CONFIGURATION_QUERY_ULONG_NO_FLAGS | \
+    NET_CONFIGURATION_QUERY_ULONG_MAY_BE_STORED_AS_HEX_STRING)
 
 //
 // This macro is used to check if an input flag mask contains only allowed flag values, as defined by _supported
@@ -76,8 +86,9 @@ typedef enum _FailureCode : ULONG_PTR
     FailureCode_InvalidStructTypeSize,
     FailureCode_InvalidQueueConfiguration,
     FailureCode_MacAddressLengthTooLong,
-    FailureCode_InvalidPacketFilterCapabilities,
-    FailureCode_InvalidSetPacketFilterCallBack,
+    FailureCode_InvalidReceiveFilterCapabilities,
+    FailureCode_InvalidSetReceiveFilterCallBack,
+    FailureCode_SetReceiveFilterFromWrongThread,
     FailureCode_InvalidLinkState,
     FailureCode_ParameterCantBeNull,
     FailureCode_InvalidQueryUlongFlag,
@@ -106,12 +117,12 @@ typedef enum _FailureCode : ULONG_PTR
     FailureCode_InvalidNetAdapterInitSignature,
     FailureCode_NetAdapterInitAlreadyUsed,
     FailureCode_InvalidNetAdapterExtensionInitSignature,
-    FailureCode_InvalidLsoCapabilities,
+    FailureCode_InvalidGsoCapabilities,
     FailureCode_IllegalPrivateApiCall,
     FailureCode_InvalidQueueHandle,
     FailureCode_InvalidNetAdapterWakeReasonMediaChange,
     FailureCode_PowerNotInTransition,
-    FailureCode_DisarmNotInProgress,
+    FailureCode_WakeNotInProgress,
     FailureCode_InvalidPowerOffloadListSignature,
     FailureCode_InvalidWakeSourceListSignature,
     FailureCode_InvalidRingImmutable,
@@ -144,6 +155,26 @@ typedef enum _FailureCode : ULONG_PTR
     FailureCode_InvalidRingRxPacketFragmentOffsetInvalid,
     FailureCode_InvalidRingRxPacketFragmentLengthInvalid,
     FailureCode_InvalidMediaSpecificWakeUpFlags,
+    FailureCode_InvalidOidRequestDispatchSignature,
+    FailureCode_InvalidDeviceQueueEventCallbacks,
+    FailureCode_InvalidTxDemuxType,
+    FailureCode_InvalidTxDemuxRange,
+    FailureCode_PlatformLevelDeviceResetPerformed,
+    FailureCode_ResetDiagnosticsSizeTooLarge,
+    FailureCode_IsNotCollectingResetDiagnostics,
+    FailureCode_DemuxNotPresent,
+    FailureCode_InvalidSupportedProtocolOffloadsFlags,
+    FailureCode_InvalidExecutionContextTask,
+    FailureCode_InvalidExecutionContextConfig,
+    FailureCode_InvalidTxChecksumCapabilities,
+    FailureCode_InvalidTxChecksumIPv6Flags,
+    FailureCode_DeprecatedFunction,
+    FailureCode_InvalidTxChecksumHardwareCapabilities,
+    FailureCode_InvalidTxChecksumLayer4Capabilities,
+    FailureCode_AdapterNotStarted,
+    FailureCode_OffloadNotPaused,
+    FailureCode_InvalidGsoHardwareCapabilities,
+    FailureCode_InvalidRSSConfiguration,
 } FailureCode;
 
 //
@@ -158,21 +189,27 @@ typedef enum _VerifierAction
     VerifierAction_DbgBreakIfDebuggerPresent
 } VerifierAction;
 
+_IRQL_requires_(PASSIVE_LEVEL)
+void
+VerifierInitialize(
+    void
+);
+
 void
 NetAdapterCxBugCheck(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ FailureCode         FailureCode,
-    _In_ ULONG_PTR           Parameter2,
-    _In_ ULONG_PTR           Parameter3
+    _In_ FailureCode FailureCode,
+    _In_ ULONG_PTR Parameter2,
+    _In_ ULONG_PTR Parameter3
 );
 
 void
 Verifier_ReportViolation(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ VerifierAction      Action,
-    _In_ FailureCode         FailureCode,
-    _In_ ULONG_PTR           Parameter2,
-    _In_ ULONG_PTR           Parameter3
+    _In_ VerifierAction Action,
+    _In_ FailureCode FailureCode,
+    _In_ ULONG_PTR Parameter2,
+    _In_ ULONG_PTR Parameter3
 );
 
 void
@@ -197,48 +234,29 @@ Verifier_VerifyAdapterNotStarted(
 );
 
 void
+Verifier_VerifyAdapterStarted(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NxAdapter * pNxAdapter
+);
+
+void
 Verifier_VerifyNetPowerTransition(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NxDevice *           Device
+    _In_ NxDevice * Device
 );
 
 void
 Verifier_VerifyNetPowerUpTransition(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NxDevice *           Device
-);
-
-void
-Verifier_VerifyNetRequestCompletionStatusNotPending(
-    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NETREQUEST NetRequest,
-    _In_ NTSTATUS   CompletionStatus
-);
-
-void
-Verifier_VerifyNetRequestType(
-    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NxRequest * NxRequest,
-    _In_ NDIS_REQUEST_TYPE Type
-);
-
-void
-Verifier_VerifyNetRequestIsQuery(
-    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NxRequest * NxRequest
-);
-
-void
-Verifier_VerifyNetRequest(
-    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NxRequest * pNxRequest
+    _In_ NxDevice * Device
 );
 
 template <typename T>
 void
 Verifier_VerifyTypeSize(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ T *Input)
+    _In_ T * Input
+)
 {
     ULONG uInputSize = Input->Size;
     ULONG uExpectedSize = sizeof(T);
@@ -260,12 +278,6 @@ Verifier_VerifyNotNull(
     _In_ void const * const Ptr
 );
 
-NTSTATUS
-Verifier_VerifyQueueConfiguration(
-    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NET_REQUEST_QUEUE_CONFIG * QueueConfig
-);
-
 void
 Verifier_VerifyReceiveScalingCapabilities(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
@@ -273,9 +285,15 @@ Verifier_VerifyReceiveScalingCapabilities(
 );
 
 void
-Verifier_VerifyPacketFilter(
+Verifier_VerifyReceiveFilterCapabilities(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NET_ADAPTER_PACKET_FILTER_CAPABILITIES const * PacketFilter
+    _In_ NET_ADAPTER_RECEIVE_FILTER_CAPABILITIES const * Capabilities
+);
+
+void
+Verifier_VerifyReceiveFilterHandle(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_RECEIVE_FILTER const * ReceiveFilter
 );
 
 void
@@ -299,17 +317,23 @@ Verifier_VerifyQueryAsUlongFlags(
 void
 Verifier_VerifyMtuSize(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-         ULONG MtuSize
+     ULONG MtuSize
 );
 
 void
 Verifier_VerifyQueueInitContext(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ QUEUE_CREATION_CONTEXT *NetQueueInit
+    _In_ QUEUE_CREATION_CONTEXT * NetQueueInit
 );
 
 void
-Verifier_VerifyNetPacketQueueConfiguration(
+Verifier_VerifyNetTxQueueConfiguration(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_PACKET_QUEUE_CONFIG const * Configuration
+);
+
+void
+Verifier_VerifyNetRxQueueConfiguration(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ NET_PACKET_QUEUE_CONFIG const * Configuration
 );
@@ -330,25 +354,25 @@ Verifier_VerifyObjectAttributesContextSize(
 void
 Verifier_VerifyDatapathCallbacks(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NET_ADAPTER_DATAPATH_CALLBACKS const *DatapathCallbacks
+    _In_ NET_ADAPTER_DATAPATH_CALLBACKS const * DatapathCallbacks
 );
 
 void
 Verifier_VerifyAdapterInitSignature(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ AdapterInit const *AdapterInit
+    _In_ AdapterInit const * AdapterInit
 );
 
 void
 Verifier_VerifyAdapterExtensionInitSignature(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ AdapterExtensionInit const *AdapterExtensionInit
+    _In_ AdapterExtensionInit const * AdapterExtensionInit
 );
 
 void
 Verifier_VerifyAdapterInitNotUsed(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ AdapterInit const *AdapterInit
+    _In_ AdapterInit const * AdapterInit
 );
 
 void
@@ -366,20 +390,26 @@ Verifier_VerifyNetAdapterTxCapabilities(
 void
 Verifier_VerifyNetAdapterRxCapabilities(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ const NET_ADAPTER_RX_CAPABILITIES *RxCapabilities
+    _In_ const NET_ADAPTER_RX_CAPABILITIES * RxCapabilities
 );
 
 void
 Verifier_VerifyDeviceAdapterCollectionIsEmpty(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NxDevice const *Device,
-    _In_ NxAdapterCollection const *AdapterCollection
+    _In_ NxDevice const * Device,
+    _In_ NxAdapterCollection const * AdapterCollection
 );
 
 void
-Verifier_VerifyLsoCapabilities(
+Verifier_VerifyGsoCapabilities(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES const *LsoCapabilities
+    _In_ NET_ADAPTER_OFFLOAD_GSO_CAPABILITIES const * GsoCapabilities
+);
+
+void
+Verifier_VerifyGsoHardwareCapabilities(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_ADAPTER_OFFLOAD_GSO_CAPABILITIES const * GsoCapabilities
 );
 
 void
@@ -443,6 +473,13 @@ Verifier_VerifyRingImmutableDriverRx(
 );
 
 void
+Verifier_VerifyRingImmutableDriverRx(
+    _In_ NX_PRIVATE_GLOBALS const & PrivateGlobals,
+    _In_ NET_RING const & DataBufferBefore,
+    _In_ NET_RING const & DataBufferAfter
+);
+
+void
 Verifier_VerifyRingBeginIndex(
     _In_ NX_PRIVATE_GLOBALS const & PrivateGlobals,
     _In_ NET_RING const & Before,
@@ -460,4 +497,79 @@ void
 Verifier_VerifyNdisPmCapabilities(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ NET_ADAPTER_NDIS_PM_CAPABILITIES const * NdisPmCapabilities
+);
+
+void
+Verifier_VerifyOidRequestDispatchSignature(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ WDFCONTEXT Context,
+    _In_ ULONG ExpectedSignature
+);
+
+void
+Verifier_VerifyMediaExtensionTypeWifi(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals
+);
+
+struct _NET_ADAPTER_TX_DEMUX;
+typedef struct _NET_ADAPTER_TX_DEMUX NET_ADAPTER_TX_DEMUX;
+
+void
+Verifier_VerifyTxDemux(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_ADAPTER_TX_DEMUX const * Demux
+);
+
+void
+Verifier_VerifyResetDiagnosticsSize(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ SIZE_T ResetDiagnosticsSize
+);
+
+void
+Verifier_VerifyIsCollectingResetDiagnostics(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NxDevice const * Device
+);
+
+void
+Verifier_VerifyTaskNotQueued(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NxExecutionContextTask * Task
+);
+
+void
+Verifier_VerifyExecutionContextConfig(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_EXECUTION_CONTEXT_CONFIG const * Config
+);
+
+void
+Verifier_VerifyTxChecksumCapabilities(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_ADAPTER_OFFLOAD_TX_CHECKSUM_CAPABILITIES const * TxChecksumCapabilities
+);
+
+void
+Verifier_VerifyTxChecksumHardwareCapabilities(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_ADAPTER_OFFLOAD_TX_CHECKSUM_CAPABILITIES const * TxChecksumCapabilities
+);
+
+void
+Verifier_VerifyTxChecksumLayer4Capabilities(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_ADAPTER_OFFLOAD_TX_CHECKSUM_CAPABILITIES const * TxChecksumCapabilities
+);
+
+void
+Verifier_VerifyTxChecksumIPv6Flags(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_ADAPTER_OFFLOAD_TX_CHECKSUM_CAPABILITIES const * TxChecksumCapabilities
+);
+
+void
+Verifier_VerifyOffloadPaused(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NxAdapter * pNxAdapter
 );

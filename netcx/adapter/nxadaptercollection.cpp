@@ -2,10 +2,10 @@
 
 #include "Nx.hpp"
 
-#include "NxAdapterCollection.tmh"
 #include "NxAdapterCollection.hpp"
-
 #include "NxAdapter.hpp"
+
+#include "NxAdapterCollection.tmh"
 
 void
 NxAdapterCollection::GetTriageInfo(
@@ -16,8 +16,8 @@ NxAdapterCollection::GetTriageInfo(
 }
 
 _Use_decl_annotations_
-NxAdapter *
-NxAdapterCollection::FindAndReferenceAdapterByInstanceName(
+unique_miniport_reference
+NxAdapterCollection::FindAndReferenceMiniportByInstanceName(
     UNICODE_STRING const * InstanceName
 ) const
 {
@@ -27,11 +27,11 @@ NxAdapterCollection::FindAndReferenceAdapterByInstanceName(
         link != &m_ListHead;
         link = link->Flink)
     {
-        auto nxAdapter = CONTAINING_RECORD(link, NxAdapter, m_Linkage);
+        auto nxAdapter = CONTAINING_RECORD(link, NxAdapter, m_linkage);
 
-        if (RtlEqualUnicodeString(&nxAdapter->m_InstanceName, InstanceName, TRUE))
+        if (RtlEqualUnicodeString(&nxAdapter->m_instanceName, InstanceName, TRUE))
         {
-            return NdisWdfMiniportTryReference(nxAdapter->GetNdisHandle()) ? nxAdapter : nullptr;
+            return nxAdapter->GetMiniportReference();
         }
     }
 
@@ -50,9 +50,9 @@ NxAdapterCollection::FindAndReferenceAdapterByBaseName(
         link != &m_ListHead;
         link = link->Flink)
     {
-        auto nxAdapter = CONTAINING_RECORD(link, NxAdapter, m_Linkage);
+        auto nxAdapter = CONTAINING_RECORD(link, NxAdapter, m_linkage);
 
-        if (RtlEqualUnicodeString(&nxAdapter->m_BaseName, BaseName, TRUE))
+        if (RtlEqualUnicodeString(&nxAdapter->m_baseName, BaseName, TRUE))
         {
             return NdisWdfMiniportTryReference(nxAdapter->GetNdisHandle()) ? nxAdapter : nullptr;
         }

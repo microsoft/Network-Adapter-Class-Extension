@@ -27,16 +27,19 @@ namespace Rtl
             return true;
         }
 
+        NONPAGED
         bool TestBit(size_t bitNumber)
         {
             return RtlCheckBitEx(&m_bitmap, bitNumber);
         }
 
+        NONPAGED
         void SetBit(size_t bitNumber)
         {
             RtlSetBitEx(&m_bitmap, bitNumber);
         }
 
+        NONPAGED
         void ClearBit(size_t bitNumber)
         {
             RtlClearBitEx(&m_bitmap, bitNumber);
@@ -54,7 +57,7 @@ namespace Rtl
 
     private:
         RTL_BITMAP_EX m_bitmap;
-        Rtl::KArray<SIZE_T> m_storage;
+        Rtl::KArray<SIZE_T, NonPagedPoolNx> m_storage;
     };
 
 }

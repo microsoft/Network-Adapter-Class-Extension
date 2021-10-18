@@ -6,10 +6,15 @@
 
 #ifdef _KERNEL_MODE
 
-    // nullptr_t is normally automatically defined by the CRT headers, but it
-    // doesn't get included by kernel code.
-    namespace std { typedef decltype(__nullptr) nullptr_t; }
-    using ::std::nullptr_t;
+// nullptr_t is normally automatically defined by the CRT headers, but it
+// doesn't get included by kernel code.
+namespace std { typedef decltype(__nullptr) nullptr_t; }
+using ::std::nullptr_t;
+
+// The stddef.h used for kernel code has the old offsetof macro.
+// Let's use the new one instead.
+#undef offsetof
+#define offsetof(s,m) __builtin_offsetof(s,m)
 
 #endif // _KERNEL_MODE
 
@@ -52,10 +57,6 @@
 #ifndef PAGED_CODE
 #define PAGED_CODE() (void)0
 #endif // PAGED_CODE
-
-#ifndef INIT_CODE
-#define INIT_CODE() (void)0
-#endif // INIT_CODE
 
 #endif // _KERNEL_MODE
 

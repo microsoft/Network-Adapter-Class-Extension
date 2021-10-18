@@ -1,24 +1,21 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
 
-/*++
-
-Abstract:
-
-    This module contains the "C" interface for the NxAdapter object.
-
---*/
-
 #include "Nx.hpp"
 
 #include <NxApi.hpp>
 
-#include "NxAdapterApi.tmh"
-
+#include "NxDriver.hpp"
 #include "NxAdapter.hpp"
 #include "NxConfiguration.hpp"
 #include "NxDevice.hpp"
 #include "verifier.hpp"
 #include "version.hpp"
+
+#include "NxAdapterApi.tmh"
+
+extern
+WDFWAITLOCK
+    g_RegistrationLock;
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
@@ -62,7 +59,29 @@ Remarks
         return nullptr;
     }
 
-    adapterInit->Device = Device;
+    if (! adapterInit->TxDemux.reserve(3))
+    {
+        return nullptr;
+    }
+
+    adapterInit->ParentDevice = Device;
+    adapterInit->ExtensionType = MediaExtensionTypeFromClientGlobals(nxPrivateGlobals->ClientDriverGlobals);
+
+    // Create the object now, but hold creation of NxAdapter context until NetAdapterCreate is called
+    WDF_OBJECT_ATTRIBUTES attributes;
+    WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
+    attributes.ParentObject = Device;
+
+    auto const ntStatus = WdfObjectCreate(
+        &attributes,
+        &adapterInit->Object);
+
+    CX_LOG_IF_NOT_NT_SUCCESS_MSG(ntStatus, "Failed to create NETADAPTER object");
+
+    if (ntStatus != STATUS_SUCCESS)
+    {
+        return nullptr;
+    }
 
     return reinterpret_cast<NETADAPTER_INIT *>(adapterInit.release());
 }
@@ -142,48 +161,6 @@ Return Value:
         DatapathCallbacks->Size);
 }
 
-_IRQL_requires_max_(PASSIVE_LEVEL)
-WDFAPI
-void
-NETEXPORT(NetAdapterInitSetNetRequestAttributes)(
-    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
-    _Inout_ NETADAPTER_INIT * AdapterInit,
-    _In_ WDF_OBJECT_ATTRIBUTES * NetRequestAttributes
-)
-/*++
-Routine Description:
-
-    Sets the attributes of NETREQUEST objects created by NetAdapterCx.
-
-Arguments:
-
-    Globals - Client driver's globals
-    AdapterInit - Adapter init object
-    NetRequestAttributes - Initialized WDF object attributes
-
-Return Value:
-
-    None
-
---*/
-{
-    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
-
-    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
-    Verifier_VerifyNotNull(nxPrivateGlobals, AdapterInit);
-    Verifier_VerifyNotNull(nxPrivateGlobals, NetRequestAttributes);
-
-    auto adapterInit = GetAdapterInitFromHandle(nxPrivateGlobals, AdapterInit);
-
-    Verifier_VerifyAdapterInitNotUsed(nxPrivateGlobals, adapterInit);
-
-    RtlCopyMemory(
-        &adapterInit->NetRequestAttributes,
-        NetRequestAttributes,
-        NetRequestAttributes->Size);
-}
-
 _Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
@@ -192,7 +169,7 @@ NETEXPORT(NetAdapterCreate)(
     _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETADAPTER_INIT * AdapterInit,
     _In_opt_ WDF_OBJECT_ATTRIBUTES * AdapterAttributes,
-    _Out_ NETADAPTER* Adapter
+    _Out_ NETADAPTER * Adapter
 )
 /*++
 Routine Description:
@@ -242,38 +219,53 @@ Return Value:
 
     Verifier_VerifyAdapterInitNotUsed(nxPrivateGlobals, adapterInit);
 
-    // We don't yet support software network interfaces
-    NT_ASSERT(adapterInit->Device != nullptr);
+    auto device = adapterInit->ParentDevice;
+    auto nxDevice = GetNxDeviceFromHandle(device);
+
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        nxDevice->EnsureInitialized(device),
+        "Failed to initialize NxDevice. WDFDEVICE=%p", device);
 
     // Client is not allowed to specify a parent for a NETADAPTER object
     Verifier_VerifyObjectAttributesParentIsNull(nxPrivateGlobals, AdapterAttributes);
 
-    auto nxDevice = GetNxDeviceFromHandle(adapterInit->Device);
-
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        nxDevice->EnsureInitialized(adapterInit->Device),
-        "Failed to initialize NxDevice. WDFDEVICE=%p", adapterInit->Device);
-
-    NxAdapter * nxAdapter;
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         NxAdapter::_Create(
-            *nxPrivateGlobals,
-            *adapterInit,
-            AdapterAttributes,
-            &nxAdapter),
-        "Failed to create the NxAdapter context. WDFDEVICE=%p",
-        adapterInit->Device);
+            nxPrivateGlobals,
+            adapterInit),
+        "Failed to initialize NETADAPTER. NETADAPTER=%p",
+        adapterInit->Object.get());
+
+    auto nxAdapter = GetNxAdapterFromHandle(adapterInit->Object.get());
+
+    if (AdapterAttributes != WDF_NO_OBJECT_ATTRIBUTES)
+    {
+        CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+            WdfObjectAllocateContext(
+                nxAdapter->GetFxObject(),
+                AdapterAttributes,
+                nullptr),
+            "WdfObjectAllocateContext for ClientAttributes. NETADAPTER=%p",
+            nxAdapter->GetFxObject());
+    }
 
     //
-    // Do not introduce failures after this point. See note at the end of
-    // NxAdapter::_Create that explains this.
+    // Don't fail after this point or else the client's Cleanup / Destroy
+    // callbacks can get called.
     //
 
-    *Adapter = nxAdapter->GetFxObject();
+    adapterInit->CreatedAdapter = nxAdapter->GetFxObject();
 
-    adapterInit->CreatedAdapter = *Adapter;
+    //
+    // Object is created and initialized, move ownership of the handle from
+    // AdapterInit to the client driver
+    //
 
-    return STATUS_SUCCESS;
+    *Adapter = reinterpret_cast<NETADAPTER>(adapterInit->Object.release());
+
+    CX_RETURN_STATUS_SUCCESS_MSG(
+        "NETADAPTER %p",
+        *Adapter);
 }
 
 _Must_inspect_result_
@@ -294,7 +286,7 @@ NETEXPORT(NetAdapterStart)(
 
     Verifier_VerifyAdapterNotStarted(nxPrivateGlobals, adapter);
 
-    return adapter->ClientStart();
+    return adapter->PnpPower.NetAdapterStart(nxPrivateGlobals);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -311,7 +303,7 @@ NETEXPORT(NetAdapterStop)(
     Verifier_VerifyIrqlPassive(nxPrivateGlobals);
 
     NxAdapter *adapter = GetNxAdapterFromHandle(Adapter);
-    adapter->ClientStop();
+    adapter->PnpPower.NetAdapterStop(nxPrivateGlobals);
 }
 
 WDFAPI
@@ -375,7 +367,7 @@ NETEXPORT(NetAdapterOpenConfiguration)(
     _In_     NET_DRIVER_GLOBALS *                Globals,
     _In_     NETADAPTER                          Adapter,
     _In_opt_ WDF_OBJECT_ATTRIBUTES *             ConfigurationAttributes,
-    _Out_    NETCONFIGURATION*                   Configuration
+    _Out_    NETCONFIGURATION *                  Configuration
 )
 /*++
 Routine Description:
@@ -410,8 +402,8 @@ Returns:
     *Configuration = NULL;
 
     NxConfiguration * nxConfiguration;
-    status = NxConfiguration::_Create(nxPrivateGlobals,
-                                      GetNxAdapterFromHandle(Adapter),
+    status = NxConfiguration::_Create<NETADAPTER>(nxPrivateGlobals,
+                                      Adapter,
                                       NULL,
                                       &nxConfiguration);
     if (!NT_SUCCESS(status)){
@@ -510,7 +502,7 @@ NETEXPORT(NetAdapterSetReceiveScalingCapabilities)(
     auto const nxAdapter = GetNxAdapterFromHandle(Adapter);
     Verifier_VerifyAdapterNotStarted(nxPrivateGlobals, nxAdapter);
 
-    nxAdapter->SetReceiveScalingCapabilities(*Capabilities);
+    nxAdapter->RxScaling.SetCapabilities(*Capabilities);
 }
 
 WDFAPI
@@ -611,46 +603,74 @@ Remarks:
 WDFAPI
 _IRQL_requires_(PASSIVE_LEVEL)
 VOID
-NETEXPORT(NetAdapterSetMulticastCapabilities)(
+NETEXPORT(NetAdapterSetReceiveFilterCapabilities)(
     _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETADAPTER Adapter,
-    _In_ const NET_ADAPTER_MULTICAST_CAPABILITIES * MulticastCapabilities
+    _In_ const NET_ADAPTER_RECEIVE_FILTER_CAPABILITIES * ReceiveFilter
 )
 {
     auto nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
     Verifier_VerifyIrqlPassive(nxPrivateGlobals);
-    Verifier_VerifyTypeSize(nxPrivateGlobals, MulticastCapabilities);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, ReceiveFilter);
+
+    Verifier_VerifyReceiveFilterCapabilities(nxPrivateGlobals, ReceiveFilter);
 
     auto nxAdapter = GetNxAdapterFromHandle(Adapter);
 
     Verifier_VerifyAdapterNotStarted(nxPrivateGlobals, nxAdapter);
 
-    nxAdapter->SetMulticastCapabilities(*MulticastCapabilities);
+    nxAdapter->SetReceiveFilterCapabilities(*ReceiveFilter);
 }
 
 WDFAPI
-_IRQL_requires_(PASSIVE_LEVEL)
-VOID
-NETEXPORT(NetAdapterSetPacketFilterCapabilities)(
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NET_PACKET_FILTER_FLAGS
+NETEXPORT(NetReceiveFilterGetPacketFilter)(
     _In_ NET_DRIVER_GLOBALS * DriverGlobals,
-    _In_ NETADAPTER Adapter,
-    _In_ const NET_ADAPTER_PACKET_FILTER_CAPABILITIES * PacketFilter
+    _In_ NETRECEIVEFILTER ReceiveFilter
 )
 {
-    auto nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const receiveFilter = reinterpret_cast<NET_RECEIVE_FILTER const *>(ReceiveFilter);
 
-    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
-    Verifier_VerifyTypeSize(nxPrivateGlobals, PacketFilter);
-    Verifier_VerifyPacketFilter(nxPrivateGlobals, PacketFilter);
+    Verifier_VerifyReceiveFilterHandle(nxPrivateGlobals, receiveFilter);
 
-    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+    return receiveFilter->PacketFilter;
+}
 
-    Verifier_VerifyAdapterNotStarted(nxPrivateGlobals, nxAdapter);
+WDFAPI
+_IRQL_requires_max_(DISPATCH_LEVEL)
+SIZE_T
+NETEXPORT(NetReceiveFilterGetMulticastAddressCount)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETRECEIVEFILTER ReceiveFilter
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const receiveFilter = reinterpret_cast<NET_RECEIVE_FILTER const *>(ReceiveFilter);
 
-    nxAdapter->SetPacketFilterCapabilities(*PacketFilter);
+    Verifier_VerifyReceiveFilterHandle(nxPrivateGlobals, receiveFilter);
+
+    return receiveFilter->MulticastAddressCount;
+}
+
+WDFAPI
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NET_ADAPTER_LINK_LAYER_ADDRESS const *
+NETEXPORT(NetReceiveFilterGetMulticastAddressList)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETRECEIVEFILTER ReceiveFilter
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const receiveFilter = reinterpret_cast<NET_RECEIVE_FILTER const *>(ReceiveFilter);
+
+    Verifier_VerifyReceiveFilterHandle(nxPrivateGlobals, receiveFilter);
+
+    return reinterpret_cast<NET_ADAPTER_LINK_LAYER_ADDRESS const *>(
+        receiveFilter->MulticastAddressList);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -863,6 +883,26 @@ _IRQL_requires_(PASSIVE_LEVEL)
 WDFAPI
 void
 NTAPI
+NETEXPORT(NetAdapterWakeSetEapolPacketCapabilities)(
+    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ NETADAPTER Adapter,
+    _In_ const NET_ADAPTER_WAKE_EAPOL_PACKET_CAPABILITIES * Capabilities
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, Capabilities);
+
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+    nxAdapter->SetEapolPacketCapabilities(Capabilities);
+}
+
+_IRQL_requires_(PASSIVE_LEVEL)
+WDFAPI
+void
+NTAPI
 NETEXPORT(NetAdapterWakeSetPacketFilterCapabilities)(
     _In_ PNET_DRIVER_GLOBALS DriverGlobals,
     _In_ NETADAPTER Adapter,
@@ -948,6 +988,34 @@ Returns:
 --*/
 {
     auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const driverVersion = MAKEVER(nxPrivateGlobals->ClientVersion.Major,
+        nxPrivateGlobals->ClientVersion.Minor);
+
+    if (driverVersion > MAKEVER(2,0))
+    {
+        if (KdRefreshDebuggerNotPresent())
+        {
+            Verifier_ReportViolation(
+                nxPrivateGlobals,
+                VerifierAction_BugcheckAlways,
+                FailureCode_DeprecatedFunction,
+                static_cast<ULONG_PTR>(driverVersion),
+                NetAdapterOffloadSetChecksumCapabilitiesTableIndex);
+        }
+        else
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "\n\n"
+                "************************************************************\n"
+                "* NetAdapterOffloadSetChecksumCapabilities has been         \n"
+                "* deprecated. Use NetAdapterOffloadSetTxChecksumCapabilities\n"
+                "* and NetAdapterOffloadSetRxChecksumCapabilities instead.   \n"
+                "************************************************************\n"
+                "\n");
+
+            return;
+        }
+    }
 
     Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
     Verifier_VerifyIrqlPassive(nxPrivateGlobals);
@@ -956,7 +1024,7 @@ Returns:
     auto nxAdapter = GetNxAdapterFromHandle(Adapter);
     Verifier_VerifyAdapterNotStarted(nxPrivateGlobals, nxAdapter);
 
-    nxAdapter->m_NxOffloadManager->SetChecksumHardwareCapabilities(HardwareCapabilities);
+    nxAdapter->m_offloadManager->SetChecksumHardwareCapabilities(HardwareCapabilities);
 }
 
 WDFAPI
@@ -968,6 +1036,35 @@ NETEXPORT(NetOffloadIsChecksumIPv4Enabled)(
 )
 {
     auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const driverVersion = MAKEVER(nxPrivateGlobals->ClientVersion.Major,
+        nxPrivateGlobals->ClientVersion.Minor);
+
+    if (driverVersion > MAKEVER(2,0))
+    {
+        if (KdRefreshDebuggerNotPresent())
+        {
+            Verifier_ReportViolation(
+                nxPrivateGlobals,
+                VerifierAction_BugcheckAlways,
+                FailureCode_DeprecatedFunction,
+                static_cast<ULONG_PTR>(driverVersion),
+                NetOffloadIsChecksumIPv4EnabledTableIndex);
+        }
+        else
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "\n\n"
+                "**********************************************************\n"
+                "* NetOffloadIsChecksumIPv4Enabled has been deprecated.    \n"
+                "* Use NetOffloadIsTxChecksumIPv4Enabled and               \n"
+                "* NetOffloadIsRxChecksumIPv4Enabled instead.              \n"
+                "**********************************************************\n"
+                "\n");
+
+            return FALSE;
+        }
+    }
+
     auto const capabilities = reinterpret_cast<NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES const *>(Offload);
 
     Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
@@ -986,6 +1083,35 @@ NETEXPORT(NetOffloadIsChecksumTcpEnabled)(
 )
 {
     auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const driverVersion = MAKEVER(nxPrivateGlobals->ClientVersion.Major,
+        nxPrivateGlobals->ClientVersion.Minor);
+
+    if (driverVersion > MAKEVER(2,0))
+    {
+        if (KdRefreshDebuggerNotPresent())
+        {
+            Verifier_ReportViolation(
+                nxPrivateGlobals,
+                VerifierAction_BugcheckAlways,
+                FailureCode_DeprecatedFunction,
+                static_cast<ULONG_PTR>(driverVersion),
+                NetOffloadIsChecksumTcpEnabledTableIndex);
+        }
+        else
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "\n\n"
+                "**********************************************************\n"
+                "* NetOffloadIsChecksumTcpEnabled has been deprecated.     \n"
+                "* Use NetOffloadIsTxChecksumTcpEnabled and                \n"
+                "* NetOffloadIsRxChecksumTcpEnabled instead.               \n"
+                "**********************************************************\n"
+                "\n");
+
+            return FALSE;
+        }
+    }
+
     auto const capabilities = reinterpret_cast<NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES const *>(Offload);
 
     Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
@@ -1004,6 +1130,35 @@ NETEXPORT(NetOffloadIsChecksumUdpEnabled)(
 )
 {
     auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const driverVersion = MAKEVER(nxPrivateGlobals->ClientVersion.Major,
+        nxPrivateGlobals->ClientVersion.Minor);
+
+    if (driverVersion > MAKEVER(2,0))
+    {
+        if (KdRefreshDebuggerNotPresent())
+        {
+            Verifier_ReportViolation(
+                nxPrivateGlobals,
+                VerifierAction_BugcheckAlways,
+                FailureCode_DeprecatedFunction,
+                static_cast<ULONG_PTR>(driverVersion),
+                NetOffloadIsChecksumUdpEnabledTableIndex);
+        }
+        else
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                "\n\n"
+                "**********************************************************\n"
+                "* NetOffloadIsChecksumUdpEnabled has been deprecated.     \n"
+                "* Use NetOffloadIsTxChecksumUdpEnabled and                \n"
+                "* NetOffloadIsRxChecksumUdpEnabled instead.               \n"
+                "**********************************************************\n"
+                "\n");
+
+            return FALSE;
+        }
+    }
+
     auto const capabilities = reinterpret_cast<NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES const *>(Offload);
 
     Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
@@ -1016,41 +1171,183 @@ NETEXPORT(NetOffloadIsChecksumUdpEnabled)(
 WDFAPI
 _IRQL_requires_(PASSIVE_LEVEL)
 void
-NETEXPORT(NetAdapterOffloadSetLsoCapabilities)(
+NETEXPORT(NetAdapterOffloadSetTxChecksumCapabilities)(
     _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETADAPTER Adapter,
-    _In_ NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES * HardwareCapabilities
+    _In_ const NET_ADAPTER_OFFLOAD_TX_CHECKSUM_CAPABILITIES * HardwareCapabilities
 )
-/*++
-Routine Description:
-
-    This routine sets the LSO hardware capabilities of the Network Adapter and provides
-    a callback to notify active LSO capabilities to the client driver.
-
-    The client driver must call this method before calling NetAdapterStart
-
-Arguments:
-
-    Adapter - Pointer to the Adapter created in a prior call to NetAdapterCreate
-
-    HardwareCapabilities - Pointer to a initialized NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES
-    structure representing the hardware capabilities of network adapter
-
-Returns:
-    void
---*/
 {
     auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
 
     Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
     Verifier_VerifyIrqlPassive(nxPrivateGlobals);
     Verifier_VerifyTypeSize(nxPrivateGlobals, HardwareCapabilities);
-    Verifier_VerifyLsoCapabilities(nxPrivateGlobals, HardwareCapabilities);
+    Verifier_VerifyTxChecksumCapabilities(nxPrivateGlobals, HardwareCapabilities);
+    Verifier_VerifyTxChecksumHardwareCapabilities(nxPrivateGlobals, HardwareCapabilities);
+    Verifier_VerifyTxChecksumIPv6Flags(nxPrivateGlobals, HardwareCapabilities);
 
     auto nxAdapter = GetNxAdapterFromHandle(Adapter);
     Verifier_VerifyAdapterNotStarted(nxPrivateGlobals, nxAdapter);
 
-    nxAdapter->m_NxOffloadManager->SetLsoHardwareCapabilities(HardwareCapabilities);
+    nxAdapter->m_offloadManager->SetTxChecksumHardwareCapabilities(HardwareCapabilities);
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+void
+NETEXPORT(NetAdapterOffloadSetRxChecksumCapabilities)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER Adapter,
+    _In_ const NET_ADAPTER_OFFLOAD_RX_CHECKSUM_CAPABILITIES * Capabilities
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, Capabilities);
+
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+    Verifier_VerifyAdapterNotStarted(nxPrivateGlobals, nxAdapter);
+
+    nxAdapter->m_offloadManager->SetRxChecksumCapabilities(Capabilities);
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+BOOLEAN
+NETEXPORT(NetOffloadIsTxChecksumIPv4Enabled)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETOFFLOAD Offload
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const capabilities = reinterpret_cast<NET_OFFLOAD_TX_CHECKSUM_CAPABILITIES const *>(Offload);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, &capabilities->IPv4Capabilities);
+    Verifier_VerifyTxChecksumCapabilities(nxPrivateGlobals, &capabilities->IPv4Capabilities);
+
+    return WI_IsFlagSet(capabilities->IPv4Capabilities.Layer3Flags, NetAdapterOffloadLayer3FlagIPv4NoOptions);
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+BOOLEAN
+NETEXPORT(NetOffloadIsTxChecksumTcpEnabled)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETOFFLOAD Offload
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const capabilities = reinterpret_cast<NET_OFFLOAD_TX_CHECKSUM_CAPABILITIES const *>(Offload);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, &capabilities->TcpCapabilities);
+    Verifier_VerifyTxChecksumCapabilities(nxPrivateGlobals, &capabilities->TcpCapabilities);
+    Verifier_VerifyTxChecksumLayer4Capabilities(nxPrivateGlobals, &capabilities->TcpCapabilities);
+
+    return WI_IsFlagSet(capabilities->TcpCapabilities.Layer4Flags, NetAdapterOffloadLayer4FlagTcpNoOptions);
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+BOOLEAN
+NETEXPORT(NetOffloadIsTxChecksumUdpEnabled)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETOFFLOAD Offload
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const capabilities = reinterpret_cast<NET_OFFLOAD_TX_CHECKSUM_CAPABILITIES const *>(Offload);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, &capabilities->UdpCapabilities);
+    Verifier_VerifyTxChecksumCapabilities(nxPrivateGlobals, &capabilities->UdpCapabilities);
+    Verifier_VerifyTxChecksumLayer4Capabilities(nxPrivateGlobals, &capabilities->UdpCapabilities);
+
+    return WI_IsFlagSet(capabilities->UdpCapabilities.Layer4Flags, NetAdapterOffloadLayer4FlagUdp);
+}
+
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+BOOLEAN
+NETEXPORT(NetOffloadIsRxChecksumIPv4Enabled)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETOFFLOAD Offload
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const capabilities = reinterpret_cast<NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES const *>(Offload);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, capabilities);
+
+    return capabilities->IPv4;
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+BOOLEAN
+NETEXPORT(NetOffloadIsRxChecksumTcpEnabled)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETOFFLOAD Offload
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const capabilities = reinterpret_cast<NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES const *>(Offload);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, capabilities);
+
+    return capabilities->Tcp;
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+BOOLEAN
+NETEXPORT(NetOffloadIsRxChecksumUdpEnabled)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETOFFLOAD Offload
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const capabilities = reinterpret_cast<NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES const *>(Offload);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, capabilities);
+
+    return capabilities->Udp;
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+void
+NETEXPORT(NetAdapterOffloadSetGsoCapabilities)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER Adapter,
+    _In_ NET_ADAPTER_OFFLOAD_GSO_CAPABILITIES * HardwareCapabilities
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, HardwareCapabilities);
+    Verifier_VerifyGsoCapabilities(nxPrivateGlobals, HardwareCapabilities);
+    Verifier_VerifyGsoHardwareCapabilities(nxPrivateGlobals, HardwareCapabilities);
+
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+    Verifier_VerifyAdapterNotStarted(nxPrivateGlobals, nxAdapter);
+
+    nxAdapter->m_offloadManager->SetGsoHardwareCapabilities(HardwareCapabilities);
 }
 
 WDFAPI
@@ -1062,14 +1359,15 @@ NETEXPORT(NetOffloadIsLsoIPv4Enabled)(
 )
 {
     auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
-    auto const capabilities = reinterpret_cast<NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES const *>(Offload);
+    auto const capabilities = reinterpret_cast<NET_OFFLOAD_GSO_CAPABILITIES const *>(Offload);
 
     Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
     Verifier_VerifyIrqlPassive(nxPrivateGlobals);
-    Verifier_VerifyTypeSize(nxPrivateGlobals, capabilities);
-    Verifier_VerifyLsoCapabilities(nxPrivateGlobals, capabilities);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, &capabilities->LsoCapabilities);
+    Verifier_VerifyGsoCapabilities(nxPrivateGlobals, &capabilities->LsoCapabilities);
 
-    return capabilities->IPv4;
+    return WI_IsFlagSet(capabilities->LsoCapabilities.Layer3Flags, NetAdapterOffloadLayer3FlagIPv4NoOptions) &&
+        WI_IsFlagSet(capabilities->LsoCapabilities.Layer4Flags, NetAdapterOffloadLayer4FlagTcpNoOptions);
 }
 
 WDFAPI
@@ -1081,14 +1379,55 @@ NETEXPORT(NetOffloadIsLsoIPv6Enabled)(
 )
 {
     auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
-    auto const capabilities = reinterpret_cast<NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES const *>(Offload);
+    auto const capabilities = reinterpret_cast<NET_OFFLOAD_GSO_CAPABILITIES const *>(Offload);
 
     Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
     Verifier_VerifyIrqlPassive(nxPrivateGlobals);
-    Verifier_VerifyTypeSize(nxPrivateGlobals, capabilities);
-    Verifier_VerifyLsoCapabilities(nxPrivateGlobals, capabilities);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, &capabilities->LsoCapabilities);
+    Verifier_VerifyGsoCapabilities(nxPrivateGlobals, &capabilities->LsoCapabilities);
 
-    return capabilities->IPv6;
+    return WI_IsFlagSet(capabilities->LsoCapabilities.Layer3Flags, NetAdapterOffloadLayer3FlagIPv6NoExtensions) &&
+        WI_IsFlagSet(capabilities->LsoCapabilities.Layer4Flags, NetAdapterOffloadLayer4FlagTcpNoOptions);
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+BOOLEAN
+NETEXPORT(NetOffloadIsUsoIPv4Enabled)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETOFFLOAD Offload
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const capabilities = reinterpret_cast<NET_OFFLOAD_GSO_CAPABILITIES const *>(Offload);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, &capabilities->UsoCapabilities);
+    Verifier_VerifyGsoCapabilities(nxPrivateGlobals, &capabilities->UsoCapabilities);
+
+    return WI_IsFlagSet(capabilities->UsoCapabilities.Layer3Flags, NetAdapterOffloadLayer3FlagIPv4NoOptions) &&
+        WI_IsFlagSet(capabilities->UsoCapabilities.Layer4Flags, NetAdapterOffloadLayer4FlagUdp);
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+BOOLEAN
+NETEXPORT(NetOffloadIsUsoIPv6Enabled)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETOFFLOAD Offload
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const capabilities = reinterpret_cast<NET_OFFLOAD_GSO_CAPABILITIES const *>(Offload);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, &capabilities->UsoCapabilities);
+    Verifier_VerifyGsoCapabilities(nxPrivateGlobals, &capabilities->UsoCapabilities);
+
+    return WI_IsFlagSet(capabilities->UsoCapabilities.Layer3Flags, NetAdapterOffloadLayer3FlagIPv6NoExtensions) &&
+        WI_IsFlagSet(capabilities->UsoCapabilities.Layer4Flags, NetAdapterOffloadLayer4FlagUdp);
 }
 
 WDFAPI
@@ -1127,13 +1466,13 @@ Returns:
     auto nxAdapter = GetNxAdapterFromHandle(Adapter);
     Verifier_VerifyAdapterNotStarted(nxPrivateGlobals, nxAdapter);
 
-    nxAdapter->m_NxOffloadManager->SetRscHardwareCapabilities(HardwareCapabilities);
+    nxAdapter->m_offloadManager->SetRscHardwareCapabilities(HardwareCapabilities);
 }
 
 WDFAPI
 _IRQL_requires_(PASSIVE_LEVEL)
 BOOLEAN
-NETEXPORT(NetOffloadIsRscIPv4Enabled)(
+NETEXPORT(NetOffloadIsTcpRscIPv4Enabled)(
     _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETOFFLOAD Offload
 )
@@ -1145,13 +1484,14 @@ NETEXPORT(NetOffloadIsRscIPv4Enabled)(
     Verifier_VerifyIrqlPassive(nxPrivateGlobals);
     Verifier_VerifyTypeSize(nxPrivateGlobals, capabilities);
 
-    return capabilities->IPv4;
+    return WI_IsFlagSet(capabilities->Layer3Flags, NetAdapterOffloadLayer3FlagIPv4NoOptions) &&
+        WI_IsFlagSet(capabilities->Layer4Flags, NetAdapterOffloadLayer4FlagTcpNoOptions);
 }
 
 WDFAPI
 _IRQL_requires_(PASSIVE_LEVEL)
 BOOLEAN
-NETEXPORT(NetOffloadIsRscIPv6Enabled)(
+NETEXPORT(NetOffloadIsTcpRscIPv6Enabled)(
     _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETOFFLOAD Offload
 )
@@ -1163,13 +1503,14 @@ NETEXPORT(NetOffloadIsRscIPv6Enabled)(
     Verifier_VerifyIrqlPassive(nxPrivateGlobals);
     Verifier_VerifyTypeSize(nxPrivateGlobals, capabilities);
 
-    return capabilities->IPv6;
+    return WI_IsFlagSet(capabilities->Layer3Flags, NetAdapterOffloadLayer3FlagIPv6NoExtensions) &&
+        WI_IsFlagSet(capabilities->Layer4Flags, NetAdapterOffloadLayer4FlagTcpNoOptions);
 }
 
 WDFAPI
 _IRQL_requires_(PASSIVE_LEVEL)
 BOOLEAN
-NETEXPORT(NetOffloadIsRscTimestampEnabled)(
+NETEXPORT(NetOffloadIsRscTcpTimestampOptionEnabled)(
     _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETOFFLOAD Offload
 )
@@ -1181,7 +1522,7 @@ NETEXPORT(NetOffloadIsRscTimestampEnabled)(
     Verifier_VerifyIrqlPassive(nxPrivateGlobals);
     Verifier_VerifyTypeSize(nxPrivateGlobals, capabilities);
 
-    return capabilities->Timestamp;
+    return capabilities->TcpTimestampOption;
 }
 
 _IRQL_requires_(PASSIVE_LEVEL)
@@ -1214,4 +1555,158 @@ NETEXPORT(NetAdapterReportWakeReasonMediaChange)(
 
     auto nxAdapter = GetNxAdapterFromHandle(Adapter);
     nxAdapter->ReportWakeReasonMediaChange(Reason);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+void
+NTAPI
+NETEXPORT(NetAdapterWifiDestroyPeerAddressDatapath)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER Adapter,
+    _In_ SIZE_T Demux
+    )
+{
+    auto const privateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyExtensionGlobals(privateGlobals);
+    Verifier_VerifyIrqlPassive(privateGlobals);
+
+    GetNxAdapterFromHandle(Adapter)->WifiDestroyPeerAddressDatapath(Demux);
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+void
+NETEXPORT(NetAdapterInitAddTxDemux)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER_INIT * AdapterInit,
+    _In_ NET_ADAPTER_TX_DEMUX const * Demux
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyNotNull(nxPrivateGlobals, AdapterInit);
+    Verifier_VerifyTxDemux(nxPrivateGlobals, Demux);
+
+    auto adapterInit = GetAdapterInitFromHandle(nxPrivateGlobals, AdapterInit);
+    NT_FRE_ASSERT(adapterInit->TxDemux.append(*Demux));
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+NET_ADAPTER_TX_DEMUX const *
+NETEXPORT(NetAdapterGetTxPeerAddressDemux)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER Adapter
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+
+    return GetNxAdapterFromHandle(Adapter)->GetTxPeerAddressDemux();
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+void
+NETEXPORT(NetAdapterOffloadSetIeee8021qTagCapabilities)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER Adapter,
+    _In_ NET_ADAPTER_OFFLOAD_IEEE8021Q_TAG_CAPABILITIES * HardwareCapabilities
+)
+/*++
+Routine Description:
+
+    This routine sets the IEEE 802.1 priority and vlan tagging hardware capabilities of the Network Adapter
+    and provides a callback to notify active priority and vlan tagging capabilities to the client driver.
+
+    The client driver must call this method before calling NetAdapterStart
+
+Arguments:
+
+    Adapter - Pointer to the Adapter created in a prior call to NetAdapterCreate
+
+    HardwareCapabilities - Pointer to a initialized NET_ADAPTER_OFFLOAD_IEEE8021Q_TAG_CAPABILITIES
+    structure representing the hardware capabilities of network adapter
+
+Returns:
+    void
+--*/
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, HardwareCapabilities);
+
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+    Verifier_VerifyAdapterNotStarted(nxPrivateGlobals, nxAdapter);
+
+    nxAdapter->SetIeee8021qTagCapabiilities(*HardwareCapabilities);
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+void
+NETEXPORT(NetAdapterPauseOffloadCapabilities)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER Adapter
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+    Verifier_VerifyAdapterStarted(nxPrivateGlobals, nxAdapter);
+
+    nxAdapter->PauseOffloads();
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+void
+NETEXPORT(NetAdapterResumeOffloadCapabilities)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER Adapter
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+    Verifier_VerifyAdapterStarted(nxPrivateGlobals, nxAdapter);
+    Verifier_VerifyOffloadPaused(nxPrivateGlobals, nxAdapter);
+
+    nxAdapter->ResumeOffloads();
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+void
+NETEXPORT(NetAdapterInitSetSelfManagedPowerReferences)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER_INIT * AdapterInit,
+    BOOLEAN SelfManagedPowerReference
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyExtensionGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyNotNull(nxPrivateGlobals, AdapterInit);
+
+    auto adapterInit = GetAdapterInitFromHandle(nxPrivateGlobals, AdapterInit);
+
+    // If the adapter has indicated that it is self-managing power references, we should not acquire
+    // any power references on its behalf
+    adapterInit->ShouldAcquirePowerReferencesForAdapter = !SelfManagedPowerReference;
 }

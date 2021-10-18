@@ -8,7 +8,10 @@
 
 class NxAdapter;
 
-class NxAdapterCollection : public NxCollection<NxAdapter>
+using unique_miniport_reference = wil::unique_any<NDIS_HANDLE, decltype(NdisWdfMiniportDereference), NdisWdfMiniportDereference>;
+
+class NxAdapterCollection
+    : public NxCollection<NxAdapter>
 {
 public:
 
@@ -18,8 +21,8 @@ public:
         void
     );
 
-    NxAdapter *
-    FindAndReferenceAdapterByInstanceName(
+    unique_miniport_reference
+    FindAndReferenceMiniportByInstanceName(
         _In_ UNICODE_STRING const * InstanceName
     ) const;
 

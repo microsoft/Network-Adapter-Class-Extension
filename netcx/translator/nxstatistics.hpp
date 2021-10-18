@@ -1,75 +1,143 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
 #pragma once
 
-enum class NxStatisticsCounters {
-// OID_GEN_STATISTICS
-    NumberOfPackets,
-    BytesOfData,
-    NumberOfErrors,
-// Queue Perf Counter
-    IterationCount,     // # of times polling loop runs
-    QueueDepth,         // # of packets own by the client driver
-    NblPending,         // # of NBL pending
-    PacketsCompleted,   // # of packets done processing
-    NumberofStatisticsCounters
-};
-
 struct NETADAPTER_QUEUE_PC
 {
     UINT64 NumberOfPackets;
-    UINT64 Reserved0;
-    UINT64 Reserved1;
-    UINT64 IterationCount; 
-    UINT64 QueueDepth;   
-    UINT64 NblPending;       
+    UINT64 IterationCount;
+    UINT64 QueueDepth;
+    UINT64 NblPending;
     UINT64 PacketsCompleted;
     UINT32 IterationCountBase;
-    UINT32 Reserved2;
 };
 
-// sizeof(NxStatisticsCounters) must be multiple of cacheline size to avoid false sharing
+struct PerfCounter
+{
+    UINT64 IterationCount = 0;     // # of times polling loop runs
+    UINT64 QueueDepth = 0;         // # of packets own by the client driver
+    UINT64 NblPending = 0;         // # of NBL pending
+    UINT64 PacketsCompleted = 0;   // # of packets done processing
+};
+
+struct NblTranslationPacketCounter
+{
+    UINT64 BounceSuccess = 0;
+    UINT64 BounceFailure = 0;
+    UINT64 CannotTranslate = 0;
+    UINT64 UnalignedBuffer = 0;
+};
+
+struct NblTranslationSoftwareChecksum
+{
+    UINT64 Required = 0;
+    UINT64 Failure = 0;     // Success = Required - Failure
+};
+
+struct NblTranslationSoftwareSegment
+{
+    UINT64 TcpSuccess = 0;
+    UINT64 TcpFailure = 0;
+    UINT64 UdpSuccess = 0;
+    UINT64 UdpFailure = 0;
+};
+
+struct NblTranslationDMACounter
+{
+    UINT64 InsufficientResources = 0;
+    UINT64 BufferTooSmall = 0;
+    UINT64 CannotMapSglToFragments = 0;
+    UINT64 PhysicalAddressTooLarge = 0;
+    UINT64 OtherErrors = 0;
+};
+
+class NxRxCounters
+{
+
+public:
+
+    PerfCounter
+        Perf = {};
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    Add(
+        _In_ const NxRxCounters & rxCounters
+    );
+
+    void
+    GetPerfCounter(
+        _Out_ NETADAPTER_QUEUE_PC & perfCounter
+    ) const;
+
+};
+
+class NxTxCounters
+{
+
+public:
+
+    PerfCounter
+        Perf = {};
+
+    NblTranslationPacketCounter
+        Packet = {};
+
+    NblTranslationDMACounter
+        DMA = {};
+
+    NblTranslationSoftwareChecksum
+        Checksum = {};
+
+    NblTranslationSoftwareSegment
+        Segment = {};
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    Add(
+        _In_ const NxTxCounters & txCounters
+    );
+
+    void
+    GetPerfCounter(
+        _Out_ NETADAPTER_QUEUE_PC & perfCounter
+    ) const;
+
+};
+
 class DECLSPEC_CACHEALIGN NxStatistics
 {
 
 private:
 
-    static ULONG 
-    	s_LastStatId;
+    NxRxCounters
+        m_rxStatistics = {};
 
-    ULONG64
-        m_statistics[static_cast<int>(NxStatisticsCounters::NumberofStatisticsCounters)] = {};
+    NxTxCounters
+        m_txStatistics = {};
 
-    static_assert(sizeof(NETADAPTER_QUEUE_PC) >= sizeof(m_statistics),
-                  "NETADAPTER_QUEUE_PC must be large enough to store all counters");
 public:
 
-    const ULONG 
-    	m_StatId = InterlockedIncrement((LONG *) &s_LastStatId);
+    _IRQL_requires_(PASSIVE_LEVEL)
+    const NxTxCounters &
+    GetTxCounters(
+        void
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    const NxRxCounters &
+    GetRxCounters(
+        void
+    ) const;
 
     _IRQL_requires_(PASSIVE_LEVEL)
     void
-    Increment(
-        _In_ NxStatisticsCounters counterType
+    UpdateRxCounters(
+        _In_ const NxRxCounters & rxCounters
     );
 
     _IRQL_requires_(PASSIVE_LEVEL)
     void
-    IncrementBy(
-        _In_ NxStatisticsCounters counterType,
-        _In_ ULONG64 count
+    UpdateTxCounters(
+        _In_ const NxTxCounters & txCounters
     );
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    ULONG64
-    GetCounter(
-        _In_ NxStatisticsCounters counterType
-    ) const;
-
-    void
-    GetPerfCounter(
-        _Out_ NETADAPTER_QUEUE_PC* perfCounter
-    ) const;
 };
-
-static_assert(IS_ALIGNED(sizeof(NxStatistics), SYSTEM_CACHE_ALIGNMENT_SIZE),
-              "NxStatistics must be multiple of cacheline size");

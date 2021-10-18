@@ -4,13 +4,27 @@
 
 #include <net/ring.h>
 #include <net/packet.h>
-
-#include "NxQueue.tmh"
+#include <NetClientDriverConfigurationImpl.hpp>
+#include "NxExecutionContext.hpp"
 #include "NxQueue.hpp"
+#include "NxDevice.hpp"
+#include "NxQueueVerifier.hpp"
 
 #include "NxAdapter.hpp"
 #include "version.hpp"
 #include "verifier.hpp"
+
+#include "NxQueue.tmh"
+
+using namespace NetCx::Core;
+
+static
+EVT_EXECUTION_CONTEXT_SET_NOTIFICATION_ENABLED
+    EvtNxQueueSetNotificationEnabled;
+
+static
+EVT_WDF_OBJECT_CONTEXT_CLEANUP
+    EvtQueueCleanup;
 
 void
 NetClientQueueStart(
@@ -38,11 +52,26 @@ NetClientQueueAdvance(
 
 static
 void
+NetClientQueueStartVerifying(
+    NET_CLIENT_QUEUE Queue
+)
+{
+    auto nxQueue = reinterpret_cast<NxQueue *>(Queue);
+    auto queueVerifier = GetNxQueueVerifierFromHandle(nxQueue->GetWdfObject());
+
+    queueVerifier->PreStart();
+    nxQueue->Start();
+}
+
+static
+void
 NetClientQueueAdvanceVerifying(
     NET_CLIENT_QUEUE Queue
 )
 {
-    reinterpret_cast<NxQueue *>(Queue)->AdvanceVerifying();
+    auto nxQueue = reinterpret_cast<NxQueue *>(Queue);
+
+    nxQueue->Advance(*GetNxQueueVerifierFromHandle(nxQueue->GetWdfObject()));
 }
 
 static
@@ -51,7 +80,9 @@ NetClientQueueCancelVerifying(
     NET_CLIENT_QUEUE Queue
 )
 {
-    reinterpret_cast<NxQueue *>(Queue)->CancelVerifying();
+    auto nxQueue = reinterpret_cast<NxQueue *>(Queue);
+
+    nxQueue->Cancel(*GetNxQueueVerifierFromHandle(nxQueue->GetWdfObject()));
 }
 
 static
@@ -113,7 +144,7 @@ static NET_CLIENT_QUEUE_DISPATCH const QueueDispatch
 static NET_CLIENT_QUEUE_DISPATCH const QueueDispatchVerifying
 {
     { sizeof(NET_CLIENT_QUEUE_DISPATCH) },
-    &NetClientQueueStart,
+    &NetClientQueueStartVerifying,
     &NetClientQueueStop,
     &NetClientQueueAdvanceVerifying,
     &NetClientQueueCancelVerifying,
@@ -123,24 +154,253 @@ static NET_CLIENT_QUEUE_DISPATCH const QueueDispatchVerifying
 };
 
 _Use_decl_annotations_
-NxQueue::NxQueue(
+NTSTATUS
+PacketQueueCreate(
     NX_PRIVATE_GLOBALS const & PrivateGlobals,
-    QUEUE_CREATION_CONTEXT const & InitContext,
-    ULONG QueueId,
-    NET_PACKET_QUEUE_CONFIG const & QueueConfig,
-    NxQueue::Type QueueType
-) :
-    m_privateGlobals(PrivateGlobals),
-    m_queueId(QueueId),
-    m_queueType(QueueType),
-    m_adapter(InitContext.Adapter),
-    m_packetLayout(sizeof(NET_PACKET), alignof(NET_PACKET)),
-    m_fragmentLayout(sizeof(NET_FRAGMENT), alignof(NET_FRAGMENT)),
-    m_clientQueue(InitContext.ClientQueue),
-    m_clientDispatch(InitContext.ClientDispatch),
-    m_packetQueueConfig(QueueConfig)
+    NET_PACKET_QUEUE_CONFIG const & Configuration,
+    QUEUE_CREATION_CONTEXT & InitContext,
+    WDF_OBJECT_ATTRIBUTES * ClientAttributes,
+    Queue::Type Type,
+    NETPACKETQUEUE * PacketQueue
+)
 {
-    NOTHING;
+    WDF_OBJECT_ATTRIBUTES attributes;
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, NxQueue);
+    attributes.ParentObject = InitContext.ParentObject;
+    attributes.EvtCleanupCallback = EvtQueueCleanup;
+    attributes.EvtDestroyCallback = [](WDFOBJECT Object)
+    {
+        auto nxQueue = GetNxQueueFromHandle(Object);
+        nxQueue->~NxQueue();
+    };
+
+    unique_packet_queue queue;
+
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        WdfObjectCreate(
+            &attributes,
+            reinterpret_cast<WDFOBJECT *>(&queue)),
+        "WdfObjectCreate for packet queue failed.");
+
+    auto nxQueue = new (GetNxQueueFromHandle(queue.get()))
+        NxQueue(
+            InitContext,
+            Configuration,
+            Type);
+
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        nxQueue->Initialize(InitContext),
+        "Packet queue creation failed. NxPrivateGlobals=%p", &PrivateGlobals);
+
+    if (PrivateGlobals.CxVerifierOn)
+    {
+        NxQueueVerifier * queueVerifier;
+
+        CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+            PacketQueueVerifierCreate(
+                PrivateGlobals,
+                InitContext.ParentObject,
+                queue.get(),
+                &queueVerifier),
+            "Failed to allocate queue verifier context");
+
+        CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+            queueVerifier->Initialize(nxQueue->GetRingCollection()),
+            "Failed to initialize queue verifier context");
+    }
+
+    if (ClientAttributes != WDF_NO_OBJECT_ATTRIBUTES)
+    {
+        CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+            WdfObjectAllocateContext(
+                queue.get(),
+                ClientAttributes,
+                nullptr),
+            "Failed to allocate client context. NxQueue=%p", nxQueue);
+    }
+
+    InitContext.ExecutionContext = nxQueue->GetExecutionContext();
+
+    *InitContext.AdapterDispatch =
+        PrivateGlobals.CxVerifierOn
+        ? &QueueDispatchVerifying
+        : &QueueDispatch;
+
+    *PacketQueue = queue.release();
+
+    return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+NxQueue::NxQueue(
+    QUEUE_CREATION_CONTEXT const & InitContext,
+    NET_PACKET_QUEUE_CONFIG const & QueueConfig,
+    Queue::Type QueueType
+) :
+    m_queue(static_cast<NETPACKETQUEUE>(WdfObjectContextGetObject(this))),
+    m_parent(InitContext.ParentObject),
+    m_queueType(QueueType),
+    m_queueId(InitContext.QueueId),
+    m_clientQueue(InitContext.ClientQueue),
+    m_clientDispatch(InitContext.ClientDispatch)
+{
+    INITIALIZE_EXECUTION_CONTEXT_NOTIFICATION(
+        &m_driverNotification,
+        this,
+        EvtNxQueueSetNotificationEnabled);
+
+    RtlCopyMemory(
+        &m_packetQueueConfig,
+        &QueueConfig,
+        QueueConfig.Size);
+}
+
+_Use_decl_annotations_
+void
+EvtQueueCleanup(
+    WDFOBJECT Object
+)
+{
+    auto queue = GetNxQueueFromHandle(Object);
+    queue->Cleanup();
+}
+
+void
+NxQueue::Cleanup(
+    void
+)
+{
+    if (m_packetQueueConfig.ExecutionContext != WDF_NO_HANDLE)
+    {
+        WdfObjectDereference(m_packetQueueConfig.ExecutionContext);
+    }
+}
+
+_Use_decl_annotations_
+NTSTATUS
+NxQueue::Initialize(
+    QUEUE_CREATION_CONTEXT & InitContext
+)
+{
+    if (m_packetQueueConfig.ExecutionContext != WDF_NO_HANDLE)
+    {
+        // If the client driver provided their own execution context we need to reference
+        // the object, this will protect queue execution against the driver deleting their
+        // EC object. Reference is removed in NxQueue::EvtCleanup
+        WdfObjectReference(m_packetQueueConfig.ExecutionContext);
+
+        m_executionContext = GetExecutionContextFromHandle(m_packetQueueConfig.ExecutionContext);
+    }
+    else
+    {
+        // If the client driver did not provide their own execution context we create and manage
+        // the lifetime of one for them
+        CX_RETURN_IF_NOT_NT_SUCCESS(
+            CreateFrameworkExecutionContext());
+
+        m_executionContext = m_frameworkExecutionContext.get();
+    }
+
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        Queue::Initialize(
+            InitContext.Extensions,
+            InitContext.ClientQueueConfig->NumberOfPackets,
+            InitContext.ClientQueueConfig->NumberOfFragments,
+            InitContext.ClientQueueConfig->NumberOfDataBuffers,
+            reinterpret_cast<BufferPool *>(InitContext.ClientQueueConfig->DataBufferPool)));
+
+    return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+NTSTATUS
+NxQueue::CreateFrameworkExecutionContext(
+    void
+)
+{
+    auto nxAdapter = GetNxAdapterFromHandle(GetParent());
+
+    m_frameworkExecutionContext = 
+        wil::make_unique_nothrow<ExecutionContext>(
+            nxAdapter->GetInterfaceGuid(),
+            nxAdapter->m_executionContextKnobs);
+
+    CX_RETURN_NTSTATUS_IF_MSG(
+        STATUS_INSUFFICIENT_RESOURCES,
+        !m_frameworkExecutionContext,
+        "Failed to allocate new ExecutionContext object");
+
+    // Construct a friendly name for the EC to help when analyzing traces.
+    // This is best effort, failure to do so won't fail queue creation.
+    auto const & name = nxAdapter->GetInstanceName();
+    auto const usage = m_queueType == Type::Tx
+        ? L"Send"
+        : L"Receive";
+
+    DECLARE_UNICODE_STRING_SIZE(friendlyName, 260);
+
+    auto const ntStatus = RtlUnicodeStringPrintf(
+        &friendlyName,
+        L"%ws execution context #%zu for %wZ",
+        usage,
+        m_queueId,
+        &name);
+
+    // EC gives a generic name if we pass a nullptr
+    auto const pFriendlyName = ntStatus == STATUS_SUCCESS
+        ? &friendlyName
+        : nullptr;
+
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        m_frameworkExecutionContext->Initialize(pFriendlyName),
+        "Failed to initialize new ExecutionContext object");
+
+    return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+ExecutionContext *
+NxQueue::GetExecutionContext(
+    void
+)
+{
+    return m_executionContext;
+}
+
+template <typename PFn>
+void
+InvokeQueueCallback(
+    _In_ ExecutionContext * ExecutionContext,
+    _In_ NETPACKETQUEUE Queue,
+    _In_ PFn Callback
+)
+{
+    // Invoke the queue callback from the execution context.
+    // This function returns only after the task is complete.
+
+    struct
+    {
+        NETPACKETQUEUE
+            Queue;
+
+        PFn
+            Callback;
+    } taskContext;
+
+    taskContext.Queue = Queue;
+    taskContext.Callback = Callback;
+
+    auto invokeCallbackFn = [](void * Context)
+    {
+        auto task = static_cast<decltype(taskContext) *>(Context);
+        task->Callback(task->Queue);
+    };
+
+    ExecutionContextTask invokeCallbackTask{ &taskContext, invokeCallbackFn };
+
+    // Queue an EC task and wait until it is complete
+    ExecutionContext->QueueTask(invokeCallbackTask);
+    invokeCallbackTask.WaitForCompletion();
 }
 
 void
@@ -159,15 +419,17 @@ NxQueue::Start(
         }
     }
 
-    if (m_privateGlobals.CxVerifierOn)
-    {
-        m_verifiedPacketIndex = 0;
-        m_verifiedFragmentIndex = 0;
-    }
-
     if (m_packetQueueConfig.EvtStart)
     {
-        m_packetQueueConfig.EvtStart(m_queue);
+        InvokeQueueCallback(
+            m_executionContext,
+            m_queue,
+            m_packetQueueConfig.EvtStart);
+    }
+
+    if (m_packetQueueConfig.EvtSetNotificationEnabled != nullptr)
+    {
+        m_executionContext->RegisterNotification(&m_driverNotification);
     }
 }
 
@@ -176,10 +438,20 @@ NxQueue::Stop(
     void
 )
 {
+    if (m_packetQueueConfig.EvtSetNotificationEnabled != nullptr)
+    {
+        m_executionContext->UnregisterNotification(&m_driverNotification);
+    }
+
     if (m_packetQueueConfig.EvtStop)
     {
-        m_packetQueueConfig.EvtStop(m_queue);
+        InvokeQueueCallback(
+            m_executionContext,
+            m_queue,
+            m_packetQueueConfig.EvtStop);
     }
+
+    PostStopReclaimDataBuffers();
 }
 
 void
@@ -187,181 +459,26 @@ NxQueue::Advance(
     void
 )
 {
+    PreAdvancePostDataBuffer();
     m_packetQueueConfig.EvtAdvance(m_queue);
+    PostAdvanceRefCounting();
 }
 
+
 void
-NxQueue::AdvancePreVerifying(
-    void
+NxQueue::Advance(
+    NxQueueVerifier & Verifier
 )
 {
-    auto const pr = NetRingCollectionGetPacketRing(&m_ringCollection);
-    auto const fr = NetRingCollectionGetFragmentRing(&m_ringCollection);
+    auto rings = GetRingCollection();
 
-    if (m_queueType == Type::Rx)
-    {
-        // poison fields we expect may be written by the driver
+    PreAdvancePostDataBuffer();
 
-        for (; m_verifiedPacketIndex != pr->EndIndex;
-            m_verifiedPacketIndex = NetRingIncrementIndex(pr, m_verifiedPacketIndex))
-        {
-            auto packet = NetRingGetPacketAtIndex(pr, m_verifiedPacketIndex);
+    Verifier.PreAdvance(rings);
+    m_packetQueueConfig.EvtAdvance(m_queue);
+    Verifier.PostAdvance(rings);
 
-            packet->FragmentIndex = ~0U;
-            packet->FragmentCount = static_cast<UINT16>(~0U);
-            packet->Layout = { 0x7f, 0x1ff, 0xff, 0xf, 0xf, 0xf };
-        }
-
-        auto const rxCapabilities = m_adapter->GetRxCapabilities();
-        for (; m_verifiedFragmentIndex != fr->EndIndex;
-            m_verifiedFragmentIndex = NetRingIncrementIndex(fr, m_verifiedFragmentIndex))
-        {
-            auto fragment = NetRingGetFragmentAtIndex(fr, m_verifiedFragmentIndex);
-
-            // this won't work because these are valid values.
-
-            fragment->ValidLength = ~0U;
-            fragment->Offset = ~0U;
-            if (rxCapabilities.AttachmentMode == NetRxFragmentBufferAttachmentModeDriver)
-            {
-                fragment->Capacity = ~0U;
-            }
-        }
-    }
-
-    auto vpr = m_verifiedRings[NetRingTypePacket].get();
-    auto vfr = m_verifiedRings[NetRingTypeFragment].get();
-
-    RtlCopyMemory(
-        vpr,
-        pr,
-        pr->ElementStride * pr->NumberOfElements + FIELD_OFFSET(NET_RING, Buffer[0]));
-
-    RtlCopyMemory(
-        vfr,
-        fr,
-        fr->ElementStride * fr->NumberOfElements + FIELD_OFFSET(NET_RING, Buffer[0]));
-
-    if (m_queueType == Type::Rx)
-    {
-        // poison fields we expect may be written by the driver
-
-        for (auto verifiedIndex = vpr->BeginIndex; verifiedIndex != vpr->EndIndex;
-            verifiedIndex = NetRingIncrementIndex(vpr, verifiedIndex))
-        {
-            auto packet = NetRingGetPacketAtIndex(vpr, verifiedIndex);
-
-            packet->FragmentIndex = ~0U;
-            packet->FragmentCount = static_cast<UINT16>(~0U);
-            packet->Layout = { 0x7f, 0x1ff, 0xff, 0xf, 0xf, 0xf };
-        }
-
-        auto const rxCapabilities = m_adapter->GetRxCapabilities();
-        for (auto verifiedIndex = vfr->BeginIndex; verifiedIndex != vfr->EndIndex;
-            verifiedIndex = NetRingIncrementIndex(vfr, verifiedIndex))
-        {
-            auto fragment = NetRingGetFragmentAtIndex(vfr, verifiedIndex);
-
-            // this won't work because these are valid values.
-
-            fragment->ValidLength = ~0U;
-            fragment->Offset = ~0U;
-            if (rxCapabilities.AttachmentMode == NetRxFragmentBufferAttachmentModeDriver)
-            {
-                fragment->Capacity = ~0U;
-            }
-        }
-    }
-}
-
-void
-NxQueue::AdvancePostVerifying(
-    void
-) const
-{
-    auto const pr = NetRingCollectionGetPacketRing(&m_ringCollection);
-    auto const fr = NetRingCollectionGetFragmentRing(&m_ringCollection);
-
-    Verifier_VerifyRingImmutable(
-        m_privateGlobals,
-        *m_verifiedRings[NetRingTypePacket].get(),
-        *pr);
-
-    Verifier_VerifyRingBeginIndex(
-        m_privateGlobals,
-        *m_verifiedRings[NetRingTypePacket].get(),
-        *pr);
-
-    Verifier_VerifyRingImmutable(
-        m_privateGlobals,
-        *m_verifiedRings[NetRingTypeFragment].get(),
-        *fr);
-
-    Verifier_VerifyRingBeginIndex(
-        m_privateGlobals,
-        *m_verifiedRings[NetRingTypeFragment].get(),
-        *fr);
-
-    Verifier_VerifyRingImmutableFrameworkElements(
-        m_privateGlobals,
-        *m_verifiedRings[NetRingTypePacket].get(),
-        *pr);
-
-    Verifier_VerifyRingImmutableFrameworkElements(
-        m_privateGlobals,
-        *m_verifiedRings[NetRingTypeFragment].get(),
-        *fr);
-
-    switch (m_queueType)
-    {
-
-    case Type::Tx:
-        Verifier_VerifyRingImmutableDriverTxPackets(
-            m_privateGlobals,
-            *m_verifiedRings[NetRingTypePacket].get(),
-            *pr);
-
-        Verifier_VerifyRingImmutableDriverTxFragments(
-            m_privateGlobals,
-            *m_verifiedRings[NetRingTypeFragment].get(),
-            *fr);
-
-        break;
-
-    case Type::Rx:
-        Verifier_VerifyRingImmutableDriverRx(
-            m_privateGlobals,
-            m_adapter->GetRxCapabilities(),
-            *m_verifiedRings[NetRingTypePacket].get(),
-            *pr,
-            *m_verifiedRings[NetRingTypeFragment].get(),
-            *fr);
-
-        break;
-
-    }
-}
-
-void
-NxQueue::AdvanceVerifying(
-    void
-)
-{
-    AdvancePreVerifying();
-
-    if (++m_toggle & 1)
-    {
-        KIRQL irql;
-        KeRaiseIrql(DISPATCH_LEVEL, &irql);
-        Advance();
-        KeLowerIrql(irql);
-    }
-    else
-    {
-        Advance();
-    }
-
-    AdvancePostVerifying();
+    PostAdvanceRefCounting();
 }
 
 void
@@ -369,31 +486,78 @@ NxQueue::Cancel(
     void
 )
 {
-    m_packetQueueConfig.EvtCancel(m_queue);
+    if (m_packetQueueConfig.EvtCancel != nullptr)
+    {
+        m_packetQueueConfig.EvtCancel(m_queue);
+    }
 }
 
 void
-NxQueue::CancelVerifying(
-    void
+NxQueue::Cancel(
+    NxQueueVerifier & Verifier
 )
 {
-    AdvancePreVerifying();
+    if (m_packetQueueConfig.EvtCancel != nullptr)
+    {
+        auto rings = GetRingCollection();
 
-    KIRQL irql;
-    KeRaiseIrql(DISPATCH_LEVEL, &irql);
-    Cancel();
-    KeLowerIrql(irql);
+        Verifier.PreAdvance(rings);
 
-    AdvancePostVerifying();
+        KIRQL irql;
+        KeRaiseIrql(DISPATCH_LEVEL, &irql);
+        m_packetQueueConfig.EvtCancel(m_queue);
+        KeLowerIrql(irql);
+
+        Verifier.PostAdvance(rings);
+    }
 }
 
+void
+EvtNxQueueSetNotificationEnabled(
+    void * Context,
+    BOOLEAN NotificationEnabled
+)
+{
+    auto nxQueue = static_cast<NxQueue *>(Context);
+    nxQueue->SetArmed(NotificationEnabled);
+}
 
 void
 NxQueue::SetArmed(
     bool IsArmed
 )
 {
-    m_packetQueueConfig.EvtSetNotificationEnabled(m_queue, IsArmed);
+    if (m_queueType == NxQueue::Type::Tx)
+    {
+        // To keep compatibility with shipped API only invoke a Tx Queue's
+        // SetNotificationEnabled if both are true:
+        //     - The notifiation is being armed
+        //     - There are pending Tx packets
+        auto const * pr = NetRingCollectionGetPacketRing(GetRingCollection());
+        auto const anyNicPackets = pr->BeginIndex != pr->EndIndex;
+
+        if (IsArmed && anyNicPackets)
+        {
+            m_packetQueueConfig.EvtSetNotificationEnabled(m_queue, IsArmed);
+        }
+    }
+    else
+    {
+        // To keep compatibility with shipped API only invoke a Rx Queue's
+        // SetNotificationEnabled if the notification is being armed
+        if (IsArmed)
+        {
+            m_packetQueueConfig.EvtSetNotificationEnabled(m_queue, IsArmed);
+        }
+    }
+}
+
+WDFOBJECT
+NxQueue::GetParent(
+    void
+)
+{
+    return m_parent;
 }
 
 WDFOBJECT
@@ -409,221 +573,15 @@ NxQueue::NotifyMorePacketsAvailable(
     void
 )
 {
-    m_clientDispatch->Notify(m_clientQueue);
+    m_executionContext->Notify();
 }
 
-NxAdapter *
-NxQueue::GetAdapter(
-    void
-)
-{
-    return m_adapter;
-}
-
-NTSTATUS
-NxQueue::Initialize(
-    _In_ QUEUE_CREATION_CONTEXT & InitContext
-)
-{
-    for (auto const & extension : InitContext.Extensions)
-    {
-        switch (extension.Type)
-        {
-
-        case NetExtensionTypePacket:
-            CX_RETURN_IF_NOT_NT_SUCCESS(
-                m_packetLayout.PutExtension(
-                    extension.Name,
-                    extension.Version,
-                    extension.Type,
-                    extension.Size,
-                    extension.NonWdfStyleAlignment));
-
-            break;
-
-        case NetExtensionTypeFragment:
-            CX_RETURN_IF_NOT_NT_SUCCESS(
-                m_fragmentLayout.PutExtension(
-                    extension.Name,
-                    extension.Version,
-                    extension.Type,
-                    extension.Size,
-                    extension.NonWdfStyleAlignment));
-            break;
-
-        }
-    }
-
-    CX_RETURN_IF_NOT_NT_SUCCESS(
-        CreateRing(
-            m_fragmentLayout.Generate(),
-            InitContext.ClientQueueConfig->NumberOfFragments,
-            NetRingTypeFragment));
-
-    CX_RETURN_IF_NOT_NT_SUCCESS(
-        CreateRing(
-            m_packetLayout.Generate(),
-            InitContext.ClientQueueConfig->NumberOfPackets,
-            NetRingTypePacket));
-
-    if (m_privateGlobals.CxVerifierOn)
-    {
-        *InitContext.AdapterDispatch = &QueueDispatchVerifying;
-    }
-    else
-    {
-        *InitContext.AdapterDispatch = &QueueDispatch;
-    }
-
-    return STATUS_SUCCESS;
-}
-
-NET_RING_COLLECTION const *
-NxQueue::GetRingCollection(
-    void
+NET_CLIENT_QUEUE_TX_DEMUX_PROPERTY const *
+NxQueue::GetTxDemuxProperty(
+    NET_CLIENT_QUEUE_TX_DEMUX_TYPE Type
 ) const
 {
-    return &m_ringCollection;
+    return m_clientDispatch->GetTxDemuxProperty(
+        reinterpret_cast<NET_CLIENT_QUEUE>(m_clientQueue),
+        Type);
 }
-
-_Use_decl_annotations_
-void
-NxQueue::GetExtension(
-    const NET_EXTENSION_PRIVATE * ExtensionToQuery,
-    NET_EXTENSION * Extension
-)
-{
-    NET_EXTENSION_PRIVATE const * extension = nullptr;
-    NET_RING_TYPE type = NetRingTypePacket;
-    switch (ExtensionToQuery->Type)
-    {
-
-    case NetExtensionTypePacket:
-        type = NetRingTypePacket;
-        extension = m_packetLayout.GetExtension(
-            ExtensionToQuery->Name,
-            ExtensionToQuery->Version,
-            ExtensionToQuery->Type);
-
-        break;
-
-    case NetExtensionTypeFragment:
-        type = NetRingTypeFragment;
-        extension = m_fragmentLayout.GetExtension(
-            ExtensionToQuery->Name,
-            ExtensionToQuery->Version,
-            ExtensionToQuery->Type);
-
-        break;
-
-    }
-
-    Extension->Enabled = extension != nullptr;
-    if (Extension->Enabled)
-    {
-        auto const ring = m_ringCollection.Rings[type];
-        Extension->Reserved[0] = ring->Buffer + extension->AssignedOffset;
-        Extension->Reserved[1] = reinterpret_cast<void *>(ring->ElementStride);
-    }
-}
-
-_Use_decl_annotations_
-NxTxQueue::NxTxQueue(
-    WDFOBJECT Object,
-    NX_PRIVATE_GLOBALS const & PrivateGlobals,
-    QUEUE_CREATION_CONTEXT const & InitContext,
-    ULONG QueueId,
-    NET_PACKET_QUEUE_CONFIG const & QueueConfig
-) :
-    CFxObject(static_cast<NETPACKETQUEUE>(Object)),
-    NxQueue(PrivateGlobals, InitContext, QueueId, QueueConfig, NxQueue::Type::Tx)
-{
-    m_queue = static_cast<NETPACKETQUEUE>(Object);
-}
-
-_Use_decl_annotations_
-NTSTATUS
-NxTxQueue::Initialize(
-    QUEUE_CREATION_CONTEXT & InitContext
-)
-{
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        NxQueue::Initialize(InitContext),
-        "Failed to create Tx queue.");
-
-    return STATUS_SUCCESS;
-}
-
-_Use_decl_annotations_
-NxRxQueue::NxRxQueue(
-    WDFOBJECT Object,
-    NX_PRIVATE_GLOBALS const & PrivateGlobals,
-    QUEUE_CREATION_CONTEXT const & InitContext,
-    ULONG QueueId,
-    NET_PACKET_QUEUE_CONFIG const & QueueConfig
-) :
-    CFxObject(static_cast<NETPACKETQUEUE>(Object)),
-    NxQueue(PrivateGlobals, InitContext, QueueId, QueueConfig, NxQueue::Type::Rx)
-{
-    m_queue = reinterpret_cast<NETPACKETQUEUE>(Object);
-}
-
-_Use_decl_annotations_
-NTSTATUS
-NxRxQueue::Initialize(
-    QUEUE_CREATION_CONTEXT & InitContext
-)
-{
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        NxQueue::Initialize(InitContext),
-        "Failed to create Rx queue.");
-
-    return STATUS_SUCCESS;
-}
-
-_Use_decl_annotations_
-NTSTATUS
-NxQueue::CreateRing(
-    size_t ElementSize,
-    UINT32 ElementCount,
-    NET_RING_TYPE RingType
-)
-{
-    auto const size = ElementSize * ElementCount + FIELD_OFFSET(NET_RING, Buffer[0]);
-    auto ring = reinterpret_cast<NET_RING *>(
-        ExAllocatePoolWithTag(NonPagedPoolNxCacheAligned, size, 'BRxN'));
-
-    CX_RETURN_NTSTATUS_IF(
-        STATUS_INSUFFICIENT_RESOURCES,
-        ! ring);
-
-    RtlZeroMemory(ring, size);
-    ring->OSReserved2[1] = this;
-    ring->ElementStride = static_cast<USHORT>(ElementSize);
-    ring->NumberOfElements = static_cast<UINT32>(ElementCount);
-    ring->ElementIndexMask = static_cast<ULONG>(ElementCount - 1);
-
-    m_rings[RingType].reset(ring);
-    m_ringCollection.Rings[RingType] = m_rings[RingType].get();
-
-    if (m_privateGlobals.CxVerifierOn)
-    {
-        ring = reinterpret_cast<NET_RING *>(
-            ExAllocatePoolWithTag(NonPagedPoolNxCacheAligned, size, 'BRxN'));
-
-        CX_RETURN_NTSTATUS_IF(
-            STATUS_INSUFFICIENT_RESOURCES,
-            ! ring);
-
-        RtlZeroMemory(ring, size);
-        ring->OSReserved2[1] = this;
-        ring->ElementStride = static_cast<USHORT>(ElementSize);
-        ring->NumberOfElements = static_cast<UINT32>(ElementCount);
-        ring->ElementIndexMask = static_cast<ULONG>(ElementCount - 1);
-        m_verifiedRings[RingType].reset(ring);
-        m_verifiedRingCollection.Rings[RingType] = m_verifiedRings[RingType].get();
-    }
-
-    return STATUS_SUCCESS;
-}
-

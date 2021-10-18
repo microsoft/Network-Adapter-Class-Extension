@@ -4,18 +4,29 @@
 
 #include <net/packet.h>
 
-_Success_(return)
-bool
-NxGetPacketEtherType(
-    _In_ NET_RING_COLLECTION const *descriptor,
-    _In_ NET_EXTENSION const & virtualAddressExtension,
-    _In_ NET_PACKET const *packet,
-    _Out_ USHORT *ethertype);
+NET_PACKET_LAYER2_TYPE
+TranslateMedium(
+    _In_ NDIS_MEDIUM Medium
+);
 
-NET_PACKET_LAYOUT
+void
 NxGetPacketLayout(
-    _In_ NDIS_MEDIUM mediaType,
-    _In_ NET_RING_COLLECTION const *descriptor,
-    _In_ NET_EXTENSION const & virtualAddressExtension,
-    _In_ NET_PACKET const *packet,
-    _In_ size_t PayloadBackfill = 0);
+    _In_ NDIS_MEDIUM MediaType,
+    _In_ NET_RING_COLLECTION const * Descriptor,
+    _In_ NET_EXTENSION const & VirtualAddressExtension,
+    _Inout_ NET_PACKET * Packet,
+    _In_ size_t PayloadBackfill = 0
+);
+
+enum class AddressType : UINT8
+{
+    Unicast = 0x1,
+    Multicast = 0x2,
+    Broadcast = 0x3,
+};
+
+AddressType
+NxGetPacketAddressType(
+    _In_ NET_PACKET_LAYER2_TYPE Layer2Type,
+    _In_ NET_BUFFER const & NetBuffer
+);

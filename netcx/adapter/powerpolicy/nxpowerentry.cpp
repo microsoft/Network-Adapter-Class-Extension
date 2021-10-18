@@ -1,8 +1,9 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
 #include "precompiled.hpp"
 
-#include "NxPowerEntry.tmh"
 #include "NxPowerEntry.hpp"
+
+#include "NxPowerEntry.tmh"
 
 _Use_decl_annotations_
 NxPowerEntry::NxPowerEntry(

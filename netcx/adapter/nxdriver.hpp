@@ -1,27 +1,6 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
 
-/*++
-
-Abstract:
-
-    This is the definition of the NxDriver object.
-
---*/
-
 #pragma once
-
-#ifndef _KERNEL_MODE
-
-#include <windows.h>
-#include <wdf.h>
-#include <wdfcx.h>
-#include <wdfcxbase.h>
-
-#include <WppRecorder.h>
-
-#include "NdisUm.h"
-
-#endif // _KERNEL_MODE
 
 #include <FxObjectBase.hpp>
 
@@ -39,26 +18,21 @@ GetNxDriverFromWdfDriver(
     _In_ WDFDRIVER Driver
 );
 
-class NxDriver : public CFxObject<WDFDRIVER,
-                                  NxDriver,
-                                  GetNxDriverFromWdfDriver,
-                                  false>
+class NxDriver
+    : public CFxObject<WDFDRIVER, NxDriver, GetNxDriverFromWdfDriver, false>
 {
 
 private:
 
-    RECORDER_LOG
-        m_RecorderLog = nullptr;
-
     NDIS_HANDLE
-        m_NdisMiniportDriverHandle = nullptr;
+        m_ndisMiniportDriverHandle = nullptr;
 
     NX_PRIVATE_GLOBALS *
-        m_PrivateGlobals = nullptr;
+        m_privateGlobals = nullptr;
 
     NxDriver(
-        _In_ WDFDRIVER                Driver,
-        _In_ NX_PRIVATE_GLOBALS *     NxPrivateGlobals
+        _In_ WDFDRIVER Driver,
+        _In_ NX_PRIVATE_GLOBALS * NxPrivateGlobals
     );
 
 public:
@@ -66,13 +40,13 @@ public:
     static
     NTSTATUS
     _CreateAndRegisterIfNeeded(
-        _In_ NX_PRIVATE_GLOBALS *           NxPrivateGlobals
+        _In_ NX_PRIVATE_GLOBALS * NxPrivateGlobals
     );
 
     static
     NTSTATUS
     _CreateIfNeeded(
-        _In_ WDFDRIVER           Driver,
+        _In_ WDFDRIVER Driver,
         _In_ NX_PRIVATE_GLOBALS * NxPrivateGlobals
     );
 
@@ -86,11 +60,6 @@ public:
         void
     );
 
-    RECORDER_LOG
-    GetRecorderLog(
-        void
-    ) const;
-
     NDIS_HANDLE
     GetNdisMiniportDriverHandle(
         void
@@ -100,11 +69,6 @@ public:
     GetPrivateGlobals(
         void
     ) const;
-
-    ~NxDriver(
-        void
-    );
-
 };
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxDriver, _GetNxDriverFromWdfDriver);
 

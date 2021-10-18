@@ -9,28 +9,58 @@ Abstract:
 
 #include "Nx.hpp"
 
-#include <preview/netrequest.h>
-#include <preview/netrequestqueue.h>
-
-#include "verifier.tmh"
 #include "verifier.hpp"
 
 #include <net/checksumtypes_p.h>
 #include <net/logicaladdresstypes_p.h>
-#include <net/lsotypes_p.h>
+#include <net/gsotypes_p.h>
 #include <net/mdltypes_p.h>
 #include <net/returncontexttypes_p.h>
 #include <net/rsctypes_p.h>
 #include <net/virtualaddresstypes_p.h>
+#include <net/databuffer_p.h>
+#include <net/wifi/exemptionactiontypes.h>
+#include <net/ieee8021qtypes.h>
+#include <net/packethashtypes.h>
+#include <NetClientDriverConfigurationImpl.hpp>
 
 #include "NxAdapter.hpp"
 #include "NxDevice.hpp"
 #include "NxDriver.hpp"
-#include "NxMacros.hpp"
+#include "NxExecutionContext.hpp"
+#include "NxExecutionContextTask.hpp"
 #include "NxQueue.hpp"
-#include "NxRequest.hpp"
 #include "powerpolicy/NxPowerList.hpp"
 #include "version.hpp"
+#include "netadaptercx_triage.h"
+
+#pragma warning(push)
+#pragma warning(disable:4201)
+#include <Net20.h>
+#include <Net21.h>
+#include <Net22.h>
+#pragma warning(pop)
+
+#include "verifier.tmh"
+
+//
+// Check NETADAPTERCX_BUGCHECK_DEVICE_RESET's hardcoded value
+//
+static_assert(
+    FailureCode_PlatformLevelDeviceResetPerformed == NETADAPTERCX_BUGCHECK_DEVICE_RESET,
+    "Inconsistent subcode for device reset triggered live kernel dump");
+
+static BOOLEAN
+    IgnoreVerifierDebugBreak = FALSE;
+
+_Use_decl_annotations_
+void
+VerifierInitialize(
+    void
+)
+{
+    IgnoreVerifierDebugBreak = NetClientQueryDriverConfigurationBoolean(IGNORE_VERIFIER_DEBUG_BREAK);
+}
 
 //
 // If you change this behavior, or add new ones, make sure to update these comments.
@@ -56,19 +86,35 @@ Routine Description:
 {
     switch (Action)
     {
+        case VerifierAction_DbgBreakIfDebuggerPresent:
+            if (KdRefreshDebuggerNotPresent())
+            {
+                __fallthrough;
+            }
+            else
+            {
+                DbgPrintEx(
+                    DPFLTR_DEFAULT_ID,
+                    DPFLTR_ERROR_LEVEL,
+                    "\n\n"
+                    "**********************************************************\n"
+                    "* NetAdapterCx detected a verifier rule violation.       *\n"
+                    "**********************************************************\n"
+                    "\n");
+
+                if (!IgnoreVerifierDebugBreak)
+                {
+                    __debugbreak();
+                }
+
+                break;
+            }
         case VerifierAction_BugcheckAlways:
             NetAdapterCxBugCheck(
                 PrivateGlobals,
                 FailureCode,
                 Parameter2,
                 Parameter3);
-            break;
-        case VerifierAction_DbgBreakIfDebuggerPresent:
-            if (!KdRefreshDebuggerNotPresent())
-            {
-
-                DbgBreakPoint();
-            }
             break;
         default:
             break;
@@ -156,14 +202,31 @@ Verifier_VerifyAdapterNotStarted(
     _In_ NxAdapter *         pNxAdapter
 )
 {
-    if (pNxAdapter->StartCalled())
+    if (pNxAdapter->PnpPower.DriverStartedAdapter(PrivateGlobals))
     {
         Verifier_ReportViolation(
             PrivateGlobals,
             VerifierAction_BugcheckAlways,
             FailureCode_AdapterAlreadyStarted,
-            0,
-            0);
+            reinterpret_cast<ULONG_PTR>(pNxAdapter->GetFxObject()),
+            reinterpret_cast<ULONG_PTR>(PrivateGlobals));
+    }
+}
+
+void
+Verifier_VerifyAdapterStarted(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NxAdapter * pNxAdapter
+)
+{
+    if (!pNxAdapter->PnpPower.DriverStartedAdapter(PrivateGlobals))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_AdapterNotStarted,
+            reinterpret_cast<ULONG_PTR>(pNxAdapter->GetFxObject()),
+            reinterpret_cast<ULONG_PTR>(PrivateGlobals));
     }
 }
 
@@ -192,97 +255,14 @@ Verifier_VerifyNetPowerUpTransition(
     NxDevice *           Device
 )
 {
-    if (!Device->IsDisarmInProgress())
+    if (!Device->IsWakeInProgress())
     {
         Verifier_ReportViolation(
             PrivateGlobals,
             VerifierAction_BugcheckAlways,
-            FailureCode_DisarmNotInProgress,
+            FailureCode_WakeNotInProgress,
             0,
             0);
-    }
-}
-
-void
-Verifier_VerifyNetRequestCompletionStatusNotPending(
-    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NETREQUEST NetRequest,
-    _In_ NTSTATUS   CompletionStatus
-)
-{
-    if (CompletionStatus == STATUS_PENDING)
-    {
-        Verifier_ReportViolation(
-            PrivateGlobals,
-            VerifierAction_BugcheckAlways,
-            FailureCode_CompletingNetRequestWithPendingStatus,
-            (ULONG_PTR)NetRequest,
-            0);
-    }
-}
-
-void
-Verifier_VerifyNetRequestType(
-    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NxRequest * NxRequest,
-    _In_ NDIS_REQUEST_TYPE Type
-)
-{
-    NT_ASSERT(Type != NdisRequestQueryInformation && Type != NdisRequestQueryStatistics);
-
-    if (NxRequest->m_NdisOidRequest->RequestType != Type)
-    {
-        Verifier_ReportViolation(
-            PrivateGlobals,
-            VerifierAction_BugcheckAlways,
-            FailureCode_InvalidNetRequestType,
-            NxRequest->m_NdisOidRequest->RequestType,
-            0);
-    }
-}
-
-void
-Verifier_VerifyNetRequestIsQuery(
-    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NxRequest * NxRequest
-)
-{
-    if (NxRequest->m_NdisOidRequest->RequestType != NdisRequestQueryInformation &&
-        NxRequest->m_NdisOidRequest->RequestType != NdisRequestQueryStatistics)
-    {
-        Verifier_ReportViolation(
-            PrivateGlobals,
-            VerifierAction_BugcheckAlways,
-            FailureCode_InvalidNetRequestType,
-            NxRequest->m_NdisOidRequest->RequestType,
-            0);
-    }
-}
-
-void
-Verifier_VerifyNetRequest(
-    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NxRequest * pNxRequest
-)
-{
-    switch (pNxRequest->m_NdisOidRequest->RequestType)
-    {
-        case NdisRequestSetInformation:
-            __fallthrough;
-        case NdisRequestQueryInformation:
-            __fallthrough;
-        case NdisRequestQueryStatistics:
-            __fallthrough;
-        case NdisRequestMethod:
-            break;
-        default:
-            Verifier_ReportViolation(
-                PrivateGlobals,
-                VerifierAction_BugcheckAlways,
-                FailureCode_InvalidNetRequestType,
-                pNxRequest->m_NdisOidRequest->RequestType,
-                0);
-            break;
     }
 }
 
@@ -303,189 +283,77 @@ Verifier_VerifyNotNull(
     }
 }
 
-NTSTATUS
-Verifier_VerifyQueueConfiguration(
+VOID
+Verifier_VerifyReceiveFilterCapabilities(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NET_REQUEST_QUEUE_CONFIG * QueueConfig
+    _In_ NET_ADAPTER_RECEIVE_FILTER_CAPABILITIES const * Capabilities
 )
 {
-    NTSTATUS status = STATUS_SUCCESS;
-
-    //
-    // If this checks fail we always bugcheck the system
-    //
-
-    if (QueueConfig->Adapter == NULL)
+    if (Capabilities->SupportedPacketFilters != 0 && Capabilities->EvtSetReceiveFilter == NULL)
     {
         Verifier_ReportViolation(
             PrivateGlobals,
             VerifierAction_BugcheckAlways,
-            FailureCode_InvalidQueueConfiguration,
+            FailureCode_InvalidSetReceiveFilterCallBack,
             0,
-            0);
+            (ULONG_PTR)(Capabilities->EvtSetReceiveFilter));
     }
 
-    auto nxAdapter = GetNxAdapterFromHandle(QueueConfig->Adapter);
-
-    if (QueueConfig->SizeOfSetDataHandler != sizeof(NET_REQUEST_QUEUE_SET_DATA_HANDLER))
+    if (!VERIFIER_CHECK_FLAGS(Capabilities->SupportedPacketFilters, NET_PACKET_FILTER_SUPPORTED_FLAGS))
     {
         Verifier_ReportViolation(
             PrivateGlobals,
             VerifierAction_BugcheckAlways,
-            FailureCode_InvalidQueueConfiguration,
-            QueueConfig->SizeOfSetDataHandler,
-            sizeof(NET_REQUEST_QUEUE_SET_DATA_HANDLER));
+            FailureCode_InvalidReceiveFilterCapabilities,
+            0,
+            Capabilities->SupportedPacketFilters);
     }
 
-    if (QueueConfig->SizeOfQueryDataHandler != sizeof(NET_REQUEST_QUEUE_QUERY_DATA_HANDLER))
-    {
+    if (Capabilities->SupportedPacketFilters == 0 && Capabilities->MaximumMulticastAddresses == 0U) {
         Verifier_ReportViolation(
             PrivateGlobals,
             VerifierAction_BugcheckAlways,
-            FailureCode_InvalidQueueConfiguration,
-            QueueConfig->SizeOfQueryDataHandler,
-            sizeof(NET_REQUEST_QUEUE_QUERY_DATA_HANDLER));
+            FailureCode_InvalidReceiveFilterCapabilities,
+            Capabilities->SupportedPacketFilters,
+            Capabilities->MaximumMulticastAddresses);
     }
 
-    if (QueueConfig->SizeOfMethodHandler != sizeof(NET_REQUEST_QUEUE_METHOD_HANDLER))
-    {
+    if ((Capabilities->SupportedPacketFilters & NetPacketFilterFlagMulticast) && Capabilities->MaximumMulticastAddresses == 0U) {
         Verifier_ReportViolation(
             PrivateGlobals,
             VerifierAction_BugcheckAlways,
-            FailureCode_InvalidQueueConfiguration,
-            QueueConfig->SizeOfMethodHandler,
-            sizeof(NET_REQUEST_QUEUE_METHOD_HANDLER));
+            FailureCode_InvalidReceiveFilterCapabilities,
+            Capabilities->SupportedPacketFilters,
+            Capabilities->MaximumMulticastAddresses);
     }
 
-    //
-    // Currently only DefaultSequential and DefaultParallel Queues can
-    // be created, and only one of each can be created per NxAdapter
-    // Verify that client isnt creating a duplicate queue.
-    //
-
-    switch (QueueConfig->Type)
-    {
-        case NetRequestQueueDefaultSequential:
-            if (nxAdapter->m_DefaultRequestQueue != NULL)
-            {
-                Verifier_ReportViolation(
-                    PrivateGlobals,
-                    VerifierAction_BugcheckAlways,
-                    FailureCode_DefaultRequestQueueAlreadyExists,
-                    NetRequestQueueDefaultSequential,
-                    0);
-            }
-            break;
-
-        case NetRequestQueueDefaultParallel:
-            if (nxAdapter->m_DefaultDirectRequestQueue != NULL)
-            {
-                Verifier_ReportViolation(
-                    PrivateGlobals,
-                    VerifierAction_BugcheckAlways,
-                    FailureCode_DefaultRequestQueueAlreadyExists,
-                    NetRequestQueueDefaultParallel,
-                    0);
-            }
-            break;
-
-        default:
-            Verifier_ReportViolation(
-                PrivateGlobals,
-                VerifierAction_BugcheckAlways,
-                FailureCode_InvalidRequestQueueType,
-                QueueConfig->Type,
-                0);
-            break;
+    if (!(Capabilities->SupportedPacketFilters & NetPacketFilterFlagMulticast) && Capabilities->MaximumMulticastAddresses > 0U) {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidReceiveFilterCapabilities,
+            Capabilities->SupportedPacketFilters,
+            Capabilities->MaximumMulticastAddresses);
     }
-
-    //
-    // If these checks fail we return a NTSTATUS code
-    //
-
-    //
-    // The Request queues allow the client to register handlers for varous requests
-    // using the NET_REQUEST_QUEUE_CONFIG_ADD_XXX_HANDLER
-    // The registration requires memory allocation and thus can fail. To keep the
-    // client API simple, we don't return a failure in those APIs, we just
-    // make a note of that error in the AddHandlerError bit field.
-    // This routine fails the Queue Creation in case any bit of the
-    // AddHandlerError is set.
-    //
-    if (QueueConfig->AddHandlerError.AsUchar != 0)
-    {
-        NET_REQUEST_QUEUE_ADD_HANDLER_ERROR error;
-
-        error = QueueConfig->AddHandlerError;
-
-        status = STATUS_UNSUCCESSFUL;
-
-        if (error.AllocationFailed)
-        {
-            Verifier_ReportViolation(
-                PrivateGlobals,
-                VerifierAction_DbgBreakIfDebuggerPresent,
-                FailureCode_QueueConfigurationHasError,
-                0, // Allocation failed
-                0);
-
-            status = STATUS_INSUFFICIENT_RESOURCES;
-            error.AllocationFailed = 0;
-        }
-
-        if (error.CallbackNull)
-        {
-            Verifier_ReportViolation(
-                PrivateGlobals,
-                VerifierAction_DbgBreakIfDebuggerPresent,
-                FailureCode_QueueConfigurationHasError,
-                1, // CallbackNull
-                0);
-
-            status = STATUS_INVALID_PARAMETER;
-            error.CallbackNull = 0;
-        }
-
-        if (error.AsUchar != 0)
-        {
-            Verifier_ReportViolation(
-                PrivateGlobals,
-                VerifierAction_DbgBreakIfDebuggerPresent,
-                FailureCode_QueueConfigurationHasError,
-                2, // Other error
-                0);
-
-            status = STATUS_UNSUCCESSFUL;
-        }
-    }
-
-    return status;
 }
 
-VOID
-Verifier_VerifyPacketFilter(
+void
+Verifier_VerifyReceiveFilterHandle(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NET_ADAPTER_PACKET_FILTER_CAPABILITIES const * PacketFilter
+    _In_ NET_RECEIVE_FILTER const * ReceiveFilter
 )
 {
-    if (PacketFilter->SupportedPacketFilters > 0 && PacketFilter->EvtSetPacketFilter == NULL)
-    {
-        Verifier_ReportViolation(
-            PrivateGlobals,
-            VerifierAction_BugcheckAlways,
-            FailureCode_InvalidSetPacketFilterCallBack,
-            0,
-            (ULONG_PTR)(PacketFilter->EvtSetPacketFilter));
-    }
+    Verifier_VerifyPrivateGlobals(PrivateGlobals);
+    Verifier_VerifyIrqlLessThanOrEqualDispatch(PrivateGlobals);
 
-    if (!VERIFIER_CHECK_FLAGS(PacketFilter->SupportedPacketFilters, NET_PACKET_FILTER_SUPPORTED_FLAGS))
-    {
+    if (ReceiveFilter->CurrentThread != KeGetCurrentThread()) {
         Verifier_ReportViolation(
             PrivateGlobals,
             VerifierAction_BugcheckAlways,
-            FailureCode_InvalidPacketFilterCapabilities,
+            FailureCode_SetReceiveFilterFromWrongThread,
             0,
-            PacketFilter->SupportedPacketFilters);
+            0
+        );
     }
 }
 
@@ -643,7 +511,8 @@ Verifier_VerifyQueueInitContext(
             0);
     }
 
-    if (NetQueueInit->CreatedQueueObject)
+    if (NetQueueInit->CreatedQueueObject &&
+        GetNxQueueFromHandle(NetQueueInit->CreatedQueueObject.get()) != nullptr)
     {
         Verifier_ReportViolation(
             PrivateGlobals,
@@ -654,16 +523,53 @@ Verifier_VerifyQueueInitContext(
     }
 }
 
+static
 void
 Verifier_VerifyNetPacketQueueConfiguration(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NET_PACKET_QUEUE_CONFIG const * Configuration
+    _In_ NET_PACKET_QUEUE_CONFIG const * Configuration,
+    _In_ NxQueue::Type Type
 )
 {
-    // All Evt callbacks are required
-    if (Configuration->EvtCancel == nullptr ||
+    auto const uInputSize = Configuration->Size;
+    ULONG uExpectedSize = 0;
+
+    auto const clientVersion = MAKEVER(PrivateGlobals->ClientVersion.Major, PrivateGlobals->ClientVersion.Minor);
+
+    switch (clientVersion)
+    {
+        case MAKEVER(2,0):
+            uExpectedSize = sizeof(NET_PACKET_QUEUE_CONFIG_V2_0);
+            break;
+
+        case MAKEVER(2,1):
+            uExpectedSize = sizeof(NET_PACKET_QUEUE_CONFIG_V2_1);
+            break;
+
+        case MAKEVER(2,2):
+            uExpectedSize = sizeof(NET_PACKET_QUEUE_CONFIG_V2_2);
+            break;
+    }
+
+    if (uInputSize != uExpectedSize)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_DbgBreakIfDebuggerPresent,
+            FailureCode_InvalidStructTypeSize,
+            uInputSize,
+            uExpectedSize);
+    }
+
+    NETEXECUTIONCONTEXT executionContext = uInputSize > sizeof(NET_PACKET_QUEUE_CONFIG_V2_0)
+        ? Configuration->ExecutionContext
+        : nullptr;
+
+    // All Evt callbacks are required if an execution context is not provided
+    if (executionContext == nullptr &&
+        (Configuration->EvtCancel == nullptr ||
         Configuration->EvtAdvance == nullptr ||
-        Configuration->EvtSetNotificationEnabled == nullptr)
+        Configuration->EvtSetNotificationEnabled == nullptr))
     {
         Verifier_ReportViolation(
             PrivateGlobals,
@@ -672,6 +578,60 @@ Verifier_VerifyNetPacketQueueConfiguration(
             0,
             0);
     }
+
+    if (executionContext != nullptr)
+    {
+        // If an execution context is provided the client driver can't use queue's EvtSetNotificationEnabled
+        if (Configuration->EvtSetNotificationEnabled != nullptr)
+        {
+            Verifier_ReportViolation(
+                PrivateGlobals,
+                VerifierAction_BugcheckAlways,
+                FailureCode_NetQueueInvalidConfiguration,
+                1,
+                0);
+        }
+
+        // EvtAdvance is always required
+        if (Configuration->EvtAdvance == nullptr)
+        {
+            Verifier_ReportViolation(
+                PrivateGlobals,
+                VerifierAction_BugcheckAlways,
+                FailureCode_NetQueueInvalidConfiguration,
+                2,
+                0);
+        }
+
+        // EvtCancel is required for Rx queues
+        if (Type == NxQueue::Type::Rx && Configuration->EvtCancel == nullptr)
+        {
+            Verifier_ReportViolation(
+                PrivateGlobals,
+                VerifierAction_BugcheckAlways,
+                FailureCode_NetQueueInvalidConfiguration,
+                3,
+                0);
+        }
+    }
+}
+
+void
+Verifier_VerifyNetTxQueueConfiguration(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_PACKET_QUEUE_CONFIG const * Configuration
+)
+{
+    Verifier_VerifyNetPacketQueueConfiguration(PrivateGlobals, Configuration, NxQueue::Type::Tx);
+}
+
+void
+Verifier_VerifyNetRxQueueConfiguration(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_PACKET_QUEUE_CONFIG const * Configuration
+)
+{
+    Verifier_VerifyNetPacketQueueConfiguration(PrivateGlobals, Configuration, NxQueue::Type::Rx);
 }
 
 void
@@ -873,19 +833,23 @@ Verifier_VerifyNetExtensionName(
     {
         auto const isBuiltin =
             wcscmp(ExtensionName, NET_PACKET_EXTENSION_CHECKSUM_NAME) == 0 ||
-            wcscmp(ExtensionName, NET_PACKET_EXTENSION_LSO_NAME) == 0 ||
+            wcscmp(ExtensionName, NET_PACKET_EXTENSION_GSO_NAME) == 0 ||
             wcscmp(ExtensionName, NET_PACKET_EXTENSION_RSC_NAME) == 0 ||
             wcscmp(ExtensionName, NET_PACKET_EXTENSION_RSC_TIMESTAMP_NAME) == 0 ||
+            wcscmp(ExtensionName, NET_FRAGMENT_EXTENSION_DATA_BUFFER_NAME) == 0 ||
             wcscmp(ExtensionName, NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_NAME) == 0 ||
             wcscmp(ExtensionName, NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_NAME) == 0 ||
             wcscmp(ExtensionName, NET_FRAGMENT_EXTENSION_RETURN_CONTEXT_NAME) == 0 ||
-            wcscmp(ExtensionName, NET_FRAGMENT_EXTENSION_MDL_NAME) == 0;
+            wcscmp(ExtensionName, NET_FRAGMENT_EXTENSION_MDL_NAME) == 0 ||
+            wcscmp(ExtensionName, NET_PACKET_EXTENSION_WIFI_EXEMPTION_ACTION_NAME) == 0 ||
+            wcscmp(ExtensionName, NET_PACKET_EXTENSION_IEEE8021Q_NAME) == 0 ||
+            wcscmp(ExtensionName, NET_PACKET_EXTENSION_HASH_NAME) == 0;
 
         if (! isBuiltin)
         {
             Verifier_ReportViolation(
                 PrivateGlobals,
-                VerifierAction_BugcheckAlways,
+                VerifierAction_DbgBreakIfDebuggerPresent,
                 FailureCode_InvalidNetExtensionName,
                 (ULONG_PTR)ExtensionName,
                 0);
@@ -929,6 +893,9 @@ Verifier_VerifyNetExtensionQuery(
         break;
 
     case NetExtensionTypeFragment:
+        break;
+
+    case NetExtensionTypeBuffer:
         break;
 
     default:
@@ -1117,32 +1084,79 @@ Verifier_VerifyDeviceAdapterCollectionIsEmpty(
 }
 
 void
-Verifier_VerifyLsoCapabilities(
+Verifier_VerifyGsoCapabilities(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
-    _In_ NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES const *LsoCapabilities
+    _In_ NET_ADAPTER_OFFLOAD_GSO_CAPABILITIES const *GsoCapabilities
 )
 {
-    if (LsoCapabilities->IPv4 || LsoCapabilities->IPv6)
+    auto const layer3Flags = NetAdapterOffloadLayer3FlagIPv4NoOptions |
+        NetAdapterOffloadLayer3FlagIPv6NoExtensions;
+
+    auto const layer4Flags = NetAdapterOffloadLayer4FlagTcpNoOptions |
+        NetAdapterOffloadLayer4FlagUdp;
+
+    if (WI_IsAnyFlagSet(GsoCapabilities->Layer3Flags, layer3Flags) &&
+        WI_IsAnyFlagSet(GsoCapabilities->Layer4Flags, layer4Flags))
     {
-        if (LsoCapabilities->MaximumOffloadSize == 0)
+        if (GsoCapabilities->MaximumOffloadSize == 0)
         {
             Verifier_ReportViolation(
                 PrivateGlobals,
                 VerifierAction_BugcheckAlways,
-                FailureCode_InvalidLsoCapabilities,
-                LsoCapabilities->MaximumOffloadSize,
+                FailureCode_InvalidGsoCapabilities,
+                GsoCapabilities->MaximumOffloadSize,
                 1);
         }
 
-        if (LsoCapabilities->MinimumSegmentCount == 0)
+        if (GsoCapabilities->MinimumSegmentCount == 0)
         {
             Verifier_ReportViolation(
                 PrivateGlobals,
                 VerifierAction_BugcheckAlways,
-                FailureCode_InvalidLsoCapabilities,
-                LsoCapabilities->MinimumSegmentCount,
+                FailureCode_InvalidGsoCapabilities,
+                GsoCapabilities->MinimumSegmentCount,
                 2);
         }
+    }
+
+    // TCP with only options can be supported only if TCP without options is also supported
+    if (WI_IsFlagSet(GsoCapabilities->Layer4Flags, NetAdapterOffloadLayer4FlagTcpWithOptions) &&
+        WI_IsFlagClear(GsoCapabilities->Layer4Flags, NetAdapterOffloadLayer4FlagTcpNoOptions))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidGsoCapabilities,
+            GsoCapabilities->Layer4Flags,
+            3);
+    }
+}
+
+void
+Verifier_VerifyGsoHardwareCapabilities(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_ADAPTER_OFFLOAD_GSO_CAPABILITIES const * GsoCapabilities
+)
+{
+    // We do not allow no flags to be set in Layer3Flags and Layer4Flags
+    auto const allLayer3Flags = NetAdapterOffloadLayer3FlagIPv4NoOptions |
+        NetAdapterOffloadLayer3FlagIPv4WithOptions |
+        NetAdapterOffloadLayer3FlagIPv6NoExtensions |
+        NetAdapterOffloadLayer3FlagIPv6WithExtensions;
+
+    auto const allLayer4Flags = NetAdapterOffloadLayer4FlagTcpNoOptions |
+        NetAdapterOffloadLayer4FlagTcpWithOptions |
+        NetAdapterOffloadLayer4FlagUdp;
+
+    if (WI_AreAllFlagsClear(GsoCapabilities->Layer3Flags, allLayer3Flags) &&
+        WI_AreAllFlagsClear(GsoCapabilities->Layer4Flags, allLayer4Flags))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidGsoHardwareCapabilities,
+            GsoCapabilities->Layer3Flags,
+            GsoCapabilities->Layer4Flags);
     }
 }
 
@@ -1170,7 +1184,7 @@ Verifier_VerifyRxQueueHandle(
     _In_ NETPACKETQUEUE NetRxQueue
 )
 {
-    if (!GetRxQueueFromHandle(NetRxQueue))
+    if (GetNxQueueFromHandle(NetRxQueue)->m_queueType != NxQueue::Type::Rx)
     {
         Verifier_ReportViolation(
             PrivateGlobals,
@@ -1187,7 +1201,7 @@ Verifier_VerifyTxQueueHandle(
     _In_ NETPACKETQUEUE NetTxQueue
 )
 {
-    if (!GetTxQueueFromHandle(NetTxQueue))
+    if (GetNxQueueFromHandle(NetTxQueue)->m_queueType != NxQueue::Type::Tx)
     {
         Verifier_ReportViolation(
             PrivateGlobals,
@@ -1545,7 +1559,7 @@ VerifyPacketFields(
     }
 
     auto const layer2TypeValid = NetPacketLayer2TypeUnspecified <= Packet->Layout.Layer2Type
-        && Packet->Layout.Layer2Type <= NetPacketLayer2TypeEthernet;
+        && Packet->Layout.Layer2Type <= NetPacketLayer2TypeIeee80211;
     if (! layer2TypeValid)
     {
         Verifier_ReportViolation(
@@ -1639,15 +1653,37 @@ VerifyPacketFields(
 
     if (0 != Packet->Layout.Layer4HeaderLength)
     {
-        if (Packet->Layout.Layer4Type == NetPacketLayer4TypeTcp
-            && Packet->Layout.Layer4HeaderLength < 40)
+        if (Packet->Layout.Layer4Type == NetPacketLayer4TypeTcp)
         {
-            Verifier_ReportViolation(
-                &PrivateGlobals,
-                VerifierAction_BugcheckAlways,
-                FailureCode_InvalidRingRxPacketLayer4TypeTcpLengthInvalid,
-                reinterpret_cast<ULONG_PTR>(Packet),
-                0);
+            if (Packet->Layout.Layer4HeaderLength < 20U)
+            {
+                Verifier_ReportViolation(
+                    &PrivateGlobals,
+                    VerifierAction_BugcheckAlways,
+                    FailureCode_InvalidRingRxPacketLayer4TypeTcpLengthInvalid,
+                    reinterpret_cast<ULONG_PTR>(Packet),
+                    0);
+            }
+
+            if (Packet->Layout.Layer4HeaderLength > 60U)
+            {
+                Verifier_ReportViolation(
+                    &PrivateGlobals,
+                    VerifierAction_BugcheckAlways,
+                    FailureCode_InvalidRingRxPacketLayer4TypeTcpLengthInvalid,
+                    reinterpret_cast<ULONG_PTR>(Packet),
+                    0);
+            }
+
+            if (Packet->Layout.Layer4HeaderLength & 0b11)
+            {
+                Verifier_ReportViolation(
+                    &PrivateGlobals,
+                    VerifierAction_BugcheckAlways,
+                    FailureCode_InvalidRingRxPacketLayer4TypeTcpLengthInvalid,
+                    reinterpret_cast<ULONG_PTR>(Packet),
+                    0);
+            }
         }
 
         if (Packet->Layout.Layer4Type == NetPacketLayer4TypeUdp
@@ -1711,16 +1747,6 @@ VerifyPacketFragmentsRx(
                 reinterpret_cast<ULONG_PTR>(fragmentAfter));
         }
 
-        if (! (fragmentAfter->Offset < fragmentAfter->ValidLength))
-        {
-            Verifier_ReportViolation(
-                &PrivateGlobals,
-                VerifierAction_BugcheckAlways,
-                FailureCode_InvalidRingRxPacketFragmentOffsetInvalid,
-                reinterpret_cast<ULONG_PTR>(fragmentAfter),
-                0);
-        }
-
         if (! (fragmentAfter->Offset + fragmentAfter->ValidLength <= fragmentAfter->Capacity))
         {
             Verifier_ReportViolation(
@@ -1744,14 +1770,18 @@ Verifier_VerifyRingImmutableDriverRx(
     NET_RING const & FragmentRingAfter
 )
 {
-
     bool returnedRange = true;
+    NET_PACKET* packetPrev = nullptr;
+    UINT32 pacektPrevIndex = 0;
 
     for (auto beginIndex = PacketRingBefore.BeginIndex; beginIndex != PacketRingBefore.EndIndex;
         beginIndex = NetRingIncrementIndex(&PacketRingBefore, beginIndex))
     {
         auto const packetBefore = NetRingGetPacketAtIndex(&PacketRingBefore, beginIndex);
         auto const packetAfter = NetRingGetPacketAtIndex(&PacketRingAfter, beginIndex);
+
+        // Verify if the client driver modifies any fields that they must not modifiy
+        // We do this verification for all packets including those yet to return to OS
 
         if (packetAfter->Ignore)
         {
@@ -1818,11 +1848,8 @@ Verifier_VerifyRingImmutableDriverRx(
 
         // verify packet references to fragment indexes ascend in value and do not overlap
 
-        if (beginIndex != PacketRingBefore.BeginIndex)
+        if ((beginIndex != PacketRingBefore.BeginIndex) && (packetPrev != nullptr))
         {
-            auto const indexPrev = NetRingAdvanceIndex(&PacketRingAfter, beginIndex, - 1);
-            auto const packetPrev = NetRingGetPacketAtIndex(&PacketRingAfter, indexPrev);
-
             auto const prevIndexLess = NetRingIndexLess(
                 FragmentRingAfter,
                 packetPrev->FragmentIndex,
@@ -1863,6 +1890,29 @@ Verifier_VerifyRingImmutableDriverRx(
             RxCapabilities.AttachmentMode == NetRxFragmentBufferAttachmentModeDriver,
             FragmentRingBefore,
             FragmentRingAfter);
+
+        packetPrev = packetAfter;
+        pacektPrevIndex = beginIndex;
+    }
+}
+
+_Use_decl_annotations_
+void
+Verifier_VerifyRingImmutableDriverRx(
+    NX_PRIVATE_GLOBALS const & PrivateGlobals,
+    NET_RING const & DataBufferRingBefore,
+    NET_RING const & DataBufferRingAfter
+)
+{
+    auto const size = DataBufferRingBefore.ElementStride * DataBufferRingBefore.NumberOfElements;
+    if (! RtlEqualMemory(&DataBufferRingBefore.Buffer[0], &DataBufferRingAfter.Buffer[0], size))
+    {
+        Verifier_ReportViolation(
+            &PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidRingImmutable,
+            reinterpret_cast<ULONG_PTR>(&DataBufferRingBefore),
+            reinterpret_cast<ULONG_PTR>(&DataBufferRingAfter));
     }
 }
 
@@ -1872,34 +1922,377 @@ Verifier_VerifyNdisPmCapabilities(
     _In_ NET_ADAPTER_NDIS_PM_CAPABILITIES const * NdisPmCapabilities
 )
 {
-    auto const & mediaSpecificFlags = NdisPmCapabilities->MediaSpecificWakeUpEvents;
+    ULONG uInputSize = NdisPmCapabilities->Size;
+    ULONG uExpectedSize = 0;
+
+    auto const clientVersion = MAKEVER(PrivateGlobals->ClientVersion.Major, PrivateGlobals->ClientVersion.Minor);
+
+    switch (clientVersion)
+    {
+        case MAKEVER(2,0):
+            uExpectedSize = sizeof(NET_ADAPTER_NDIS_PM_CAPABILITIES_V2_0);
+            break;
+
+        case MAKEVER(2,1):
+            uExpectedSize = sizeof(NET_ADAPTER_NDIS_PM_CAPABILITIES_V2_1);
+            break;
+
+        case MAKEVER(2,2):
+            uExpectedSize = sizeof(NET_ADAPTER_NDIS_PM_CAPABILITIES_V2_2);
+            break;
+    }
+
+    if (uInputSize != uExpectedSize)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidStructTypeSize,
+            uInputSize,
+            uExpectedSize);
+    }
+
+    auto const & mediaSpecificWakeUpEvents = NdisPmCapabilities->MediaSpecificWakeUpEvents;
+    auto const supportedProtocolOffloads = clientVersion > MAKEVER(2, 0)
+        ? NdisPmCapabilities->SupportedProtocolOffloads
+        : 0;
 
     switch (PrivateGlobals->ExtensionType)
     {
         case MediaExtensionType::Mbb:
 
-            if(!VERIFIER_CHECK_FLAGS(mediaSpecificFlags, NDIS_MBB_WAKEUP_SUPPORTED_FLAGS))
+            if(!VERIFIER_CHECK_FLAGS(mediaSpecificWakeUpEvents, NDIS_MBB_WAKEUP_SUPPORTED_FLAGS))
             {
                 Verifier_ReportViolation(
                     PrivateGlobals,
                     VerifierAction_BugcheckAlways,
                     FailureCode_InvalidMediaSpecificWakeUpFlags,
                     static_cast<ULONG_PTR>(PrivateGlobals->ExtensionType),
-                    mediaSpecificFlags);
+                    mediaSpecificWakeUpEvents);
+            }
+
+            if (supportedProtocolOffloads != 0)
+            {
+                Verifier_ReportViolation(
+                    PrivateGlobals,
+                    VerifierAction_BugcheckAlways,
+                    FailureCode_InvalidSupportedProtocolOffloadsFlags,
+                    static_cast<ULONG_PTR>(PrivateGlobals->ExtensionType),
+                    supportedProtocolOffloads);
             }
             break;
 
         case MediaExtensionType::Wifi:
 
-            if(!VERIFIER_CHECK_FLAGS(mediaSpecificFlags, NDIS_WIFI_WAKEUP_SUPPORTED_FLAGS))
+            if(!VERIFIER_CHECK_FLAGS(mediaSpecificWakeUpEvents, NDIS_WIFI_WAKEUP_SUPPORTED_FLAGS))
             {
                 Verifier_ReportViolation(
                     PrivateGlobals,
                     VerifierAction_BugcheckAlways,
                     FailureCode_InvalidMediaSpecificWakeUpFlags,
                     static_cast<ULONG_PTR>(PrivateGlobals->ExtensionType),
-                    mediaSpecificFlags);
+                    mediaSpecificWakeUpEvents);
+            }
+
+            if (!VERIFIER_CHECK_FLAGS(supportedProtocolOffloads, NDIS_PM_PROTOCOL_OFFLOAD_80211_RSN_REKEY_SUPPORTED))
+            {
+                Verifier_ReportViolation(
+                    PrivateGlobals,
+                    VerifierAction_BugcheckAlways,
+                    FailureCode_InvalidSupportedProtocolOffloadsFlags,
+                    static_cast<ULONG_PTR>(PrivateGlobals->ExtensionType),
+                    supportedProtocolOffloads);
             }
             break;
+    }
+}
+
+void
+Verifier_VerifyOidRequestDispatchSignature(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ WDFCONTEXT Context,
+    _In_ ULONG ExpectedSignature
+)
+{
+    auto dispatchContext = reinterpret_cast<DispatchContext *>(Context);
+
+    if (dispatchContext->Signature != ExpectedSignature)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidOidRequestDispatchSignature,
+            dispatchContext->Signature,
+            0);
+    }
+}
+
+_Use_decl_annotations_
+void
+Verifier_VerifyMediaExtensionTypeWifi(
+    NX_PRIVATE_GLOBALS const * PrivateGlobals
+)
+{
+    auto const type = MediaExtensionTypeFromClientGlobals(PrivateGlobals->ClientDriverGlobals);
+    if (type != MediaExtensionType::Wifi)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_IllegalPrivateApiCall,
+            0,
+            0);
+    }
+}
+
+_Use_decl_annotations_
+void
+Verifier_VerifyTxDemux(
+    NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    NET_ADAPTER_TX_DEMUX const * Demux
+)
+{
+    Verifier_VerifyTypeSize(PrivateGlobals, Demux);
+
+    auto const type = MediaExtensionTypeFromClientGlobals(PrivateGlobals->ClientDriverGlobals);
+
+    // media extensions verify their own TxDemux types
+    if (type != MediaExtensionType::None)
+    {
+        return;
+    }
+
+    if (Demux->Type != NetAdapterTxDemuxType8021p)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidTxDemuxType,
+            reinterpret_cast<ULONG_PTR>(Demux),
+            Demux->Type);
+    }
+
+    auto const range = Demux->Range - 1U;
+    auto const valid = range & 0x7;
+    if (range != 0 && valid == range)
+    {
+        return;
+    }
+
+    Verifier_ReportViolation(
+        PrivateGlobals,
+        VerifierAction_BugcheckAlways,
+        FailureCode_InvalidTxDemuxRange,
+        reinterpret_cast<ULONG_PTR>(Demux),
+        Demux->Range);
+
+}
+
+_Use_decl_annotations_
+void
+Verifier_VerifyResetDiagnosticsSize(
+    NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    SIZE_T ResetDiagnosticsSize
+)
+{
+    if (ResetDiagnosticsSize > MAX_RESET_DIAGNOSTICS_SIZE)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_ResetDiagnosticsSizeTooLarge,
+            static_cast<ULONG_PTR>(ResetDiagnosticsSize),
+            static_cast<ULONG_PTR>(MAX_RESET_DIAGNOSTICS_SIZE));
+    }
+}
+
+_Use_decl_annotations_
+void
+Verifier_VerifyIsCollectingResetDiagnostics(
+    NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    NxDevice const * Device
+)
+{
+    if (!Device->IsCollectingResetDiagnostics())
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_IsNotCollectingResetDiagnostics,
+            reinterpret_cast<ULONG_PTR>(Device),
+            0);
+    }
+}
+
+_Use_decl_annotations_
+void
+Verifier_VerifyTaskNotQueued(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NxExecutionContextTask * Task
+)
+{
+    if (Task->IsTaskQueued())
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidExecutionContextTask,
+            reinterpret_cast<ULONG_PTR>(Task),
+            0);
+    }
+}
+
+void
+Verifier_VerifyExecutionContextConfig(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_EXECUTION_CONTEXT_CONFIG const * Config
+)
+{
+    if (Config->EvtSetNotificationEnabled == nullptr)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidExecutionContextConfig,
+            0,
+            0);
+    }
+}
+
+void
+Verifier_VerifyTxChecksumCapabilities(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_ADAPTER_OFFLOAD_TX_CHECKSUM_CAPABILITIES const * TxChecksumCapabilities
+)
+{
+    // IP/TCP packets without options/extensions must be supported if options/extensions are supported
+    if (WI_IsFlagSet(TxChecksumCapabilities->Layer3Flags, NetAdapterOffloadLayer3FlagIPv4WithOptions) &&
+        WI_IsFlagClear(TxChecksumCapabilities->Layer3Flags, NetAdapterOffloadLayer3FlagIPv4NoOptions))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidTxChecksumCapabilities,
+            TxChecksumCapabilities->Layer3Flags,
+            0);
+    }
+
+    if (WI_IsFlagSet(TxChecksumCapabilities->Layer3Flags, NetAdapterOffloadLayer3FlagIPv6WithExtensions) &&
+        WI_IsFlagClear(TxChecksumCapabilities->Layer3Flags, NetAdapterOffloadLayer3FlagIPv6NoExtensions))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidTxChecksumCapabilities,
+            TxChecksumCapabilities->Layer3Flags,
+            1);
+    }
+
+    if (WI_IsFlagSet(TxChecksumCapabilities->Layer4Flags, NetAdapterOffloadLayer4FlagTcpWithOptions) &&
+        WI_IsFlagClear(TxChecksumCapabilities->Layer4Flags, NetAdapterOffloadLayer4FlagTcpNoOptions))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidTxChecksumCapabilities,
+            TxChecksumCapabilities->Layer4Flags,
+            2);
+    }
+}
+
+void
+Verifier_VerifyTxChecksumHardwareCapabilities(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_ADAPTER_OFFLOAD_TX_CHECKSUM_CAPABILITIES const * TxChecksumCapabilities
+)
+{
+    // We do not allow no flags to be set in Layer3Flags and Layer4Flags
+    auto const layer3Flags = NetAdapterOffloadLayer3FlagIPv4NoOptions |
+        NetAdapterOffloadLayer3FlagIPv4WithOptions |
+        NetAdapterOffloadLayer3FlagIPv6NoExtensions |
+        NetAdapterOffloadLayer3FlagIPv6WithExtensions;
+
+    auto const layer4Flags = NetAdapterOffloadLayer4FlagTcpNoOptions |
+        NetAdapterOffloadLayer4FlagTcpWithOptions |
+        NetAdapterOffloadLayer4FlagUdp;
+
+    if (WI_AreAllFlagsClear(TxChecksumCapabilities->Layer3Flags, layer3Flags) &&
+        WI_AreAllFlagsClear(TxChecksumCapabilities->Layer4Flags, layer4Flags))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidTxChecksumHardwareCapabilities,
+            TxChecksumCapabilities->Layer3Flags,
+            TxChecksumCapabilities->Layer4Flags);
+    }
+}
+
+void
+Verifier_VerifyTxChecksumLayer4Capabilities(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_ADAPTER_OFFLOAD_TX_CHECKSUM_CAPABILITIES const * TxChecksumCapabilities
+)
+{
+    // Layer 3 flags must be set if Layer 4 Flags are enabled
+    auto const layer3Flags = NetAdapterOffloadLayer3FlagIPv4NoOptions |
+        NetAdapterOffloadLayer3FlagIPv4WithOptions |
+        NetAdapterOffloadLayer3FlagIPv6NoExtensions |
+        NetAdapterOffloadLayer3FlagIPv6WithExtensions;
+
+    auto const layer4Flags = NetAdapterOffloadLayer4FlagTcpNoOptions |
+        NetAdapterOffloadLayer4FlagTcpWithOptions |
+        NetAdapterOffloadLayer4FlagUdp;
+
+    if (WI_IsAnyFlagSet(TxChecksumCapabilities->Layer4Flags, layer4Flags) &&
+        WI_AreAllFlagsClear(TxChecksumCapabilities->Layer3Flags, layer3Flags))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidTxChecksumLayer4Capabilities,
+            TxChecksumCapabilities->Layer3Flags,
+            TxChecksumCapabilities->Layer4Flags);
+    }
+}
+
+void
+Verifier_VerifyTxChecksumIPv6Flags(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_ADAPTER_OFFLOAD_TX_CHECKSUM_CAPABILITIES const * TxChecksumCapabilities
+)
+{
+    auto const layer4Flags = NetAdapterOffloadLayer4FlagTcpNoOptions |
+        NetAdapterOffloadLayer4FlagTcpWithOptions |
+        NetAdapterOffloadLayer4FlagUdp;
+
+    // If IPv4 flag is not set, and IPv6 flag is set, TCP/UDP flags must be set
+    if (WI_IsFlagSet(TxChecksumCapabilities->Layer3Flags, NetAdapterOffloadLayer3FlagIPv6NoExtensions) &&
+        WI_AreAllFlagsClear(TxChecksumCapabilities->Layer4Flags, layer4Flags) &&
+        WI_IsFlagClear(TxChecksumCapabilities->Layer3Flags, NetAdapterOffloadLayer3FlagIPv4NoOptions))
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidTxChecksumIPv6Flags,
+            TxChecksumCapabilities->Layer3Flags,
+            0);
+    }
+}
+
+void
+Verifier_VerifyOffloadPaused(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NxAdapter * pNxAdapter
+)
+{
+    if (pNxAdapter->m_isOffloadPaused == false)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_OffloadNotPaused,
+            reinterpret_cast<ULONG_PTR>(pNxAdapter->GetFxObject()),
+            reinterpret_cast<ULONG_PTR>(PrivateGlobals));
     }
 }

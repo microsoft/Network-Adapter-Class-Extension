@@ -12,7 +12,8 @@ public:
     NxBounceBufferPool(
         NET_RING_COLLECTION const & Rings,
         NET_EXTENSION const & VirtualAddressExtension,
-        NET_EXTENSION const & LogicalAddressExtension
+        NET_EXTENSION const & LogicalAddressExtension,
+        NET_EXTENSION const & MdlExtension
     );
 
     ~NxBounceBufferPool(
@@ -47,6 +48,9 @@ private:
 
     NET_EXTENSION const &
         m_logicalAddressExtension;
+
+    NET_EXTENSION const &
+        m_mdlExtension;
 
     NET_CLIENT_BUFFER_POOL m_bufferPool = nullptr;
     NET_CLIENT_BUFFER_POOL_DISPATCH const *m_bufferPoolDispatch = nullptr;

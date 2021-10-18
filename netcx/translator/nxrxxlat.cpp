@@ -12,9 +12,13 @@ Abstract:
 #include "NxXlatPrecomp.hpp"
 #include "NxXlatCommon.hpp"
 
+#include "NxNblDatapath.hpp"
+
 #include "NxRxXlat.tmh"
 #include "NxRxXlat.hpp"
 
+#include <ndis/nblqueue.h>
+#include <ndis/nblrsc.h>
 #include <net/ring.h>
 #include <net/packet.h>
 #include <netiodef.h>
@@ -25,12 +29,148 @@ Abstract:
 #include <net/mdl_p.h>
 #include <net/returncontext_p.h>
 #include <net/rsctypes_p.h>
+#include <net/databuffer_p.h>
+#include <net/ieee8021qtypes_p.h>
+#include <net/packethash_p.h>
 
 #include "NxPerfTuner.hpp"
-#include "NxPacketLayout.hpp"
-#include "NxChecksumInfo.hpp"
-#include "NxReceiveCoalescing.hpp"
 #include "NxNblSequence.h"
+#include "NxPacketLayout.hpp"
+#include "NxTranslationApp.hpp"
+#include "NxRxNblContext.hpp"
+
+#include <pktmonclnt.h>
+
+static
+EVT_EXECUTION_CONTEXT_POLL
+    EvtRxPollQueueStarted;
+
+static
+EVT_EXECUTION_CONTEXT_POLL
+    EvtRxPollQueueStopping;
+
+struct EX_MDL_CONTEXT
+{
+    union
+    {
+        size_t BufferIndex; //used when NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ONLY_ALLOCATE
+        NET_FRAGMENT_RETURN_CONTEXT_HANDLE RxBufferReturnContext; //used when driver manages the buffers
+    } DUMMYUNIONNAME;
+};
+
+struct MDL_EX
+{
+    EX_MDL_CONTEXT MdlContext;
+    UINT64  LogicalAddress;
+    MDL     Mdl;
+};
+
+//
+// DUMMY_VA is the argument we pass as the base address to MmSizeOfMdl when we
+// haven't allocated space yet.  (PAGE_SIZE - 1) gives a worst case value for
+// number of pages required.
+//
+#define DUMMY_VA UlongToPtr(PAGE_SIZE - 1)
+
+static size_t g_NetBufferOffset = sizeof(NET_BUFFER_LIST);
+
+PAGED
+NTSTATUS
+MdlPool::Initialize(_In_ size_t MemorySize,
+                    _In_ size_t MdlCount,
+                    _In_ bool IsPreBuilt)
+{
+    size_t slabSize;
+
+    m_IsPreBuilt = IsPreBuilt;
+
+    m_MdlSize = RTL_NUM_ALIGN_UP(RTL_SIZEOF_THROUGH_FIELD(MDL_EX, LogicalAddress) +
+                         MmSizeOfMdl(DUMMY_VA, MemorySize),
+                         sizeof(PVOID));
+
+    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES,
+                          !resize(MdlCount));
+
+    CX_RETURN_IF_NOT_NT_SUCCESS(RtlSizeTMult(m_MdlSize, MdlCount, &slabSize));
+
+    m_MdlStorage = MakeSizedPoolPtrNP<BYTE>('sksk', slabSize);
+
+    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !m_MdlStorage);
+
+    for (size_t i = 0; i < MdlCount; i++)
+    {
+        PushToReturn(reinterpret_cast<MDL_EX*>(m_MdlStorage.get() + i * m_MdlSize));
+    }
+
+    return STATUS_SUCCESS;
+}
+
+PAGED
+NTSTATUS
+NblPool::Initialize(_In_ NDIS_HANDLE NdisHandle,
+                    _In_ size_t NdlCount,
+                    _In_ NDIS_MEDIUM Medium)
+{
+    NET_BUFFER_LIST_POOL_PARAMETERS poolParameters = {};
+
+    poolParameters.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+    poolParameters.Header.Revision = NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_1;
+    poolParameters.Header.Size = sizeof(NET_BUFFER_LIST_POOL_PARAMETERS);
+    poolParameters.ProtocolId = 0;
+    poolParameters.fAllocateNetBuffer = TRUE;
+    poolParameters.PoolTag = 'xRxN';
+    poolParameters.ContextSize = 0;
+    poolParameters.DataSize = 0;
+
+    CX_RETURN_NTSTATUS_IF(
+        STATUS_INSUFFICIENT_RESOURCES,
+        ! resize(NdlCount));
+
+    m_NblStorage.reset(NdisAllocateNetBufferListPool(NdisHandle,
+                       &poolParameters));
+    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !m_NblStorage);
+
+    for (size_t i = 0; i < NdlCount; i++)
+    {
+        PNET_BUFFER_LIST nbl =
+            NdisAllocateNetBufferAndNetBufferList(m_NblStorage.get(),
+                                                  0,
+                                                  0,
+                                                  nullptr,
+                                                  0,
+                                                  0);
+
+        CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !nbl);
+
+        PNET_BUFFER nb = NET_BUFFER_LIST_FIRST_NB(nbl);
+        NET_BUFFER_FIRST_MDL(nb) = NET_BUFFER_CURRENT_MDL(nb) = nullptr;
+
+        auto internalAllocationOffset = (UCHAR*)nb - (UCHAR*)nbl;
+        if (internalAllocationOffset < 4 * sizeof(NET_BUFFER_LIST))
+            g_NetBufferOffset = internalAllocationOffset;
+
+        PushToReturn(nbl);
+
+        if (Medium == NdisMediumNative802_11)
+        {
+            auto dot11Context = MakePoolPtr<DOT11_EXTSTA_RECV_CONTEXT>('eWtX');
+
+            CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !dot11Context);
+
+            dot11Context->Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
+            dot11Context->Header.Revision = DOT11_EXTSTA_RECV_CONTEXT_REVISION_1;
+            dot11Context->Header.Size = sizeof(*dot11Context);
+            dot11Context->uPhyId = dot11_phy_type_erp;
+            dot11Context->uChCenterFrequency = 2437;
+            dot11Context->usNumberOfMPDUsReceived = 1;
+
+            // Transfer ownership to the NBL. The memory will be freed in ~NxRxXlat()
+            nbl->NetBufferListInfo[MediaSpecificInformation] = dot11Context.release();
+        }
+    }
+
+    return STATUS_SUCCESS;
+}
 
 static
 NET_CLIENT_EXTENSION RxQueueExtensions[] = {
@@ -60,6 +200,14 @@ NET_CLIENT_EXTENSION RxQueueExtensions[] = {
     },
     {
         sizeof(NET_CLIENT_EXTENSION),
+        NET_FRAGMENT_EXTENSION_DATA_BUFFER_NAME,
+        NET_FRAGMENT_EXTENSION_DATA_BUFFER_VERSION_1,
+        0,
+        NET_FRAGMENT_EXTENSION_DATA_BUFFER_VERSION_1_SIZE,
+        NetExtensionTypeFragment,
+    },
+    {
+        sizeof(NET_CLIENT_EXTENSION),
         NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_NAME,
         NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_VERSION_1,
         0,
@@ -76,57 +224,29 @@ NET_CLIENT_EXTENSION RxQueueExtensions[] = {
     },
     {
         sizeof(NET_CLIENT_EXTENSION),
-        NET_FRAGMENT_EXTENSION_MDL_NAME,
-        NET_FRAGMENT_EXTENSION_MDL_VERSION_1,
-        0,
-        NET_FRAGMENT_EXTENSION_MDL_VERSION_1_SIZE,
-        NetExtensionTypeFragment,
-    },
-    {
-        sizeof(NET_CLIENT_EXTENSION),
         NET_FRAGMENT_EXTENSION_RETURN_CONTEXT_NAME,
         NET_FRAGMENT_EXTENSION_RETURN_CONTEXT_VERSION_1,
         0,
         NET_FRAGMENT_EXTENSION_RETURN_CONTEXT_VERSION_1_SIZE,
         NetExtensionTypeFragment,
     },
-};
-
-struct RX_NBL_CONTEXT
-{
-    NxRxXlat* Queue;
-};
-
-RX_NBL_CONTEXT*
-GetRxContextFromNbl(PNET_BUFFER_LIST Nbl)
-{
-    return
-        reinterpret_cast<RX_NBL_CONTEXT*>(&NET_BUFFER_LIST_MINIPORT_RESERVED(Nbl)[0]);
-}
-
-static_assert(sizeof(RX_NBL_CONTEXT) <= FIELD_SIZE(NET_BUFFER_LIST, MiniportReserved),
-              "the size of RX_NBL_CONTEXT struct is larger than available space on NBL reserved for miniport");
-
-struct RX_NB_CONTEXT
-{
-    union
     {
-        //used when system fully manages the Rx buffers (doing both allocate and attach)
-        UINT64 DmaLogicalAddress;
-        //used when driver manages the buffers
-        NET_FRAGMENT_RETURN_CONTEXT_HANDLE RxBufferReturnContext;
-    } DUMMYUNIONNAME;
+        sizeof(NET_CLIENT_EXTENSION),
+        NET_PACKET_EXTENSION_IEEE8021Q_NAME,
+        NET_PACKET_EXTENSION_IEEE8021Q_VERSION_1,
+        0,
+        NET_PACKET_EXTENSION_IEEE8021Q_VERSION_1_SIZE,
+        NetExtensionTypePacket,
+    },
+    {
+        sizeof(NET_CLIENT_EXTENSION),
+        NET_PACKET_EXTENSION_HASH_NAME,
+        NET_PACKET_EXTENSION_HASH_VERSION_1,
+        0,
+        NET_PACKET_EXTENSION_HASH_VERSION_1_SIZE,
+        NetExtensionTypePacket,
+    },
 };
-
-RX_NB_CONTEXT*
-GetRxContextFromNb(PNET_BUFFER Nb)
-{
-    return
-        reinterpret_cast<RX_NB_CONTEXT*>(&NET_BUFFER_MINIPORT_RESERVED(Nb)[0]);
-}
-
-static_assert(sizeof(RX_NB_CONTEXT) <= FIELD_SIZE(NET_BUFFER, MiniportReserved),
-              "the size of RX_NB_CONTEXT struct is larger than available space on NB reserved for miniport");
 
 static
 void
@@ -143,33 +263,21 @@ static const NET_CLIENT_QUEUE_NOTIFY_DISPATCH QueueDispatch
     &NetClientQueueNotify
 };
 
-ULONG const MAX_DYNAMIC_PAGES = 16;
-ULONG const MAX_DYNAMIC_PACKET_SIZE = (MAX_DYNAMIC_PAGES - 1) * PAGE_SIZE + 1;
-
-constexpr
-USHORT
-ByteSwap(
-    _In_ USHORT in
-)
-{
-    return (USHORT)((in >> 8) | (in << 8));
-}
-
 PNET_BUFFER_LIST
 GetLongestSpanWithSameQueue(
     _In_        PNET_BUFFER_LIST inputChain,
-    _Out_       PNBL_QUEUE span,
+    _Out_       NBL_QUEUE *span,
     _Outptr_    NxRxXlat** queue,
     _Out_       PULONG numNbl)
 {
-    ndisInitializeNblQueue(span);
+    NdisInitializeNblQueue(span);
 
     NT_ASSERT(inputChain);
     *numNbl = 1;
 
     PNET_BUFFER_LIST first = inputChain;
     PNET_BUFFER_LIST current = first;
-    PNET_BUFFER_LIST next = current->Next;
+    PNET_BUFFER_LIST next = NET_BUFFER_LIST_NEXT_NBL(current);
 
     *queue = GetRxContextFromNbl(first)->Queue;
 
@@ -180,18 +288,18 @@ GetLongestSpanWithSameQueue(
             if (*queue == GetRxContextFromNbl(next)->Queue)
             {
                 current = next;
-                next = current->Next;
+                next = NET_BUFFER_LIST_NEXT_NBL(current);
                 (*numNbl)++;
 
                 continue;
             }
             else
             {
-                current->Next = nullptr;
+                NET_BUFFER_LIST_NEXT_NBL(current) = nullptr;
             }
         }
 
-        ndisAppendNblChainToNblQueueFast(span, first, current);
+        NdisAppendNblChainToNblQueueFast(span, first, current);
         break;
     }
 
@@ -225,32 +333,28 @@ NxNblRx::ReturnNetBufferLists(
 
 _Use_decl_annotations_
 NxRxXlat::NxRxXlat(
+    NxTranslationApp & App,
     size_t QueueId,
     NET_CLIENT_DISPATCH const * Dispatch,
     NET_CLIENT_ADAPTER Adapter,
-    NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch,
-    NxStatistics & Statistics
-) noexcept :
-    m_queueId(QueueId),
-    m_dispatch(Dispatch),
-    m_adapter(Adapter),
-    m_adapterDispatch(AdapterDispatch),
-    m_packetContext(m_rings, NetRingTypePacket),
-    m_fragmentContext(m_rings, NetRingTypeFragment),
-    m_statistics(Statistics)
+    NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
+) noexcept
+    : Queue(
+        App,
+        QueueId,
+        EvtRxPollQueueStarted,
+        EvtRxPollQueueStopping)
+    , m_dispatch(Dispatch)
+    , m_adapter(Adapter)
+    , m_adapterDispatch(AdapterDispatch)
+    , m_metadataTranslator(m_rings, m_extensions)
+    , m_packetContext(m_rings, NetRingTypePacket)
+    , m_fragmentContext(m_rings, NetRingTypeFragment)
 {
     m_adapterDispatch->GetProperties(m_adapter, &m_adapterProperties);
     m_nblDispatcher = static_cast<INxNblDispatcher *>(m_adapterProperties.NblDispatcher);
-    ndisInitializeNblQueue(&m_discardedNbl);
-}
-
-_Use_decl_annotations_
-size_t
-NxRxXlat::GetQueueId(
-    void
-) const
-{
-    return m_queueId;
+    m_pktmonLowerEdgeContext = reinterpret_cast<PKTMON_EDGE_CONTEXT const *>(m_adapterProperties.PacketMonitorLowerEdge);
+    NdisInitializeNblQueue(&m_discardedNbl);
 }
 
 NET_CLIENT_QUEUE
@@ -263,65 +367,21 @@ NxRxXlat::GetQueue(
 
 _Use_decl_annotations_
 bool
-NxRxXlat::IsGroupAffinitized(
+NxRxXlat::IsAffinitized(
     void
 ) const
 {
-    return m_groupAffinity.Mask;
+    return m_affinitySet;
 }
 
 _Use_decl_annotations_
 void
-NxRxXlat::SetGroupAffinity(
-    GROUP_AFFINITY const & GroupAffinity
+NxRxXlat::SetAffinity(
+    PROCESSOR_NUMBER const & Affinity
 )
 {
-    m_groupAffinity = GroupAffinity;
-    (void)InterlockedExchange(&m_groupAffinityChanged, 1);
-}
-
-NxRxXlat::ArmedNotifications
-NxRxXlat::GetNotificationsToArm()
-{
-    ArmedNotifications notifications;
-
-    if (m_completedPackets == 0 && m_returnedNbls == 0)
-    {
-        notifications.Flags.ShouldArmNblReturned = m_outstandingNbls != 0;
-
-        notifications.Flags.ShouldArmRxIndication = true;
-    }
-
-    return notifications;
-}
-
-_Use_decl_annotations_
-void
-NxRxXlat::ArmNotifications(
-    ArmedNotifications notifications
-)
-{
-    if (notifications.Flags.ShouldArmNblReturned)
-    {
-        ArmNetBufferListReturnedNotification();
-    }
-
-    if (notifications.Flags.ShouldArmRxIndication)
-    {
-        ArmAdapterRxNotification();
-    }
-}
-
-void
-NxRxXlat::ArmNetBufferListReturnedNotification()
-{
-    m_returnedNblNotification.Set();
-}
-
-void
-NxRxXlat::ArmAdapterRxNotification()
-{
-    m_queueDispatch->SetArmed(m_queue, true);
+    m_executionContextDispatch->SetAffinity(m_executionContext, &Affinity);
+    m_affinitySet = true;
 }
 
 void
@@ -331,9 +391,11 @@ NxRxXlat::EcReturnBuffers()
 
     NBL_QUEUE nblsToReturn;
     m_returnedNblQueue.DequeueAll(&nblsToReturn);
-    ndisAppendNblQueueToNblQueueFast(&nblsToReturn, &m_discardedNbl);
+    NdisAppendNblQueueToNblQueueFast(&nblsToReturn, &m_discardedNbl);
 
-    auto currNbl = ndisPopAllFromNblQueue(&nblsToReturn);
+    UncoalesceReturnedNbls(nblsToReturn);
+
+    auto currNbl = NdisPopAllFromNblQueue(&nblsToReturn);
 
     while (currNbl)
     {
@@ -348,65 +410,85 @@ NxRxXlat::EcPrepareBuffersForNetAdapter()
 {
     auto pr = NetRingCollectionGetPacketRing(&m_rings);
     auto fr = NetRingCollectionGetFragmentRing(&m_rings);
-    auto const lastIndex = (pr->OSReserved0 - 1) & pr->ElementIndexMask;
+    auto const prLastIndex = (pr->OSReserved0 - 1) & pr->ElementIndexMask;
+    auto const frLastIndex = (fr->OSReserved0 - 1) & fr->ElementIndexMask;
 
-    NT_FRE_ASSERT(pr->EndIndex == fr->EndIndex);
-    NT_FRE_ASSERT(pr->OSReserved0 == fr->OSReserved0);
-
-    for (; ! NblStackIsEmpty() && pr->EndIndex != lastIndex;
-        fr->EndIndex = pr->EndIndex = NetRingIncrementIndex(pr, pr->EndIndex))
+    //1. prepare the packet ring
+    for (; ! m_NblPool.IsEmpty() && pr->EndIndex != prLastIndex;
+         pr->EndIndex = NetRingIncrementIndex(pr, pr->EndIndex))
     {
 
         auto & context = m_packetContext.GetContext<PacketContext>(pr->EndIndex);
         auto packet = NetRingGetPacketAtIndex(pr, pr->EndIndex);
-        auto fragment = NetRingGetFragmentAtIndex(fr, fr->EndIndex);
 
         NT_FRE_ASSERT(context.NetBufferList == nullptr);
 
-        context.NetBufferList = NblStackPop();
-        context.NetBufferList->Next = nullptr;
+        context.NetBufferList = m_NblPool.PopToUse();
+        NT_FRE_ASSERT(NET_BUFFER_LIST_NEXT_NBL(context.NetBufferList) == nullptr);
 
         // XXX we need to review whether we zero the entire packet + extension
         RtlZeroMemory(packet, pr->ElementStride);
+    }
 
-        // XXX we need to review whether we zero the entire fragment
-        if (m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ALLOCATE_AND_ATTACH)
+    //2. prepare the fragment ring
+    for (; fr->EndIndex != frLastIndex;
+         fr->EndIndex = NetRingIncrementIndex(fr, fr->EndIndex))
+    {
+        auto fragment = NetRingGetFragmentAtIndex(fr, fr->EndIndex);
+
+        if (m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ONLY_ALLOCATE)
         {
-            auto nb = NET_BUFFER_LIST_FIRST_NB(context.NetBufferList);
-            auto mdl = NET_BUFFER_CURRENT_MDL(nb);
-            auto virtualAddress = NetExtensionGetFragmentVirtualAddress(
-                &m_extensions.Extension.VirtualAddress, fr->EndIndex);
+            // if the client driver wants to allocate from NetCx buffer pool and attach itself,
+            // nothing NetCx need to do to prepare the fragment ring
 
-            fragment->Capacity = MmGetMdlByteCount(mdl);
-            fragment->Offset = m_backfillSize;
-            fragment->Scratch = 0;
-
-            virtualAddress->VirtualAddress = MmGetMdlVirtualAddress(mdl);
-
-            if (m_extensions.Extension.LogicalAddress.Enabled)
-            {
-                auto logicalAddress = NetExtensionGetFragmentLogicalAddress(
-                    &m_extensions.Extension.LogicalAddress, fr->EndIndex);
-                logicalAddress->LogicalAddress = GetRxContextFromNb(nb)->DmaLogicalAddress;
-            }
+            // XXX we need to review whether we zero the entire fragment
+            RtlZeroMemory(fragment, fr->ElementStride);
         }
         else
         {
-            RtlZeroMemory(fragment, fr->ElementStride);
-        }
-    }
-}
+            // if the client driver wants to manage the buffer itself or it wants the OS to attach
+            // an empty buffer to the fragment ring on its behalf, we first need to make sure that
+            // we still have MDLs available
+            if (m_MdlPool.IsEmpty())
+            {
+                break;
+            }
 
-void
-NxRxXlat::EcUpdateAffinity()
-{
-    if (m_groupAffinityChanged)
-    {
-        while (InterlockedExchange(&m_groupAffinityChanged, 0))
-        {
-#ifdef _KERNEL_MODE
-            KeSetSystemGroupAffinityThread(&m_groupAffinity, NULL);
-#endif
+            // Grab next available MDL and store it in the fragment context ring
+            MDL_EX* mdlEx = m_MdlPool.PopToUse();
+            NT_FRE_ASSERT(mdlEx->Mdl.Next == nullptr);
+
+            auto& context = m_fragmentContext.GetContext<FragmentContext>(fr->EndIndex);
+            NT_FRE_ASSERT(context.Mdl == nullptr);
+            context.Mdl = &mdlEx->Mdl;
+
+            if (m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ALLOCATE_AND_ATTACH)
+            {
+                // if the client driver wants to the OS to attach buffers to the fragment
+                // ring, we have already setup this MDL to point to a empty buffer, so now
+                // we just need to update the fragment element in the ring to point to this buffer
+
+                fragment->Capacity = MmGetMdlByteCount(context.Mdl);
+                fragment->Offset = m_backfillSize;
+                fragment->Scratch = 0;
+
+                auto virtualAddress = NetExtensionGetFragmentVirtualAddress(
+                    &m_extensions.Extension.VirtualAddress, fr->EndIndex);
+                virtualAddress->VirtualAddress = MmGetMdlVirtualAddress(context.Mdl);
+
+                if (m_extensions.Extension.LogicalAddress.Enabled)
+                {
+                    auto logicalAddress = NetExtensionGetFragmentLogicalAddress(
+                        &m_extensions.Extension.LogicalAddress, fr->EndIndex);
+
+                    logicalAddress->LogicalAddress = mdlEx->LogicalAddress;
+                }
+            }
+            else
+            {
+                // XXX we need to review whether we zero the entire fragment
+                RtlZeroMemory(fragment, fr->ElementStride);
+            }
         }
     }
 }
@@ -416,8 +498,6 @@ NxRxXlat::EcYieldToNetAdapter()
 {
     m_queueDispatch->Advance(m_queue);
 }
-
-static size_t g_NetBufferOffset = sizeof(NET_BUFFER_LIST);
 
 void
 PrefetchNblForReceiveIndication(
@@ -456,47 +536,244 @@ PrefetchPacketPayloadForReceiveIndication(
     PreFetchCacheLine(PF_TEMPORAL_LEVEL_1, payload + firstReadFieldOffset);
 }
 
+_Use_decl_annotations_
+void
+NxRxXlat::UpdateRscStatisticsPreSoftwareFallback(
+    NET_BUFFER_LIST const & NetBufferList,
+    UINT64 HeaderLength,
+    NblRscStatistics & RscStatistics
+)
+{
+    if (!NdisTestNblFlag(&NetBufferList, NDIS_NBL_FLAGS_IS_IPV4) &&
+        !NdisTestNblFlag(&NetBufferList, NDIS_NBL_FLAGS_IS_IPV6))
+    {
+        return;
+    }
+
+    if (!NdisTestNblFlag(&NetBufferList, NDIS_NBL_FLAGS_IS_TCP))
+    {
+        return;
+    }
+
+    // Exit if active RSC is not enabled or hardware doesn't support RSC.
+    if (NdisTestNblFlag(&NetBufferList, NDIS_NBL_FLAGS_IS_IPV4))
+    {
+        if (!m_app.IsActiveRscIPv4Enabled() || !m_rscHardwareCapabilities.IPv4)
+        {
+            return;
+        }
+    }
+    else if (NdisTestNblFlag(&NetBufferList, NDIS_NBL_FLAGS_IS_IPV6))
+    {
+        if (!m_app.IsActiveRscIPv6Enabled() || !m_rscHardwareCapabilities.IPv6)
+        {
+            return;
+        }
+    }
+
+    auto const & rscInfo = *reinterpret_cast<NDIS_RSC_NBL_INFO const *>(
+        &NetBufferList.NetBufferListInfo[TcpRecvSegCoalesceInfo]);
+
+    if (rscInfo.Info.CoalescedSegCount > 0U)
+    {
+        // Add statistics for packets coalesced by hardware
+        InterlockedIncrementNoFence64(reinterpret_cast<LONG64 *>(&RscStatistics.ScusGenerated));
+        InterlockedAddNoFence64(
+            reinterpret_cast<LONG64 *>(&RscStatistics.NblsCoalesced),
+            rscInfo.Info.CoalescedSegCount);
+
+        UINT64 bytesCoalesced = 0U;
+        auto nb = NetBufferList.FirstNetBuffer;
+
+        while (nb != nullptr)
+        {
+            NT_ASSERT(nb->DataLength >= HeaderLength);
+            bytesCoalesced += nb->DataLength - HeaderLength;
+            nb = nb->Next;
+        }
+
+        InterlockedAddNoFence64(
+            reinterpret_cast<LONG64 *>(&RscStatistics.BytesCoalesced),
+            bytesCoalesced);
+    }
+    else
+    {
+        // Noncoalesced NBL even though active RSC offload is enabled and hardware support RSC.
+        InterlockedIncrementNoFence64(reinterpret_cast<LONG64 *>(&RscStatistics.NblsAborted));
+    }
+}
+
+_Use_decl_annotations_
+void
+NxRxXlat::UpdateRscStatisticsPostSoftwareFallback(
+    ULONG PreRscFallbackNblCount,
+    NblRscStatistics & RscStatistics
+)
+{
+    // Add statistics for NBLs coalesced by RSClib
+    auto const nblsCoalesced = m_rscContext.GetNblsCoalescedCount();
+
+    InterlockedAddNoFence64(
+        reinterpret_cast<LONG64 *>(&RscStatistics.NblsCoalesced),
+        nblsCoalesced);
+
+    InterlockedAddNoFence64(
+        reinterpret_cast<LONG64 *>(&RscStatistics.NblsAborted),
+        PreRscFallbackNblCount - nblsCoalesced);
+
+    InterlockedAddNoFence64(
+        reinterpret_cast<LONG64 *>(&RscStatistics.ScusGenerated),
+        m_rscContext.GetScusGeneratedCount());
+
+    InterlockedAddNoFence64(
+        reinterpret_cast<LONG64 *>(&RscStatistics.BytesCoalesced),
+        m_rscContext.GetBytesCoalescedCount());
+}
+
+_Use_decl_annotations_
+void
+NxRxXlat::UncoalesceReturnedNbls(
+    NBL_QUEUE & NblQueue
+)
+{
+    NET_BUFFER_LIST * nblChain = NdisPopAllFromNblQueue(&NblQueue);
+
+    if (nblChain == nullptr)
+    {
+        return;
+    }
+
+    NET_BUFFER_LIST * outputNblTail = nullptr;
+    ULONG numberOfNbls = 0U;
+    m_rscContext.PerformReceiveSegmentUncoalescing(
+        nblChain,
+        outputNblTail,
+        numberOfNbls);
+
+    NdisAppendNblChainToNblQueueFast(&NblQueue, nblChain, outputNblTail);
+}
+
+_Use_decl_annotations_
+void
+NxRxXlat::CoalesceNblsToIndicate(
+    NxNblSequence & NblSequence
+)
+{
+    if (NblSequence.GetReceiveFlags() & NDIS_RECEIVE_FLAGS_RESOURCES)
+    {
+        return;
+    }
+
+    // If hardware supports coalescing both IPv4 and IPv6 packets,
+    // don't bother to iterate through the NBLs. Non-IPv4 and non-IPv6 packets
+    // will be skipped in PerformReceiveSegmentCoalescing().
+    if (m_rscHardwareCapabilities.IPv4 && m_rscHardwareCapabilities.IPv6)
+    {
+        return;
+    }
+
+    auto const originalNblCount = NblSequence.GetCount();
+    NET_BUFFER_LIST * nblChain = NblSequence.PopAllNblsFromNblQueue();
+
+    NET_BUFFER_LIST * outputNblTail = nullptr;
+    ULONG numberOfNbls = 0U;
+
+    m_rscContext.PerformReceiveSegmentCoalescing(
+        nblChain,
+        m_rscHardwareCapabilities.IPv4,
+        m_rscHardwareCapabilities.IPv6,
+        outputNblTail,
+        numberOfNbls);
+
+    NT_FRE_ASSERT(originalNblCount >= numberOfNbls);
+
+    NblSequence.PushNblsToNblQueue(nblChain, outputNblTail, numberOfNbls);
+}
+
+void
+NxRxXlat::ReclaimSkippedFragments(
+    _In_ UINT32 CurrentIndex
+)
+{
+    auto fr = NetRingCollectionGetFragmentRing(&m_rings);
+
+    if (m_rxBufferAllocationMode != NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ONLY_ALLOCATE)
+    {
+        for (; fr->OSReserved0 != CurrentIndex;
+            fr->OSReserved0 = NetRingIncrementIndex(fr, fr->OSReserved0))
+        {
+            PMDL fragmentMdl = GetCorrespondingMdl(fr->OSReserved0);
+            MDL_EX* mdlEx = CONTAINING_RECORD(fragmentMdl, MDL_EX, Mdl);
+            m_MdlPool.PushToReturn(mdlEx);
+        }
+    }
+    else
+    {
+        fr->OSReserved0 = CurrentIndex;
+    }
+}
+
 void
 NxRxXlat::EcIndicateNblsToNdis()
 {
     auto pr = NetRingCollectionGetPacketRing(&m_rings);
     auto fr = NetRingCollectionGetFragmentRing(&m_rings);
 
-    NT_FRE_ASSERT(pr->OSReserved0 == fr->OSReserved0);
-    NT_FRE_ASSERT(pr->BeginIndex == fr->BeginIndex);
-
     NxNblSequence nblsToIndicate;
+    RxPacketCounters counters = {};
 
-    m_completedPackets = NetRingGetRangeCount(pr, pr->OSReserved0, pr->BeginIndex);
+    auto const osReserved0 = pr->OSReserved0;
 
-    for (; pr->OSReserved0 != pr->BeginIndex;
-        fr->OSReserved0 = pr->OSReserved0 = NetRingIncrementIndex(pr, pr->OSReserved0))
+    for (; ((pr->OSReserved0 != pr->BeginIndex) && (nblsToIndicate.GetCount() < NBL_RECEIVE_BATCH_SIZE));
+         pr->OSReserved0 = NetRingIncrementIndex(pr, pr->OSReserved0))
     {
         auto & context = m_packetContext.GetContext<PacketContext>(pr->OSReserved0);
         auto packet = NetRingGetPacketAtIndex(pr, pr->OSReserved0);
 
         NT_FRE_ASSERT(context.NetBufferList != nullptr);
-        NT_FRE_ASSERT(context.NetBufferList->Next == nullptr);
+        NT_FRE_ASSERT(NET_BUFFER_LIST_NEXT_NBL(context.NetBufferList) == nullptr);
 
         if (! packet->Ignore &&
-            TransferDataBufferFromNetPacketToNbl(packet, context.NetBufferList, pr->OSReserved0))
+            TransferDataBufferFromNetPacketToNbl(counters, packet, context.NetBufferList, pr->OSReserved0))
         {
+            auto const headerLength = packet->Layout.Layer2HeaderLength +
+                packet->Layout.Layer3HeaderLength +
+                packet->Layout.Layer4HeaderLength;
+            UpdateRscStatisticsPreSoftwareFallback(*context.NetBufferList, headerLength, counters.Rsc);
             nblsToIndicate.AddNbl(context.NetBufferList);
-            m_statistics.Increment(NxStatisticsCounters::NumberOfPackets);
         }
         else
         {
-            ndisAppendSingleNblToNblQueue(&m_discardedNbl, context.NetBufferList);
+            NdisAppendSingleNblToNblQueue(&m_discardedNbl, context.NetBufferList);
         }
 
         context.NetBufferList = nullptr;
     }
 
+    if (pr->OSReserved0 == pr->BeginIndex)
+    {
+        // check if any skipped fragments after the last fragment of last packet
+        ReclaimSkippedFragments(fr->BeginIndex);
+    }
+
     if (nblsToIndicate)
     {
+        PKTMON_LOG_NBL_NDIS(
+            const_cast<PKTMON_EDGE_CONTEXT *>(m_pktmonLowerEdgeContext),
+            nblsToIndicate.GetNblQueue().First,
+            PktMonDir_In);
+
+        if (m_app.IsActiveRscIPv4Enabled() || m_app.IsActiveRscIPv6Enabled())
+        {
+            auto const originalNblCount = nblsToIndicate.GetCount();
+            CoalesceNblsToIndicate(nblsToIndicate);
+            UpdateRscStatisticsPostSoftwareFallback(originalNblCount, counters.Rsc);
+        }
+
         m_outstandingNbls += nblsToIndicate.GetCount();
 
         if (!m_nblDispatcher->IndicateReceiveNetBufferLists(
+                counters,
                 nblsToIndicate.GetNblQueue().First,
                 NDIS_DEFAULT_PORT_NUMBER,
                 nblsToIndicate.GetCount(),
@@ -507,9 +784,11 @@ NxRxXlat::EcIndicateNblsToNdis()
             //
             // If that happens, we're in the process of tearing down this queue, so just
             // mark the NBLs as returned and bail out.
-            ndisAppendNblQueueToNblQueueFast(&m_discardedNbl, &nblsToIndicate.GetNblQueue());
+            NdisAppendNblQueueToNblQueueFast(&m_discardedNbl, &nblsToIndicate.GetNblQueue());
         }
     }
+
+    m_completedPackets = NetRingGetRangeCount(pr, osReserved0, pr->OSReserved0);
 }
 
 void
@@ -517,133 +796,77 @@ NxRxXlat::EcUpdatePerfCounter()
 {
     auto pr = NetRingCollectionGetPacketRing(&m_rings);
 
-    m_statistics.Increment(NxStatisticsCounters::IterationCount);
-    m_statistics.IncrementBy(NxStatisticsCounters::NblPending, m_outstandingNbls);
-    m_statistics.IncrementBy(NxStatisticsCounters::PacketsCompleted, m_returnedNbls);
-    m_statistics.IncrementBy(NxStatisticsCounters::QueueDepth, NetRingGetRangeCount(pr, pr->BeginIndex, pr->EndIndex));
+    InterlockedIncrementNoFence64(reinterpret_cast<LONG64 *>(&m_statistics.Perf.IterationCount));
+    InterlockedAddNoFence64(reinterpret_cast<LONG64 *>(&m_statistics.Perf.NblPending), m_outstandingNbls);
+    InterlockedAddNoFence64(reinterpret_cast<LONG64 *>(&m_statistics.Perf.PacketsCompleted), m_returnedNbls);
+    InterlockedAddNoFence64(reinterpret_cast<LONG64 *>(&m_statistics.Perf.QueueDepth),
+        NetRingGetRangeCount(pr, pr->BeginIndex, pr->EndIndex));
 }
 
+_Use_decl_annotations_
 void
-NxRxXlat::EcWaitForWork()
-{
-    auto notificationsToArm = GetNotificationsToArm();
-
-    // In order to handle race conditions, the notifications that should
-    // be armed at halt cannot change between the halt preparation and the
-    // actual halt. If they do change, re-arm the necessary notifications
-    // and loop again.
-    if (notificationsToArm.Value != 0 && notificationsToArm.Value == m_lastArmedNotifications.Value)
-    {
-        m_executionContext.WaitForWork();
-
-        // after halting, don't arm any notifications
-        notificationsToArm.Value = 0;
-    }
-
-    ArmNotifications(notificationsToArm);
-
-    m_lastArmedNotifications = notificationsToArm;
-}
-
-static EC_START_ROUTINE NetAdapterReceiveThread;
-
-static
-EC_RETURN
-NetAdapterReceiveThread(
-    PVOID StartContext
+EvtRxPollQueueStarted(
+    void * Context,
+    EXECUTION_CONTEXT_POLL_PARAMETERS * Parameters
 )
 {
-    reinterpret_cast<NxRxXlat*>(StartContext)->ReceiveThread();
-    return EC_RETURN();
+    auto nxRxXlat = reinterpret_cast<NxRxXlat *>(Context);
+    nxRxXlat->ReceiveNbls(Parameters);
 }
 
+_Use_decl_annotations_
 void
-NxRxXlat::SetupRxThreadProperties()
+EvtRxPollQueueStopping(
+    void * Context,
+    EXECUTION_CONTEXT_POLL_PARAMETERS * Parameters
+)
 {
-#if _KERNEL_MODE
-    // setup thread prioirty;
-    ULONG threadPriority =
-        m_dispatch->NetClientQueryDriverConfigurationUlong(RX_THREAD_PRIORITY);
-
-    KeSetBasePriorityThread(KeGetCurrentThread(), threadPriority - (LOW_REALTIME_PRIORITY + LOW_PRIORITY) / 2);
-
-    BOOLEAN setThreadAffinity =
-        m_dispatch->NetClientQueryDriverConfigurationBoolean(RX_THREAD_AFFINITY_ENABLED);
-
-    ULONG threadAffinity =
-        m_dispatch->NetClientQueryDriverConfigurationUlong(RX_THREAD_AFFINITY);
-
-    if (setThreadAffinity != FALSE)
-    {
-        GROUP_AFFINITY Affinity = { 0 };
-        GROUP_AFFINITY old;
-        PROCESSOR_NUMBER CpuNum = { 0 };
-        KeGetProcessorNumberFromIndex(threadAffinity, &CpuNum);
-        Affinity.Group = CpuNum.Group;
-        Affinity.Mask =
-            (threadAffinity != THREAD_AFFINITY_NO_MASK) ?
-                AFFINITY_MASK(CpuNum.Number) : ((ULONG_PTR)-1);
-        KeSetSystemGroupAffinityThread(&Affinity, &old);
-    }
-#endif
+    auto nxRxXlat = reinterpret_cast<NxRxXlat *>(Context);
+    nxRxXlat->ReceiveNblsStopping(Parameters);
 }
 
+_Use_decl_annotations_
 void
-NxRxXlat::ReceiveThread()
+NxRxXlat::ReceiveNbls(
+    EXECUTION_CONTEXT_POLL_PARAMETERS * Parameters
+)
 {
-    SetupRxThreadProperties();
+    EcReturnBuffers();
 
-    while (! m_executionContext.IsTerminated())
+    // provide buffers to NetAdapter only if running
+    EcPrepareBuffersForNetAdapter();
+
+    EcYieldToNetAdapter();
+    EcIndicateNblsToNdis();
+    EcUpdatePerfCounter();
+
+    Parameters->WorkCounter = m_completedPackets + m_returnedNbls;
+}
+
+_Use_decl_annotations_
+void
+NxRxXlat::ReceiveNblsStopping(
+    EXECUTION_CONTEXT_POLL_PARAMETERS * Parameters
+)
+{
+    // The termination condition is that all packets have been returned from the NIC.
+    auto const pr = NetRingCollectionGetPacketRing(&m_rings);
+    auto const fr = NetRingCollectionGetFragmentRing(&m_rings);
+    if (pr->BeginIndex == pr->EndIndex && fr->BeginIndex == fr->EndIndex)
     {
-        m_queueDispatch->Start(m_queue);
+        EcRecoverBuffers();
+        m_readyToStop.Set();
 
-        auto cancelIssued = false;
-
-        while (true)
-        {
-            EcReturnBuffers();
-
-            // provide buffers to NetAdapter only if running
-            if (! m_executionContext.IsStopping())
-            {
-                EcPrepareBuffersForNetAdapter();
-            }
-
-            EcUpdateAffinity();
-            EcYieldToNetAdapter();
-            EcIndicateNblsToNdis();
-            EcUpdatePerfCounter();
-            EcWaitForWork();
-
-            // This represents the wind down of Rx
-            if (m_executionContext.IsStopping())
-            {
-                if (!cancelIssued)
-                {
-                    // Indicate cancellation to the adapter
-                    // and drop all outstanding NBLs.
-                    //
-                    // One NBL may remain that has been partially programmed into the NIC.
-                    // So that NBL is kept around until the end.
-
-                    m_queueDispatch->Cancel(m_queue);
-
-                    cancelIssued = true;
-                }
-
-                // The termination condition is that all packets have been returned from the NIC.
-                auto const pr = NetRingCollectionGetPacketRing(&m_rings);
-                auto const fr = NetRingCollectionGetFragmentRing(&m_rings);
-                if (pr->BeginIndex == pr->EndIndex && fr->BeginIndex == fr->EndIndex)
-                {
-                    EcRecoverBuffers();
-                    m_queueDispatch->Stop(m_queue);
-                    m_executionContext.SignalStopped();
-                    break;
-                }
-            }
-        }
+        return;
     }
+
+    EcReturnBuffers();
+
+    EcYieldToNetAdapter();
+    EcIndicateNblsToNdis();
+    EcUpdatePerfCounter();
+
+    Parameters->WorkCounter = m_completedPackets + m_returnedNbls;
 }
 
 NTSTATUS
@@ -664,6 +887,9 @@ NxRxXlat::Initialize(
 
     config.Extensions = &RxQueueExtensions[0];
     config.NumberOfExtensions = ARRAYSIZE(RxQueueExtensions);
+    config.NumberOfDataBuffers = m_rxNumDataBuffers;
+    config.DataBufferPool = m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ONLY_ALLOCATE
+                            ? m_bufferPool : nullptr;
 
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         m_adapterDispatch->CreateRxQueue(
@@ -672,7 +898,9 @@ NxRxXlat::Initialize(
             &QueueDispatch,
             &config,
             &m_queue,
-            &m_queueDispatch),
+            &m_queueDispatch,
+            &m_executionContext,
+            &m_executionContextDispatch),
         "Failed to create Rx queue. NxRxXlat=%p", this);
 
     // query extensions for what was enabled
@@ -694,48 +922,40 @@ NxRxXlat::Initialize(
         m_fragmentContext.Initialize(sizeof(FragmentContext)),
         "Failed to initialize private fragment context.");
 
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        m_executionContext.Initialize(this, NetAdapterReceiveThread),
-        "Failed to start Rx execution context. NxRxXlat=%p", this);
+    m_executionContextDispatch->RegisterNotification(
+        m_executionContext,
+        &m_nblNotification);
 
-    m_executionContext.SetDebugNameHint(L"Receive", GetQueueId(), m_adapterProperties.NetLuid);
+    if (m_extensions.Extension.Rsc.Enabled)
+    {
+        m_adapterDispatch->OffloadDispatch.GetRscHardwareCapabilities(
+            m_adapter,
+            &m_rscHardwareCapabilities);
+    }
+
+    m_rscContext.Initialize();
 
     return STATUS_SUCCESS;
 }
 
-_Use_decl_annotations_
 void
-NxRxXlat::Start(
-    void
-)
+NxRxXlat::EnumerateBufferPoolCallback(
+    _In_ PVOID Context,
+    _In_ SIZE_T Index,
+    _In_ UINT64 LogicalAddress,
+    _In_ PVOID VirtualAddress)
 {
-    m_executionContext.Start();
-}
+    NxRxXlat* nxRxXlat = reinterpret_cast<NxRxXlat*>(Context);
 
-_Use_decl_annotations_
-void
-NxRxXlat::Cancel(
-    void
-)
-{
-    m_executionContext.Cancel();
-}
+    NT_FRE_ASSERT(nxRxXlat->m_MdlPool.IsPreBuilt());
 
-_Use_decl_annotations_
-void
-NxRxXlat::Stop(
-    void
-)
-{
-    m_executionContext.Stop();
-}
+    MDL_EX* mdlEx = nxRxXlat->m_MdlPool[Index];
 
-//
-// DUMMY_VA is the argument we pass as the base address to MmSizeOfMdl when we
-// haven't allocated space yet.  (PAGE_SIZE - 1) gives a worst case value for
-// number of pages required.
-//
-#define DUMMY_VA UlongToPtr(PAGE_SIZE - 1)
+    mdlEx->MdlContext.BufferIndex = Index;
+    mdlEx->LogicalAddress = LogicalAddress;
+    MmInitializeMdl(&mdlEx->Mdl, VirtualAddress, nxRxXlat->m_rxDataBufferSize);
+    MmBuildMdlForNonPagedPool(&mdlEx->Mdl);
+}
 
 NTSTATUS
 NxRxXlat::CreateVariousPools()
@@ -746,7 +966,7 @@ NxRxXlat::CreateVariousPools()
     NX_PERF_RX_NIC_CHARACTERISTICS perfCharacteristics = {};
     NX_PERF_RX_TUNING_PARAMETERS perfParameters;
     perfCharacteristics.Nic.IsDriverVerifierEnabled = !!m_adapterProperties.DriverIsVerifying;
-    perfCharacteristics.Nic.MediaType = m_mediaType;
+    perfCharacteristics.Nic.MediaType = m_adapterProperties.MediaType;
     perfCharacteristics.FragmentRingNumberOfElementsHint = datapathCapabilities.PreferredRxFragmentRingSize;
     perfCharacteristics.MaximumFragmentBufferSize = datapathCapabilities.MaximumRxFragmentSize;
     perfCharacteristics.NominalLinkSpeed = datapathCapabilities.NominalMaxRxLinkSpeed;
@@ -755,48 +975,36 @@ NxRxXlat::CreateVariousPools()
     NxPerfTunerCalculateRxParameters(&perfCharacteristics, &perfParameters);
     m_rxNumPackets = perfParameters.PacketRingElementCount;
     m_rxNumFragments = perfParameters.FragmentRingElementCount;
+    m_rxNumDataBuffers = perfParameters.NumberOfBuffers;
 
     m_backfillSize = 0;
     m_rxDataBufferSize = datapathCapabilities.MaximumRxFragmentSize + m_backfillSize;
     m_rxBufferAllocationMode = datapathCapabilities.RxMemoryManagementMode;
 
-    NET_BUFFER_LIST_POOL_PARAMETERS poolParameters = {};
+    NET_CLIENT_ADAPTER_PROPERTIES adapterProperties;
+    m_adapterDispatch->GetProperties(m_adapter, &adapterProperties);
 
-    poolParameters.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
-    poolParameters.Header.Revision = NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_1;
-    poolParameters.Header.Size = sizeof(NET_BUFFER_LIST_POOL_PARAMETERS);
-    poolParameters.ProtocolId = 0;
-    poolParameters.fAllocateNetBuffer = TRUE;
-    poolParameters.PoolTag = 'xRxN';
-    poolParameters.ContextSize = 0;
-    poolParameters.DataSize = 0;
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        m_MdlPool.Initialize(
+            m_rxDataBufferSize,
+            perfParameters.NumberOfBuffers,
+            m_rxBufferAllocationMode != NET_CLIENT_MEMORY_MANAGEMENT_MODE_DRIVER));
 
-    CX_RETURN_NTSTATUS_IF(
-        STATUS_INSUFFICIENT_RESOURCES,
-        ! m_nblStack.resize(perfParameters.NumberOfNbls));
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        m_NblPool.Initialize(m_adapterProperties.NdisAdapterHandle,
+                             perfParameters.NumberOfNbls,
+                             adapterProperties.MediaType));
 
-    m_nblStorage.reset(NdisAllocateNetBufferListPool(m_adapterProperties.NdisAdapterHandle,
-                                                            &poolParameters));
-    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !m_nblStorage);
-
-    size_t totalSize = 0;
-    size_t mdlSize = ALIGN_UP(MmSizeOfMdl(DUMMY_VA, m_rxDataBufferSize), PVOID);
-    CX_RETURN_IF_NOT_NT_SUCCESS(RtlSizeTMult(mdlSize, perfParameters.NumberOfBuffers, &totalSize));
-
-    m_MdlPool = MakeSizedPoolPtrNP<MDL>('prxc', totalSize);
-    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !m_MdlPool);
-    RtlZeroMemory(m_MdlPool.get(), totalSize);
-
-    if (m_rxBufferAllocationMode != NET_CLIENT_MEMORY_MANAGEMENT_MODE_DRIVER)
+    if (m_MdlPool.IsPreBuilt())
     {
-        // create buffer pool if the driver wants the OS to allocate Rx buffer
+        // create buffer pool if the client driver wants NetCx to allocate Rx buffer
         NET_CLIENT_BUFFER_POOL_CONFIG bufferPoolConfig = {
             &datapathCapabilities.RxMemoryConstraints,
             perfParameters.NumberOfBuffers,
             m_rxDataBufferSize,
             m_backfillSize,
             0,
-            MM_ANY_NODE_OK,                      //default numa node
+            MM_ANY_NODE_OK,                     //use the numa node supplied by adapter capabilities
             NET_CLIENT_BUFFER_POOL_FLAGS_NONE   //non-serialized version
         };
 
@@ -804,75 +1012,12 @@ NxRxXlat::CreateVariousPools()
             m_dispatch->NetClientCreateBufferPool(&bufferPoolConfig,
                                                   &m_bufferPool,
                                                   &m_bufferPoolDispatch));
-    }
 
-    NET_CLIENT_ADAPTER_PROPERTIES adapterProperties;
-    m_adapterDispatch->GetProperties(m_adapter, &adapterProperties);
-
-    for (size_t i = 0; i < perfParameters.NumberOfNbls; i++)
-    {
-        PNET_BUFFER_LIST nbl =
-            NdisAllocateNetBufferAndNetBufferList(m_nblStorage.get(),
-                                                  0,
-                                                  0,
-                                                  nullptr,
-                                                  0,
-                                                  0);
-
-        CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !nbl);
-
-        PNET_BUFFER nb = NET_BUFFER_LIST_FIRST_NB(nbl);
-        PMDL mdl = reinterpret_cast<PMDL>(((size_t) m_MdlPool.get()) + i * mdlSize);
-        NET_BUFFER_FIRST_MDL(nb) = NET_BUFFER_CURRENT_MDL(nb) = mdl;
-
-        auto internalAllocationOffset = (UCHAR*)nb - (UCHAR*)nbl;
-        if (internalAllocationOffset < 4 * sizeof(NET_BUFFER_LIST))
-            g_NetBufferOffset = internalAllocationOffset;
-
-        if (m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ALLOCATE_AND_ATTACH)
-        {
-            //
-            // pre-built MDL if the driver wants the OS to automatic attach the Rx buffer
-            // to the NET_PACKETs
-            //
-
-
-
-
-
-
-            void * address;
-            SIZE_T offset, capacity;
-            CX_RETURN_IF_NOT_NT_SUCCESS(
-                m_bufferPoolDispatch->NetClientAllocateBuffer(
-                    m_bufferPool,
-                    &address,
-                    &GetRxContextFromNb(nb)->DmaLogicalAddress,
-                    &offset,
-                    &capacity));
-
-            MmInitializeMdl(mdl, address, capacity);
-            MmBuildMdlForNonPagedPool(mdl);
-        }
-
-        NblStackPush(nbl);
-
-        if (adapterProperties.MediaType == NdisMediumNative802_11)
-        {
-            auto dot11Context = MakePoolPtr<DOT11_EXTSTA_RECV_CONTEXT>('eWtX');
-
-            CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !dot11Context);
-
-            dot11Context->Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
-            dot11Context->Header.Revision = DOT11_EXTSTA_RECV_CONTEXT_REVISION_1;
-            dot11Context->Header.Size = sizeof(*dot11Context);
-            dot11Context->uPhyId = dot11_phy_type_erp;
-            dot11Context->uChCenterFrequency = 2437;
-            dot11Context->usNumberOfMPDUsReceived = 1;
-
-            // Transfer ownership to the NBL. The memory will be freed in ~NxRxXlat()
-            nbl->NetBufferListInfo[MediaSpecificInformation] = dot11Context.release();
-        }
+        // pre-built MDL from MDL pool to describe every buffers in the buffer pool
+        // MDL pool has the same number of entries as buffer pool, i.e. perfParameters.NumberOfBuffers
+        m_bufferPoolDispatch->NetClientEnumerateBuffers(m_bufferPool,
+                                                        EnumerateBufferPoolCallback,
+                                                        this);
     }
 
     return STATUS_SUCCESS;
@@ -881,7 +1026,7 @@ NxRxXlat::CreateVariousPools()
 void
 NxRxXlat::Notify()
 {
-    m_executionContext.SignalWork();
+    NT_FRE_ASSERT(false);
 }
 
 void
@@ -893,12 +1038,8 @@ NxRxXlat::EcRecoverBuffers()
     auto pr = NetRingCollectionGetPacketRing(&m_rings);
     auto fr = NetRingCollectionGetFragmentRing(&m_rings);
 
-    NT_FRE_ASSERT(pr->OSReserved0 == fr->OSReserved0);
-    NT_FRE_ASSERT(pr->BeginIndex == fr->BeginIndex);
-    NT_FRE_ASSERT(pr->EndIndex == fr->EndIndex);
-
     for (; pr->OSReserved0 != pr->BeginIndex;
-        fr->OSReserved0 = pr->OSReserved0 = NetRingIncrementIndex(pr, pr->OSReserved0))
+         pr->OSReserved0 = NetRingIncrementIndex(pr, pr->OSReserved0))
     {
 
         auto & context = m_packetContext.GetContext<PacketContext>(pr->OSReserved0);
@@ -906,16 +1047,18 @@ NxRxXlat::EcRecoverBuffers()
 
         NT_FRE_ASSERT(context.NetBufferList != nullptr);
 
-        NblStackPush(context.NetBufferList);
+        m_NblPool.PushToReturn(context.NetBufferList);
         context.NetBufferList = nullptr;
 
         if (! packet->Ignore &&
-             m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_DRIVER)
+            m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_DRIVER)
         {
             for (UINT32 i = 0; i < packet->FragmentCount; i++)
             {
+                auto fragmentIndex = NetRingAdvanceIndex(fr, packet->FragmentIndex, i);
+
                 auto returnContext = NetExtensionGetFragmentReturnContext(
-                    &m_extensions.Extension.ReturnContext, fr->OSReserved0);
+                    &m_extensions.Extension.ReturnContext, fragmentIndex);
 
                 m_adapterDispatch->ReturnRxBuffer(
                     m_adapter,
@@ -925,26 +1068,37 @@ NxRxXlat::EcRecoverBuffers()
         }
     }
 
+    for (; fr->OSReserved0 != fr->BeginIndex;
+         fr->OSReserved0 = NetRingIncrementIndex(fr, fr->OSReserved0))
+    {
+        auto& context = m_fragmentContext.GetContext<FragmentContext>(fr->OSReserved0);
+
+        if (context.Mdl != nullptr)
+        {
+            MDL_EX* mdlEx = CONTAINING_RECORD(context.Mdl, MDL_EX, Mdl);
+
+            m_MdlPool.PushToReturn(mdlEx);
+            context.Mdl = nullptr;
+        }
+        else
+        {
+            // the only case that fragment MDL context can be null if the client driver uses Cx buffer pool
+            // and does fragment attachment itself
+            NT_FRE_ASSERT(m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ONLY_ALLOCATE);
+        }
+    }
+
     NT_FRE_ASSERT(pr->BeginIndex == pr->EndIndex);
-    NT_FRE_ASSERT(m_nblStackIndex == m_nblStack.count());
+    NT_FRE_ASSERT(fr->BeginIndex == fr->EndIndex);
+    NT_FRE_ASSERT(m_NblPool.IsFull());
+    NT_FRE_ASSERT(m_MdlPool.IsFull());
 }
 
 NxRxXlat::~NxRxXlat()
 {
-    // stop the EC and wait for wind down.
-    m_executionContext.Terminate();
-
-    while (! NblStackIsEmpty())
+    while (! m_NblPool.IsEmpty())
     {
-        auto nbl = NblStackPop();
-
-        if (m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ALLOCATE_AND_ATTACH)
-        {
-            PVOID va = MmGetMdlVirtualAddress(NET_BUFFER_CURRENT_MDL(NET_BUFFER_LIST_FIRST_NB(nbl)));
-            m_bufferPoolDispatch->NetClientFreeBuffers(m_bufferPool,
-                                                       &va,
-                                                       1);
-        }
+        auto nbl = m_NblPool.PopToUse();
 
         if (nbl->NetBufferListInfo[MediaSpecificInformation] != nullptr)
         {
@@ -962,6 +1116,11 @@ NxRxXlat::~NxRxXlat()
 
     if (m_queue)
     {
+        if (!IsListEmpty(&m_nblNotification.Link))
+        {
+            m_executionContextDispatch->UnregisterNotification(m_executionContext, &m_nblNotification);
+        }
+
         m_adapterDispatch->DestroyQueue(m_adapter, m_queue);
     }
 }
@@ -977,73 +1136,45 @@ NxRxXlat::QueueReturnedNetBufferLists(
     countedQueue.NblCount = 0; // don't care about count here.
     m_returnedNblQueue.Enqueue(&countedQueue);
 
-    if (m_returnedNblNotification.TestAndClear())
+    if (InterlockedExchange(&m_nblNotificationEnabled, FALSE) == TRUE)
     {
-        m_executionContext.SignalWork();
+        m_executionContextDispatch->Notify(m_executionContext);
     }
 }
 
-static
-USHORT
-CalculateNblFrameTypeForEthernetPacket(
-    _In_ NET_RING_COLLECTION const * descriptor,
-    _In_ NET_EXTENSION const & virtualAddressExtension,
-    _In_ NET_PACKET const *packet
-)
+PMDL
+NxRxXlat::GetCorrespondingMdl(UINT32 fragmentIndex)
 {
-    NT_ASSERT(packet->Layout.Layer2HeaderLength >= sizeof(ETHERNET_HEADER));
+    PMDL mdl = nullptr;
 
-    USHORT ethertype;
-    if (!NxGetPacketEtherType(descriptor, virtualAddressExtension, packet, &ethertype))
-        return 0;
-
-    return RtlUshortByteSwap(ethertype);
-}
-
-static
-USHORT
-CalculateNblFrameTypeForPacket(
-    _In_ NET_RING_COLLECTION const * descriptor,
-    _In_ NET_EXTENSION const & virtualAddressExtension,
-    _In_ NET_PACKET const &packet
-)
-{
-    switch (packet.Layout.Layer3Type)
+    if (m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ONLY_ALLOCATE)
     {
-    case NetPacketLayer3TypeIPv4UnspecifiedOptions:
-    case NetPacketLayer3TypeIPv4WithOptions:
-    case NetPacketLayer3TypeIPv4NoOptions:
-        return ByteSwap(ETHERNET_TYPE_IPV4);
+        //client driver uses OS provided buffer pool, get the corresponding MDL based on
+        //buffer index
+        auto const fragmentBuffer = NetExtensionGetFragmentDataBuffer(
+            &m_extensions.Extension.DataBuffer, fragmentIndex);
 
-    case NetPacketLayer3TypeIPv6UnspecifiedExtensions:
-    case NetPacketLayer3TypeIPv6WithExtensions:
-    case NetPacketLayer3TypeIPv6NoExtensions:
-        return ByteSwap(ETHERNET_TYPE_IPV6);
+        size_t index = reinterpret_cast<size_t>(fragmentBuffer->Handle);
 
-    case NetPacketLayer3TypeUnspecified:
-    default:
-        // The NIC didn't tell us the frame type. Keep going and we'll try
-        // to compute it ourselves.
-        break;
+        mdl = &m_MdlPool[index]->Mdl;
+    }
+    else if (m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ALLOCATE_AND_ATTACH ||
+             m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_DRIVER)
+    {
+        auto& context = m_fragmentContext.GetContext<FragmentContext>(fragmentIndex);
+        mdl = context.Mdl;
+
+        context.Mdl = nullptr;
     }
 
-    // Next try to compute it by parsing the layer2 header.
-    switch (packet.Layout.Layer2Type)
-    {
-    case NetPacketLayer2TypeEthernet:
-        return CalculateNblFrameTypeForEthernetPacket(descriptor, virtualAddressExtension, &packet);
+    NT_FRE_ASSERT(mdl->Next == nullptr);
 
-    case NetPacketLayer2TypeUnspecified:
-    case NetPacketLayer2TypeNull:
-        // We don't know how to compute the Frame Type for non-Ethernet.
-        __fallthrough;
-    default:
-        return 0;
-    }
+    return mdl;
 }
 
 bool
 NxRxXlat::TransferDataBufferFromNetPacketToNbl(
+    _Inout_ RxPacketCounters & Counters,
     _In_ NET_PACKET * Packet,
     _In_ PNET_BUFFER_LIST Nbl,
     _In_ UINT32 PacketIndex)
@@ -1059,60 +1190,24 @@ NxRxXlat::TransferDataBufferFromNetPacketToNbl(
         &m_extensions.Extension.VirtualAddress, Packet->FragmentIndex);
     auto const firstReturnContext = NetExtensionGetFragmentReturnContext(
         &m_extensions.Extension.ReturnContext, Packet->FragmentIndex);
+
+    // 1. check if any skipped fragment entries before this packet's fragments and reclaim them back to pools
+    ReclaimSkippedFragments(Packet->FragmentIndex);
+
     PrefetchPacketPayloadForReceiveIndication(firstVirtualAddress->VirtualAddress, firstFragment->Offset);
 
-    // Used for populating statistics
-    auto frameSize = firstFragment->ValidLength;
+    NxGetPacketLayout(
+        m_adapterProperties.MediaType,
+        &m_rings,
+        m_extensions.Extension.VirtualAddress,
+        Packet);
 
-    //
-    //1. packet metadata
-
-
-
-
-    // Always compute packet layout in software on RX path now.
-    Packet->Layout = NxGetPacketLayout(m_adapterProperties.MediaType, &m_rings, m_extensions.Extension.VirtualAddress, Packet);
-
-    Nbl->NetBufferListInfo[TcpIpChecksumNetBufferListInfo] = 0;
-
-    auto const & checksumExtension = m_extensions.Extension.Checksum;
-    if (checksumExtension.Enabled)
-    {
-        Nbl->NetBufferListInfo[TcpIpChecksumNetBufferListInfo] =
-            NxTranslateRxPacketChecksum(Packet, &checksumExtension, PacketIndex).Value;
-    }
-
-    auto const & rscExtension = m_extensions.Extension.Rsc;
-    if (rscExtension.Enabled)
-    {
-        Nbl->NetBufferListInfo[TcpRecvSegCoalesceInfo] =
-            NxTranslateRxPacketRsc(Packet, &rscExtension, PacketIndex).Value;
-    }
-
-    auto const & rscTimestampExtension = m_extensions.Extension.RscTimestamp;
-    if (rscTimestampExtension.Enabled)
-    {
-        Nbl->NetBufferListInfo[RscTcpTimestampDelta] =
-            NxTranslateRxPacketRscTimestamp(Packet,
-                &rscTimestampExtension,
-                PacketIndex);
-    }
-
-    Nbl->NblFlags = 0;
-
-    auto frameType = CalculateNblFrameTypeForPacket(&m_rings, m_extensions.Extension.VirtualAddress, *Packet);
-    Nbl->NetBufferListInfo[NetBufferListFrameType] = (PVOID)frameType;
-    switch (frameType)
-    {
-    case ByteSwap(ETHERNET_TYPE_IPV4):
-        NdisSetNblFlag(Nbl, NDIS_NBL_FLAGS_IS_IPV4);
-        break;
-    case ByteSwap(ETHERNET_TYPE_IPV6):
-        NdisSetNblFlag(Nbl, NDIS_NBL_FLAGS_IS_IPV6);
-        break;
-    default:
-        break;
-    }
+    m_metadataTranslator.TranslatePacketLayout(*Nbl, PacketIndex);
+    m_metadataTranslator.TranslatePacketChecksum(*Nbl, PacketIndex);
+    m_metadataTranslator.TranslatePacketRsc(*Nbl, PacketIndex);
+    m_metadataTranslator.TranslatePacketRscTimestamp(*Nbl, PacketIndex);
+    m_metadataTranslator.TranslatePacketIeee8021q(*Nbl, PacketIndex);
+    m_metadataTranslator.TranslatePacketHash(*Nbl, PacketIndex);
 
     // store which queue this NB comes from
     GetRxContextFromNbl(Nbl)->Queue = this;
@@ -1120,15 +1215,18 @@ NxRxXlat::TransferDataBufferFromNetPacketToNbl(
     //
     //2. packet's first fragment
     //
+    PMDL currMdl = NET_BUFFER_FIRST_MDL(nb)
+                 = NET_BUFFER_CURRENT_MDL(nb)
+                 = GetCorrespondingMdl(Packet->FragmentIndex);
 
-    PMDL currMdl = NET_BUFFER_CURRENT_MDL(nb);
+    fr->OSReserved0 = NetRingIncrementIndex(fr, fr->OSReserved0);
+
     NET_BUFFER_DATA_LENGTH(nb) = firstFragment->ValidLength;
     NET_BUFFER_DATA_OFFSET(nb) = firstFragment->Offset;
 
     NET_BUFFER_CURRENT_MDL_OFFSET(nb) = firstFragment->Offset;
 
     shouldIndicate = ReInitializeMdlForDataBuffer(
-        nb,
         firstFragment,
         firstVirtualAddress,
         firstReturnContext,
@@ -1139,9 +1237,13 @@ NxRxXlat::TransferDataBufferFromNetPacketToNbl(
     //3. packet's additonal fragments
     //
 
+    GetRxContextFromNb(nb)->HasMultipleFragments = (Packet->FragmentCount > 1);
+
+    // Used for populating statistics
+    auto frameSize = firstFragment->ValidLength;
     for (UINT32 i = 1; i < Packet->FragmentCount; ++i)
     {
-        auto const index = (Packet->FragmentIndex + i) & fr->ElementIndexMask;
+        auto const index = NetRingAdvanceIndex(fr, Packet->FragmentIndex, i);
         auto const fragment = NetRingGetFragmentAtIndex(fr, index);
         auto const virtualAddress = NetExtensionGetFragmentVirtualAddress(
             &m_extensions.Extension.VirtualAddress, index);
@@ -1150,13 +1252,13 @@ NxRxXlat::TransferDataBufferFromNetPacketToNbl(
 
         NET_BUFFER_DATA_LENGTH(nb) += (ULONG)fragment->ValidLength;
 
+        currMdl->Next = GetCorrespondingMdl(index);
 
+        currMdl = currMdl->Next;
 
-        NT_ASSERT(false);
+        fr->OSReserved0 = NetRingIncrementIndex(fr, fr->OSReserved0);
 
-        currMdl = NDIS_MDL_LINKAGE(currMdl);
-
-        shouldIndicate &= ReInitializeMdlForDataBuffer(nb,
+        shouldIndicate &= ReInitializeMdlForDataBuffer(
             fragment,
             virtualAddress,
             returnContext,
@@ -1166,162 +1268,163 @@ NxRxXlat::TransferDataBufferFromNetPacketToNbl(
         frameSize += fragment->ValidLength;
     }
 
-    m_statistics.IncrementBy(NxStatisticsCounters::BytesOfData, frameSize);
+    if (shouldIndicate)
+    {
+        auto const destinationType = NxGetPacketAddressType(
+            static_cast<NET_PACKET_LAYER2_TYPE>(Packet->Layout.Layer2Type),
+            *nb);
+
+        switch (destinationType)
+        {
+
+        case AddressType::Unicast:
+            Counters.Unicast.Packets += 1;
+            Counters.Unicast.Bytes += frameSize;
+
+            break;
+
+        case AddressType::Multicast:
+            Counters.Multicast.Packets += 1;
+            Counters.Multicast.Bytes += frameSize;
+
+            break;
+
+        case AddressType::Broadcast:
+
+            Counters.Broadcast.Packets += 1;
+            Counters.Broadcast.Bytes += frameSize;
+
+            break;
+
+        }
+    }
+
     return shouldIndicate;
 }
 
 bool
 NxRxXlat::ReInitializeMdlForDataBuffer(
-    _In_ PNET_BUFFER nb,
     _In_ NET_FRAGMENT const * fragment,
     _In_ NET_FRAGMENT_VIRTUAL_ADDRESS const * VirtualAddress,
     _In_ NET_FRAGMENT_RETURN_CONTEXT const * ReturnContext,
     _In_ PMDL fragmentMdl,
     _In_ bool isFirstFragment)
 {
-    bool mdlBuilt = false;
+    bool isFragmentValid = true;
 
-    if (isFirstFragment || (fragment->Offset == 0)) //only the first fragment can have an offset
+    if ((fragment->Capacity > m_rxDataBufferSize) ||
+        (fragment->Offset + fragment->ValidLength > fragment->Capacity) ||
+        (!isFirstFragment && fragment->Offset != 0))
     {
-        if (m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ALLOCATE_AND_ATTACH) //data buffer allocated by the translator
-        {
-            //all MDLs are pre-built
-            mdlBuilt = true;
-        }
-        else //data buffer allocated by the NIC
-        {
-            //the data buffer size must confront to the rx capability declared by the NIC
-            if (fragment->Capacity <= m_rxDataBufferSize)
-            {
-                MmInitializeMdl(fragmentMdl, VirtualAddress->VirtualAddress, fragment->Capacity);
-                MmBuildMdlForNonPagedPool(fragmentMdl);
-
-                NT_ASSERT(fragmentMdl->Next == nullptr);
-
-                if (m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_DRIVER)
-                {
-                    if (isFirstFragment)
-                    {
-                        //first fragment's rx return context will be used for all fragments
-                        GetRxContextFromNb(nb)->RxBufferReturnContext = ReturnContext->Handle;
-                        mdlBuilt = true;
-                    }
-                    else
-                    {
-                        //if the NB has more than 1 fragment, all framgents must have the same
-                        //return context
-                        if (GetRxContextFromNb(nb)->RxBufferReturnContext == ReturnContext->Handle)
-                        {
-                            mdlBuilt = true;
-                        }
-                        else
-                        {
-                            //if the return context doesn't match, mark this packet to be dropped
-                            mdlBuilt = false;
-                        }
-                    }
-                }
-            }
-            else
-            {
-                //if the packet received is larger than the driver claimed to be able to support,
-                //mark this packet to be dropped
-                mdlBuilt = false;
-
-                //we still need to return the rx data buffer of the dropped packet back to the NIC
-                GetRxContextFromNb(nb)->RxBufferReturnContext = ReturnContext->Handle;
-            }
-        }
-    }
-    else
-    {
-        mdlBuilt = false;
+        //the data buffer size must conform to the rx capability declared by the NIC,
+        //and its content must be within capacity
+        //and only the first fragment can have an offset.
+        //
+        //mark this fragment as invalid if these condtions are broken, 
+        //and the entire packet will be dropped
+        //
+        isFragmentValid = false;
     }
 
-    return mdlBuilt;
+    //
+    //for data buffer allocated by the translator, all MDLs from the MDL pool have been
+    //pre-built, i.e. MDLs have already been welded together with the data buffer during 
+    //initalization, no-op.
+    //
+    //for other cases, we need to intialize MDL on the fly here for every data buffer
+    //
+
+    if (!m_MdlPool.IsPreBuilt())
+    {
+        MDL_EX* mdlEx = CONTAINING_RECORD(fragmentMdl, MDL_EX, Mdl);
+
+        if (isFragmentValid) 
+        {
+            MmInitializeMdl(fragmentMdl, VirtualAddress->VirtualAddress, fragment->Capacity);
+            MmBuildMdlForNonPagedPool(fragmentMdl);
+
+            NT_FRE_ASSERT(fragmentMdl->Next == nullptr);
+
+
+            mdlEx->MdlContext.RxBufferReturnContext = ReturnContext->Handle;
+        }
+
+        //for all fragments, including those marked as invalid,
+        //save return context to MDL_EX's context field, so they 
+        //can be given back to the NIC
+        mdlEx->MdlContext.RxBufferReturnContext = ReturnContext->Handle;
+    }
+
+    return isFragmentValid;
 }
 
-
-PNET_BUFFER_LIST
-NxRxXlat::FreeReceivedDataBuffer(PNET_BUFFER_LIST nbl)
+NET_BUFFER_LIST*
+NxRxXlat::FreeReceivedDataBuffer(
+    _Inout_ PNET_BUFFER_LIST nbl
+)
 {
-    switch (m_rxBufferAllocationMode)
+    NET_BUFFER* nb = NET_BUFFER_LIST_FIRST_NB(nbl);
+    MDL* currMdl = NET_BUFFER_CURRENT_MDL(nb);
+
+    NT_FRE_ASSERT(nb->Next == nullptr);
+
+    while (currMdl)
     {
-        case NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ALLOCATE_AND_ATTACH:
-            NOTHING
-            break;
+        MDL_EX* mdlEx = CONTAINING_RECORD(currMdl, MDL_EX, Mdl);
 
-        case NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ONLY_ALLOCATE:
+        currMdl = currMdl->Next;
+
+        if (GetRxContextFromNb(nb)->HasMultipleFragments)
         {
-            PMDL currMdl = NET_BUFFER_CURRENT_MDL(NET_BUFFER_LIST_FIRST_NB(nbl));
-
-            while (currMdl)
-            {
-                PVOID va = MmGetMdlVirtualAddress(currMdl);
-
-                m_bufferPoolDispatch->NetClientFreeBuffers(m_bufferPool,
-                                                           &va,
-                                                           1);
-
-                currMdl = NDIS_MDL_LINKAGE(currMdl);
-            }
-
-            break;
+            mdlEx->Mdl.Next = nullptr;
+        }
+        else
+        {
+            NT_FRE_ASSERT(mdlEx->Mdl.Next == nullptr);
         }
 
-        case NET_CLIENT_MEMORY_MANAGEMENT_MODE_DRIVER:
+        if (m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ONLY_ALLOCATE)
         {
-            PNET_BUFFER nb = NET_BUFFER_LIST_FIRST_NB(nbl);
-
-            PMDL currMdl = NET_BUFFER_CURRENT_MDL(NET_BUFFER_LIST_FIRST_NB(nbl));
-
-            NT_ASSERT(currMdl->Next == nullptr);
-
-            while (currMdl)
+            //
+            // we just need to return the buffer pointed by the MDL to the buffer pool
+            //
+            m_bufferPoolDispatch->NetClientFreeBuffers(m_bufferPool,
+                                                       (SIZE_T*) &mdlEx->MdlContext.BufferIndex,
+                                                       1);
+        }
+        else
+        {
+            if (m_rxBufferAllocationMode == NET_CLIENT_MEMORY_MANAGEMENT_MODE_DRIVER)
             {
+                //
+                // we need to invoke the client driver supplied buffer-return callback
+                //
+
                 m_adapterDispatch->ReturnRxBuffer(
                     m_adapter,
-                    GetRxContextFromNb(nb)->RxBufferReturnContext);
+                    mdlEx->MdlContext.RxBufferReturnContext);
 
-                currMdl = NDIS_MDL_LINKAGE(currMdl);
+                mdlEx->MdlContext.RxBufferReturnContext = nullptr;
             }
 
-            GetRxContextFromNb(nb)->RxBufferReturnContext = nullptr;
-
-            break;
+            // return the MDL to the MDL pool
+            m_MdlPool.PushToReturn(mdlEx);
         }
     }
 
-    PNET_BUFFER_LIST next = nbl->Next;
-    NblStackPush(nbl);
+    PNET_BUFFER_LIST next = NET_BUFFER_LIST_NEXT_NBL(nbl);
+    NET_BUFFER_LIST_NEXT_NBL(nbl) = nullptr;
+    NET_BUFFER_FIRST_MDL(nb) = NET_BUFFER_CURRENT_MDL(nb) = nullptr;
+
+    m_NblPool.PushToReturn(nbl);
 
     return next;
 }
 
-NET_BUFFER_LIST *
-NxRxXlat::NblStackPop(
-    void
-)
-{
-    NT_FRE_ASSERT(! NblStackIsEmpty());
-
-    return m_nblStack[--m_nblStackIndex];
-}
-
-void
-NxRxXlat::NblStackPush(
-    _In_ NET_BUFFER_LIST * Nbl
-)
-{
-    NT_FRE_ASSERT(m_nblStackIndex != m_nblStack.count());
-
-    m_nblStack[m_nblStackIndex++] = Nbl;
-}
-
-bool
-NxRxXlat::NblStackIsEmpty(
+const NxRxCounters &
+NxRxXlat::GetStatistics(
     void
 ) const
 {
-    return m_nblStackIndex == 0;
+    return m_statistics;
 }

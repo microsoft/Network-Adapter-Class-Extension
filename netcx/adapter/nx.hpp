@@ -10,8 +10,8 @@ Abstract:
 
 #pragma once
 
-#include <ntddk.h>
-#include <wdm.h>
+#include <ntosp.h>
+#include <zwapi.h>
 #include <ntassert.h>
 #include <wdmsec.h>
 #include <initguid.h>
@@ -33,9 +33,11 @@ Abstract:
 
 #include <netadapter_p.h>
 #include <netadapterextension_p.h>
+#include <netbufferqueue_p.h>
 #include <netdevice_p.h>
 
 #include <ndis_p.h>
+#include <ndis/statusconvert.h>
 #include <ndiswdf.h>
 
 #include <KMacros.h>
@@ -44,3 +46,4 @@ Abstract:
 #include <NxTrace.hpp>
 #include <NxTraceLogging.hpp>
 
+#define NETADAPTERCX_TAG 'xCdN'

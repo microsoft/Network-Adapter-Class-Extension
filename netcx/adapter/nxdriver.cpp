@@ -1,20 +1,29 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
 
-/*++
-
-Abstract:
-
-    This is the main NetAdapterCx driver framework.
-
---*/
-
 #include "Nx.hpp"
 
-#include "NxDriver.tmh"
-#include "NxDriver.hpp"
+#include <ntddndis_p.h>
+#include <ndiswdf.h>
+#include <ntstrsafe.h>
+#include <wil/resource.h>
 
-#include "NxAdapter.hpp"
-#include "version.hpp"
+#include "NxDriver.hpp"
+#include "NxPrivateGlobals.hpp"
+
+#include "NxDriver.tmh"
+
+void
+NdisMiniportDriverCharacteristicsInitialize(
+    _Inout_ NDIS_MINIPORT_DRIVER_CHARACTERISTICS & Characteristics
+);
+
+extern
+WDFWAITLOCK
+    g_RegistrationLock;
+
+extern
+NDIS_WDF_CX_DRIVER
+    NetAdapterCxDriverHandle;
 
 static
 EVT_WDF_OBJECT_CONTEXT_CLEANUP
@@ -26,7 +35,7 @@ NxDriver::NxDriver(
     NX_PRIVATE_GLOBALS * NxPrivateGlobals
 )
     : CFxObject(Driver)
-    , m_PrivateGlobals(NxPrivateGlobals)
+    , m_privateGlobals(NxPrivateGlobals)
 /*++
 Routine Description:
 
@@ -40,65 +49,6 @@ Arguments:
 
 --*/
 {
-    //
-    // Create a WPP Log buffer for the client.
-    //
-
-    RECORDER_LOG_CREATE_PARAMS recorderLogCreateParams;
-    RECORDER_LOG_CREATE_PARAMS_INIT(&recorderLogCreateParams, nullptr);
-
-    recorderLogCreateParams.TotalBufferSize = DEFAULT_WPP_TOTAL_BUFFER_SIZE;
-    recorderLogCreateParams.ErrorPartitionSize = DEFAULT_WPP_ERROR_PARTITION_SIZE;
-
-    //
-    // ClientDriverGlobals->DriverName is a CHAR array that contains a NULL terminated string
-    //
-    auto clientDriverName = &m_PrivateGlobals->ClientDriverGlobals->DriverName[0];
-
-    //
-    // If clientDriverName length is larger than what LogIdentifier supports the string will
-    // be truncated
-    //
-    RtlStringCchPrintfA(
-        recorderLogCreateParams.LogIdentifier,
-        sizeof(recorderLogCreateParams.LogIdentifier),
-        "%s",
-        clientDriverName);
-
-    RECORDER_LOG recorderLog;
-    NTSTATUS ntStatus = WppRecorderLogCreate(&recorderLogCreateParams, &recorderLog);
-
-    if (NT_SUCCESS(ntStatus))
-    {
-        m_RecorderLog = recorderLog;
-    }
-    else
-    {
-        //
-        // Non-fatal failure
-        //
-        LogInitMsg(TRACE_LEVEL_WARNING, "Could Not allocate Recorder Log for NetAdapterCxClient : %s", clientDriverName);
-    }
-}
-
-NxDriver::~NxDriver(
-    void
-)
-/*++
-Routine Description:
-
-    D'tor for the NxDriver object.
-
---*/
-{
-    if (m_RecorderLog != nullptr)
-    {
-        //
-        // Delete the log buffer created in the constructor.
-        //
-        WppRecorderLogDelete(m_RecorderLog);
-        m_RecorderLog = nullptr;
-    }
 }
 
 _Use_decl_annotations_
@@ -135,7 +85,7 @@ NxDriver::_CreateIfNeeded(
 
     if (!NT_SUCCESS(ntStatus))
     {
-        LogInitMsg(TRACE_LEVEL_ERROR, "WdfObjectAllocateContext Failed %!STATUS!", ntStatus);
+        LogError(FLAG_DRIVER, "WdfObjectAllocateContext Failed %!STATUS!", ntStatus);
         return ntStatus;
     }
 
@@ -225,7 +175,7 @@ Routine Description:
             NetAdapterCxDriverHandle,
             (NDIS_HANDLE)this,
             &ndisMPChars,
-            &m_NdisMiniportDriverHandle),
+            &m_ndisMiniportDriverHandle),
         "NdisWdfRegisterMiniportDriver failed.");
 
     return STATUS_SUCCESS;
@@ -236,10 +186,10 @@ NxDriver::Deregister(
     void
 )
 {
-    if (m_NdisMiniportDriverHandle != nullptr)
+    if (m_ndisMiniportDriverHandle != nullptr)
     {
-        NdisMDeregisterMiniportDriver(m_NdisMiniportDriverHandle);
-        m_NdisMiniportDriverHandle = nullptr;
+        NdisMDeregisterMiniportDriver(m_ndisMiniportDriverHandle);
+        m_ndisMiniportDriverHandle = nullptr;
     }
 }
 
@@ -264,20 +214,12 @@ Routine Description:
     nxDriver->Deregister();
 }
 
-RECORDER_LOG
-NxDriver::GetRecorderLog(
-    void
-) const
-{
-    return m_RecorderLog;
-}
-
 NDIS_HANDLE
 NxDriver::GetNdisMiniportDriverHandle(
     void
 ) const
 {
-    return m_NdisMiniportDriverHandle;
+    return m_ndisMiniportDriverHandle;
 }
 
 NX_PRIVATE_GLOBALS *
@@ -285,6 +227,6 @@ NxDriver::GetPrivateGlobals(
     void
 ) const
 {
-    return m_PrivateGlobals;
+    return m_privateGlobals;
 }
 

@@ -22,9 +22,13 @@
 #include <KPtr.h>
 
 #include "NxDeviceStateMachine.h"
+#include "DevicePnpPower.hpp"
 #include "NxAdapterCollection.hpp"
 #include "powerpolicy/NxPowerPolicy.hpp"
+#include "idle/IdleStateMachine.hpp"
 #include "NxUtility.hpp"
+#include "NxQueue.hpp"
+#include "ExecutionContext.hpp"
 #include "netadaptercx_triage.h"
 
 struct NX_PRIVATE_GLOBALS;
@@ -32,7 +36,7 @@ class NxDriver;
 
 NTSTATUS
 WdfCxDeviceInitAssignPreprocessorRoutines(
-    _Inout_ WDFCXDEVICE_INIT *CxDeviceInit
+    _Inout_ WDFCXDEVICE_INIT * CxDeviceInit
     );
 
 void
@@ -42,69 +46,74 @@ SetCxPnpPowerCallbacks(
 
 void
 SetCxPowerPolicyCallbacks(
-    _Inout_ WDFCXDEVICE_INIT *CxDeviceInit
+    _Inout_ WDFCXDEVICE_INIT * CxDeviceInit
 );
 
-typedef struct _FUNCTION_LEVEL_RESET_PARAMETERS {
-    FUNCTION_LEVEL_DEVICE_RESET_PARAMETERS CompletionParameters;
-    KEVENT Event;
-    NTSTATUS Status;
-} FUNCTION_LEVEL_RESET_PARAMETERS, *PFUNCTION_LEVEL_RESET_PARAMETERS;
+typedef struct _FUNCTION_LEVEL_RESET_PARAMETERS
+{
+    FUNCTION_LEVEL_DEVICE_RESET_PARAMETERS
+        CompletionParameters;
+
+    KEVENT
+        Event;
+
+    NTSTATUS
+        Status;
+
+} FUNCTION_LEVEL_RESET_PARAMETERS;
 
 typedef union _DeviceFlags
 {
 #pragma warning(disable:4201)
     struct
     {
-        //
-        // Indicates the device is the stack's power policy owner
-        //
-        ULONG IsPowerPolicyOwner : 1;
+        ULONG
+            InPowerTransition : 1;
 
-        //
-        // Tracks if the devnode was surprise removed.
-        //
-        ULONG SurpriseRemoved : 1;
+        ULONG
+            WmiPowerEventEnabled : 1;
 
     };
     ULONG Flags;
 } DeviceFlags;
 
-class NxDevice : public NxDeviceStateMachine<NxDevice>
+class NxDevice
+    : public NxDeviceStateMachine<NxDevice>
 {
-    using PowerIrpParameters = decltype(IO_STACK_LOCATION::Parameters.Power);
 
-private:
+public:
 
     //
     // The triage block contains the offsets to dynamically allocated class
     // members. Do not add a class member before this. If a class member has
-    // to be added, make sure to update NETADAPTERCX_TRIAGE_INFO_OFFSET.
+    // to be added or removed, make sure to update NETADAPTERCX_TRIAGE_INFO_OFFSET.
+    // Make sure to update this if an inherited member is added/removed as well.
     //
     NETADAPTERCX_GLOBAL_TRIAGE_BLOCK *
         m_netAdapterCxTriageBlock = nullptr;
+
+    DevicePnpPower
+        PnpPower;
+
+    IdleStateMachine
+        IdleStateMachine;
+
+    LIST_ENTRY
+        m_linkage = {};
+
+private:
 
     WDFDEVICE
         m_device = nullptr;
 
     NxDriver *
-        m_nxDriver = nullptr;
-
-    void *
-        m_plugPlayNotificationHandle = nullptr;
+        m_driver = nullptr;
 
     //
     // Collection of adapters created on top of this device
     //
     NxAdapterCollection
         m_adapterCollection;
-
-    //
-    // Number of adapters that had NdisMiniportInitializeEx
-    // callback completed
-    //
-    _Interlocked_ ULONG
-        m_ndisInitializeCount = 0;
 
     //
     // Device Bus Address, indicating the bus slot this device belongs to
@@ -116,9 +125,6 @@ private:
 
     DeviceFlags
         m_flags = {};
-
-    DeviceState
-        m_state = DeviceState::Initialized;
 
     USHORT
         m_cGuidToOidMap = 0;
@@ -132,11 +138,8 @@ private:
     KPoolPtrNP<NDIS_OID>
         m_oidList;
 
-    WDF_POWER_DEVICE_STATE
-        m_targetDevicePowerState = WdfPowerDeviceInvalid;
-
     bool
-        m_isDisarmInProgress = false;
+        m_isWakeInProgress = false;
 
     //
     // Used to track the device reset interface
@@ -160,8 +163,45 @@ private:
     PFN_NET_DEVICE_RESET
         m_evtNetDeviceReset = nullptr;
 
+    //
+    // Used to collect diagnostics from device driver
+    //
+    NET_DEVICE_RESET_CAPABILITIES
+        m_resetCapabilities = {};
+
+    //
+    // Perform noops for duplicated PLDR requests
+    //
+    bool
+        m_pldrRequested = false;
+
+    //
+    // Prevent unloading driver after PLDR is requested
+    //
+    KAutoEvent
+        m_pldrComplete;
+
+    //
+    // Only valid when client driver is handling
+    // EVT_NET_DEVICE_COLLECT_RESET_DIAGNOSTICS
+    //
+    PKTHREAD
+        m_collectResetDiagnosticsThread = nullptr;
+
+    //
+    // Copy diagnostics from IHV drivers
+    //
+    WDFMEMORY
+        m_resetDiagnosticsBuffer = WDF_NO_HANDLE;
+
     NET_DEVICE_POWER_POLICY_EVENT_CALLBACKS
         m_powerPolicyEventCallbacks = {};
+
+    wchar_t const *
+        m_pnpInstanceId = nullptr;
+
+    size_t
+        m_cbPnpInstanceId = 0;
 
     // Declare the base device state machine class as friend so that we
     // can declare the state machine operations as private
@@ -186,65 +226,16 @@ private:
     //
     // State machine operations
     //
-    SyncOperationDispatch
-        ReleasingIsSurpriseRemoved;
 
     SyncOperationPassive
-        ReleasingReportPreReleaseToNdis;
-
-    SyncOperationDispatch
-        ReleasingReportSurpriseRemoveToNdis;
-
-    SyncOperationDispatch
-        ReleasingReportDeviceAddFailureToNdis;
-
-    SyncOperationDispatch
-        RemovedReportRemoveToNdis;
-
-    SyncOperationDispatch
-        ReleasingReportPostReleaseToNdis;
-
-    SyncOperationDispatch
-        CheckPowerPolicyOwnership;
-
-    SyncOperationDispatch
-        InitializeSelfManagedIo;
-
-    SyncOperationDispatch
-        ReinitializeSelfManagedIo;
-
-    SyncOperationDispatch
-        SuspendSelfManagedIo;
-
-    SyncOperationDispatch
-        RestartSelfManagedIo;
-
-    SyncOperationDispatch
-        PrepareForRebalance;
-
-    SyncOperationPassive
-        Started;
-
-    SyncOperationDispatch
-        PrepareHardware;
-
-    SyncOperationDispatch
-        PrepareHardwareFailedCleanup;
-
-    SyncOperationDispatch
-        AreAllAdaptersHalted;
+        CollectDiagnostics;
 
     AsyncOperationDispatch
-        RefreshAdapterList;
+        TriggerPlatformLevelDeviceReset;
 
     NTSTATUS
     Initialize(
         _In_ WDFDEVICE Device
-    );
-
-    bool
-    GetPowerPolicyOwnership(
-        void
     );
 
     _IRQL_requires_(PASSIVE_LEVEL)
@@ -252,33 +243,6 @@ private:
     QueryDeviceResetInterface(
         void
     );
-
-public:
-
-    //
-    // Events used to synchronize our state machine with WDF's own
-    // state machine
-    //
-    AsyncResult
-        CxPrePrepareHardwareHandled;
-
-    KAutoEvent
-        CxSelfManagedIoHandled;
-
-    KAutoEvent
-        CxPrePrepareHardwareFailedCleanupHandled;
-
-    KAutoEvent
-        CxPreSelfManagedIoSuspendHandled;
-
-    KAutoEvent
-        CxPreReleaseHardwareHandled;
-
-    KAutoEvent
-        CxPostReleaseHardwareHandled;
-
-    KAutoEvent
-        WdfDeviceObjectCleanupHandled;
 
 public:
 
@@ -294,8 +258,8 @@ public:
     static
     NTSTATUS
     _Create(
-        _In_  NX_PRIVATE_GLOBALS * PrivateGlobals,
-        _In_  WDFDEVICE_INIT * DeviceInit
+        _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+        _In_ WDFDEVICE_INIT * DeviceInit
     );
 
     NTSTATUS
@@ -308,57 +272,10 @@ public:
         void
     ) const;
 
-    _IRQL_requires_(PASSIVE_LEVEL)
-    NTSTATUS
-    RegisterPlugPlayNotification(
-        void
-    );
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    void
-    UnregisterPlugPlayNotification(
-        void
-    );
-
-    void
-    AdapterInitialized(
-        void
-    );
-
-    void
-    AdapterHalted(
-        void
-    );
-
-    void
-    SurpriseRemoved(
-        void
-    );
-
-    RECORDER_LOG
-    GetRecorderLog(
-        void
-    );
-
     NxDriver *
     GetNxDriver(
         void
     ) const;
-
-    void
-    AdapterCreated(
-        _In_ NxAdapter * Adapter
-    );
-
-    void
-    AdapterDestroyed(
-        _In_ NxAdapter * Adapter
-    );
-
-    void
-    StartComplete(
-        void
-    );
 
     NTSTATUS
     WdmCreateIrpPreProcess(
@@ -445,6 +362,26 @@ public:
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
+    WmiProcessSingleInstanceDefault(
+        _In_ WNODE_SINGLE_INSTANCE * Wnode,
+        _In_ NDIS_GUID * Guid,
+        _In_ ULONG BufferSize,
+        _In_ UCHAR Method,
+        _Out_ ULONG * ReturnSize
+    );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    WmiProcessSingleInstanceMagicPacket(
+        _In_ WNODE_SINGLE_INSTANCE * Wnode,
+        _In_ NDIS_GUID * Guid,
+        _In_ ULONG BufferSize,
+        _In_ UCHAR Method,
+        _Out_ ULONG * ReturnSize
+    );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
     WmiEnableEvents(
         _In_ GUID const & Guid
     );
@@ -474,14 +411,9 @@ public:
     );
 
     bool
-    IsDisarmInProgress(
+    IsWakeInProgress(
         void
     );
-
-    bool
-    IsPowerPolicyOwner(
-        void
-    ) const;
 
     void
     EnableWakeReasonReporting(
@@ -491,11 +423,6 @@ public:
     void
     DisableWakeReasonReporting(
         void
-    );
-
-    void
-    PreSelfManagedIoSuspend(
-        _In_ WDF_POWER_DEVICE_STATE TargetState
     );
 
     void
@@ -535,6 +462,44 @@ public:
         PFN_NET_DEVICE_RESET NetDeviceReset
     );
 
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    SetResetCapabilities(
+        NET_DEVICE_RESET_CAPABILITIES const * ResetCapabilities
+    );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    bool
+    IsCollectingResetDiagnostics(
+        void
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    StoreResetDiagnostics(
+        _In_ size_t ResetDiagnosticsSize,
+        _In_reads_bytes_(ResetDiagnosticsSize) const UINT8 * ResetDiagnosticsBuffer
+    );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    ReportResetDiagnostics(
+        _In_ HANDLE ReportHandle,
+        _In_ PDBGK_LIVEDUMP_ADDSECONDARYDATA_ROUTINE DbgkLiveDumpAddSecondaryDataRoutine
+    );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    PlatformLevelDeviceResetWithDiagnostics(
+        void
+    );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    WaitDeviceResetFinishIfRequested(
+        void
+    );
+
     void
     SetPowerPolicyEventCallbacks(
         _In_ NET_DEVICE_POWER_POLICY_EVENT_CALLBACKS const * Callbacks
@@ -566,6 +531,43 @@ public:
     GetPowerPolicyEventCallbacks(
         void
     ) const;
+
+    void
+    BeginPowerTransition(
+        void
+    );
+
+    void
+    EndPowerTransition(
+        void
+    );
+
+    void
+    UpdatePowerPolicyParameters(
+        void
+    );
+
+    void
+    WritePowerStateChangeEvent(
+        _In_ WDF_POWER_DEVICE_STATE TargetState
+    ) const;
+
+    _IRQL_requires_max_(PASSIVE_LEVEL)
+    NxAdapterCollection &
+    GetAdapterCollection(
+        void
+    );
+
+    NTSTATUS
+    PostD0Entry(
+        WDF_POWER_DEVICE_STATE PreviousState
+    );
 };
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxDevice, GetNxDeviceFromHandle);
+
+#ifdef _WIN64
+static_assert(FIELD_OFFSET(NxDevice, m_netAdapterCxTriageBlock) == 8);
+#else
+static_assert(FIELD_OFFSET(NxDevice, m_netAdapterCxTriageBlock) == 4);
+#endif

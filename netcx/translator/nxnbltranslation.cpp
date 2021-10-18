@@ -3,22 +3,37 @@
 #include "NxXlatPrecomp.hpp"
 #include "NxXlatCommon.hpp"
 
+#include "NxNblDatapath.hpp"
+
 #include "NxNblTranslation.tmh"
 #include "NxNblTranslation.hpp"
 
 #include <net/fragment.h>
 #include <net/checksum_p.h>
 #include <net/logicaladdress_p.h>
-#include <net/lso_p.h>
+#include <net/gso_p.h>
 #include <net/mdl_p.h>
 #include <net/rsc_p.h>
 #include <net/virtualaddress_p.h>
+#include <net/ieee8021q_p.h>
 
-#include "NxPacketLayout.hpp"
-#include "NxChecksumInfo.hpp"
-#include "NxLargeSend.hpp"
-#include "NxReceiveCoalescing.hpp"
 #include "NxStatistics.hpp"
+#include "framelayout/LayoutParser.hpp"
+#include "NxTxNblContext.hpp"
+
+#include <netiodef.h>
+#include <pktmonclnt.h>
+#include <pktmonloc.h>
+
+static
+bool
+TcpHeaderContainsOptions(
+    _In_ NET_PACKET_LAYOUT const & Layout
+)
+{
+    NT_ASSERT(Layout.Layer4Type == NetPacketLayer4TypeTcp);
+    return Layout.Layer4HeaderLength > 20U;
+}
 
 MdlTranlationResult::MdlTranlationResult(
     NxNblTranslationStatus XlatStatus
@@ -41,23 +56,44 @@ MdlTranlationResult::MdlTranlationResult(
 }
 
 NxNblTranslator::NxNblTranslator(
+    NET_BUFFER_LIST * & CurrentNetBufferList,
+    NET_BUFFER * & CurrentNetBuffer,
+    NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES const & DatapathCapabilities,
     TxExtensions const & Extensions,
-    NxNblTranslationStats &Stats,
-    NET_RING_COLLECTION * Rings,
-    const NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES & DatapathCapabilities,
-    const NxDmaAdapter *DmaAdapter,
+    NxTxCounters & Statistics,
+    NxBounceBufferPool & BouncePool,
     const NxRingContext & ContextBuffer,
-    NDIS_MEDIUM MediaType,
-    NxStatistics & GenStats
-) :
-    m_extensions(Extensions),
-    m_stats(Stats),
-    m_rings(Rings),
-    m_datapathCapabilities(DatapathCapabilities),
-    m_contextBuffer(ContextBuffer),
-    m_mediaType(MediaType),
-    m_dmaAdapter(DmaAdapter),
-    m_genStats(GenStats)
+    const NxDmaAdapter * DmaAdapter,
+    NDIS_MEDIUM Medium,
+    NET_RING_COLLECTION * Rings,
+    Checksum & ChecksumContext,
+    GenericSegmentationOffload & GsoContext,
+    Rtl::KArray<UINT8, NonPagedPoolNx> & LayoutParseBuffer,
+    NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES & ChecksumHardwareCapabilities,
+    NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES & TxChecksumHardwareCapabilities,
+    NET_CLIENT_OFFLOAD_GSO_CAPABILITIES & GsoHardwareCapabilities,
+    PKTMON_LOWEREDGE_HANDLE PktMonLowerEdgeContext,
+    PKTMON_COMPONENT_HANDLE PktMonComponentContext
+)
+    : m_currentNetBufferList(CurrentNetBufferList)
+    , m_currentNetBuffer(CurrentNetBuffer)
+    , m_datapathCapabilities(DatapathCapabilities)
+    , m_extensions(Extensions)
+    , m_statistics(Statistics)
+    , m_bouncePool(BouncePool)
+    , m_contextBuffer(ContextBuffer)
+    , m_dmaAdapter(DmaAdapter)
+    , m_layer2Type(TranslateMedium(Medium))
+    , m_rings(Rings)
+    , m_metadataTranslator(*m_rings, m_extensions)
+    , m_checksumContext(ChecksumContext)
+    , m_gsoContext(GsoContext)
+    , m_layoutParseBuffer(LayoutParseBuffer)
+    , m_checksumHardwareCapabilities(ChecksumHardwareCapabilities)
+    , m_txChecksumHardwareCapabilities(TxChecksumHardwareCapabilities)
+    , m_gsoHardwareCapabilities(GsoHardwareCapabilities)
+    , m_pktmonLowerEdgeContext(reinterpret_cast<PKTMON_EDGE_CONTEXT const *>(PktMonLowerEdgeContext))
+    , m_pktmonComponentContext(reinterpret_cast<PKTMON_COMPONENT_CONTEXT const *>(PktMonComponentContext))
 {
     //
     // The maximum number of fragments per packet is either the maximum number
@@ -79,76 +115,172 @@ NxNblTranslator::RequiresDmaMapping(
     void
 ) const
 {
-    return m_datapathCapabilities.TxMemoryConstraints.MappingRequirement == NET_CLIENT_MEMORY_MAPPING_REQUIREMENT_DMA_MAPPED;
+    return m_datapathCapabilities.TxMemoryConstraints.MappingRequirement
+        == NET_CLIENT_MEMORY_MAPPING_REQUIREMENT_DMA_MAPPED;
 }
 
 _Use_decl_annotations_
-void
-NxNblTranslator::TranslateNetBufferListOOBDataToNetPacketExtensions(
-    NET_BUFFER_LIST const &netBufferList,
-    NET_PACKET* netPacket,
-    UINT32 packetIndex
+bool
+NxNblTranslator::IsSoftwareChecksumRequired(
+    void
 ) const
 {
-    // For every in-use packet extensions for a NET_PACKET
-    // translator (NET_PACKET owner) zeroes existing data and fill in new data
-
-    // Checksum
-    auto const & checksumExtension = m_extensions.Extension.Checksum;
-    if (checksumExtension.Enabled)
+    // No need for software checksum if neither layer 3 nor layer 4 requires checksum.
+    if (m_checksum.Layer4 != NetPacketTxChecksumActionRequired &&
+        m_checksum.Layer3 != NetPacketTxChecksumActionRequired)
     {
-        NET_PACKET_CHECKSUM* checksumExt =
-            NetExtensionGetPacketChecksum(&checksumExtension, packetIndex);
-        RtlZeroMemory(checksumExt, NET_PACKET_EXTENSION_CHECKSUM_VERSION_1_SIZE);
-
-        auto const &checksumInfo =
-            *(NDIS_TCP_IP_CHECKSUM_NET_BUFFER_LIST_INFO*)
-            &netBufferList.NetBufferListInfo[TcpIpChecksumNetBufferListInfo];
-
-#if DBG
-        if (checksumInfo.Transmit.TcpChecksum && netPacket->Layout.Layer4Type == NetPacketLayer4TypeTcp)
-        {
-            NT_ASSERT(checksumInfo.Transmit.TcpHeaderOffset == (ULONG)(netPacket->Layout.Layer2HeaderLength + netPacket->Layout.Layer3HeaderLength));
-        }
-#endif
-
-        *checksumExt = NxTranslateTxPacketChecksum(*netPacket, checksumInfo);
+        return false;
     }
 
-    auto const & lsoExtension =  m_extensions.Extension.Lso;
-    if (lsoExtension.Enabled)
+    // Don't perform software offload for Checksum v1
+    if (m_checksumHardwareCapabilities.IPv4 == TRUE ||
+        m_checksumHardwareCapabilities.Tcp == TRUE ||
+        m_checksumHardwareCapabilities.Udp == TRUE)
     {
-        auto lsoExt = NetExtensionGetPacketLso(&lsoExtension, packetIndex);
-        RtlZeroMemory(lsoExt, NET_PACKET_EXTENSION_LSO_VERSION_1_SIZE);
+        return false;
+    }
 
-        if (netPacket->Layout.Layer4Type == NetPacketLayer4TypeTcp)
+    if (m_txChecksumHardwareCapabilities.Layer3Flags == 0x0 &&
+        m_txChecksumHardwareCapabilities.Layer4Flags == 0x0)
+    {
+        return true;
+    }
+
+    // Software checksum is required if
+    // 1) Hardware has any layer 4 limitation
+    if (m_checksum.Layer4 == NetPacketTxChecksumActionRequired)
+    {
+        switch (m_layout.Layer4Type)
         {
-            auto const &lsoInfo =
-                *(NDIS_TCP_LARGE_SEND_OFFLOAD_NET_BUFFER_LIST_INFO*)
-                &netBufferList.NetBufferListInfo[TcpLargeSendNetBufferListInfo];
+            case NetPacketLayer4TypeTcp:
+                {
+                    auto const tcpHeaderContainsOptions = TcpHeaderContainsOptions(m_layout);
+                    if (tcpHeaderContainsOptions &&
+                        WI_IsFlagClear(m_txChecksumHardwareCapabilities.Layer4Flags, NetClientAdapterOffloadLayer4FlagTcpWithOptions))
+                    {
+                        return true;
+                    }
 
-            *lsoExt = NxTranslateTxPacketLargeSendSegmentation(*netPacket, lsoInfo);
+                    if (! tcpHeaderContainsOptions &&
+                        WI_IsFlagClear(m_txChecksumHardwareCapabilities.Layer4Flags, NetClientAdapterOffloadLayer4FlagTcpNoOptions))
+                    {
+                        return true;
+                    }
+                }
+                break;
+
+            case NetPacketLayer4TypeUdp:
+                if (WI_IsFlagClear(m_txChecksumHardwareCapabilities.Layer4Flags, NetClientAdapterOffloadLayer4FlagUdp))
+                {
+                    return true;
+                }
+                break;
+
+            case NetPacketLayer4TypeUnspecified:
+            case NetPacketLayer4TypeIPFragment:
+            case NetPacketLayer4TypeIPNotFragment:
+                break;
+
         }
     }
+
+    // 2) Hardware has any layer 3 limitation
+    if (m_checksum.Layer3 == NetPacketTxChecksumActionRequired ||
+        m_checksum.Layer4 == NetPacketTxChecksumActionRequired)
+    {
+        switch (m_layout.Layer3Type)
+        {
+            case NetPacketLayer3TypeIPv4NoOptions:
+                if (WI_IsFlagClear(m_txChecksumHardwareCapabilities.Layer3Flags, NetClientAdapterOffloadLayer3FlagIPv4NoOptions))
+                {
+                    return true;
+                }
+                break;
+
+            case NetPacketLayer3TypeIPv4WithOptions:
+                if (WI_IsFlagClear(m_txChecksumHardwareCapabilities.Layer3Flags, NetClientAdapterOffloadLayer3FlagIPv4WithOptions))
+                {
+                    return true;
+                }
+                break;
+
+            case NetPacketLayer3TypeIPv6NoExtensions:
+                if (WI_IsFlagClear(m_txChecksumHardwareCapabilities.Layer3Flags, NetClientAdapterOffloadLayer3FlagIPv6NoExtensions))
+                {
+                    return true;
+                }
+                break;
+
+            case NetPacketLayer3TypeIPv6WithExtensions:
+                if (WI_IsFlagClear(m_txChecksumHardwareCapabilities.Layer3Flags, NetClientAdapterOffloadLayer3FlagIPv6WithExtensions))
+                {
+                    return true;
+                }
+                break;
+
+            case NetPacketLayer3TypeUnspecified:
+            case NetPacketLayer3TypeIPv4UnspecifiedOptions:
+            case NetPacketLayer3TypeIPv6UnspecifiedExtensions:
+                return false;
+        }
+    }
+
+    // 3) Hardware has any header offset limitation
+    auto const layer4HeaderOffset = m_layout.Layer2HeaderLength + m_layout.Layer3HeaderLength;
+    if (m_txChecksumHardwareCapabilities.Layer4HeaderOffsetLimit != 0 &&
+        m_txChecksumHardwareCapabilities.Layer4HeaderOffsetLimit < layer4HeaderOffset)
+    {
+        return true;
+    }
+
+    if (m_txChecksumHardwareCapabilities.Layer3HeaderOffsetLimit != 0 &&
+        m_txChecksumHardwareCapabilities.Layer3HeaderOffsetLimit < m_layout.Layer2HeaderLength)
+    {
+        return true;
+    }
+
+    return false;
 }
 
 _Use_decl_annotations_
 NxNblTranslationStatus
 NxNblTranslator::TranslateNetBufferToNetPacket(
-    NET_BUFFER & netBuffer,
-    NET_PACKET* netPacket
+    NET_PACKET * netPacket
 ) const
 {
+    if (IsSoftwareChecksumRequired())
+    {
+        InterlockedIncrementNoFence64(reinterpret_cast<LONG64 *>(&m_statistics.Checksum.Required));
+
+        auto const & info = *reinterpret_cast<NDIS_TCP_IP_CHECKSUM_NET_BUFFER_LIST_INFO const *>(
+            &m_currentNetBufferList->NetBufferListInfo[TcpIpChecksumNetBufferListInfo]);
+
+        if (STATUS_SUCCESS != m_checksumContext.CalculateChecksum(m_currentNetBuffer, info, m_layout))
+        {
+            InterlockedIncrementNoFence64(reinterpret_cast<LONG64 *>(&m_statistics.Checksum.Failure));
+
+            PKTMON_DROP_NBL(
+                const_cast<PKTMON_COMPONENT_CONTEXT *>(m_pktmonComponentContext),
+                m_currentNetBufferList,
+                PktMonDir_Out,
+                PktMonDrop_NetCx_SoftwareChecksumFailure,
+                PMLOC_NETCX_SOFTWARE_CHECKSUM_FAILURE);
+
+            return NxNblTranslationStatus::CannotTranslate;
+        }
+    }
+
     auto backfill = static_cast<ULONG>(m_datapathCapabilities.TxPayloadBackfill);
 
     if (backfill > 0)
     {
         // Check if there is enough space in the NET_BUFFER's current MDL to satisfy
         // the client driver's required backfill
-        if (backfill > NET_BUFFER_CURRENT_MDL_OFFSET(&netBuffer))
+        if (backfill > NET_BUFFER_CURRENT_MDL_OFFSET(m_currentNetBuffer))
         {
             // In the future we can try to bounce only the first fragment,
             // for now bounce the whole packet
+
             return NxNblTranslationStatus::BounceRequired;
         }
 
@@ -158,7 +290,7 @@ NxNblTranslator::TranslateNetBufferToNetPacket(
         auto ndisStatus =
 #endif
             NdisRetreatNetBufferDataStart(
-                &netBuffer,
+                m_currentNetBuffer,
                 backfill,
                 0,
                 nullptr);
@@ -171,25 +303,32 @@ NxNblTranslator::TranslateNetBufferToNetPacket(
     }
 
     // Make sure we advance the NET_BUFFER's data start on return of this method
-    auto advanceDataStart = wil::scope_exit([&netBuffer, backfill]()
+    auto advanceDataStart = wil::scope_exit([&CurrentNetBuffer = m_currentNetBuffer, backfill]()
     {
         // Avoid calling into NDIS if backfill is zero
         if (backfill > 0)
         {
             NdisAdvanceNetBufferDataStart(
-                &netBuffer,
+                CurrentNetBuffer,
                 backfill,
                 TRUE,
                 nullptr);
         }
     });
 
-    PMDL mdl = NET_BUFFER_CURRENT_MDL(&netBuffer);
-    size_t mdlOffset = NET_BUFFER_CURRENT_MDL_OFFSET(&netBuffer);
-    auto bytesToCopy = NET_BUFFER_DATA_LENGTH(&netBuffer);
+    PMDL mdl = NET_BUFFER_CURRENT_MDL(m_currentNetBuffer);
+    size_t mdlOffset = NET_BUFFER_CURRENT_MDL_OFFSET(m_currentNetBuffer);
+    auto bytesToCopy = NET_BUFFER_DATA_LENGTH(m_currentNetBuffer);
 
     if (bytesToCopy == 0 || bytesToCopy > m_datapathCapabilities.MaximumTxFragmentSize)
     {
+        PKTMON_DROP_NBL(
+            const_cast<PKTMON_COMPONENT_CONTEXT *>(m_pktmonComponentContext),
+            m_currentNetBufferList,
+            PktMonDir_Out,
+            PktMonDrop_NetCx_InvalidNetBufferLength,
+            PMLOC_NETCX_INVALID_NETBUFFER_LENGTH);
+
         return NxNblTranslationStatus::CannotTranslate;
     }
 
@@ -239,7 +378,9 @@ NxNblTranslator::ShouldBounceFragment(
 
     if (!IsAddressAligned(address, alignment))
     {
-        m_stats.Packet.UnalignedBuffer += 1;
+        InterlockedIncrementNoFence64(
+            reinterpret_cast<LONG64 *>(&m_statistics.Packet.UnalignedBuffer));
+
         return true;
     }
 
@@ -247,7 +388,9 @@ NxNblTranslator::ShouldBounceFragment(
     auto const checkMaxPhysicalAddress = RequiresDmaMapping() && maxLogicalAddress != 0;
     if (checkMaxPhysicalAddress && LogicalAddress->LogicalAddress > maxLogicalAddress)
     {
-        m_stats.DMA.PhysicalAddressTooLarge += 1;
+        InterlockedIncrementNoFence64(
+            reinterpret_cast<LONG64 *>(&m_statistics.DMA.PhysicalAddressTooLarge));
+
         return true;
     }
 
@@ -269,8 +412,17 @@ NxNblTranslator::TranslateMdlChainToFragmentRangeKvmOnly(
     auto const availableFragments = NetRingGetRangeCount(fr, frOsBegin, frOsEnd);
     auto const maximumFragmentCount = min(availableFragments, m_maxFragmentsPerPacket);
 
+    if (m_extensions.Extension.Mdl.Enabled && MdlOffset >=  (1 << 10))
+    {
+        // when the MDL extension is enabled, the NET_FRAGMENT.Offset field is used to
+        // store the NET_BUFFER's currentMdlOffset. Because NET_FRAGMENT.Offset is a 
+        // 10-bit only field, so we have to bounce this packet if the currentMdlOffset is
+        // larger than 10-bit.
+        return { NxNblTranslationStatus::BounceRequired };
+    }
+
     //
-    // While there is remaining data to be copied, and we have MDLs to walk...
+    // While there is remaining data to be described using NET_FRAGMENT, and we have MDLs to walk...
     //
     auto mdl = &Mdl;
     UINT16 i = 0;
@@ -322,8 +474,6 @@ NxNblTranslator::TranslateMdlChainToFragmentRangeKvmOnly(
             &m_extensions.Extension.VirtualAddress, frIndex);
         auto const logicalAddress = NetExtensionGetFragmentLogicalAddress(
             &m_extensions.Extension.LogicalAddress, frIndex);
-        auto fragmentMdl = NetExtensionGetFragmentMdl(
-            &m_extensions.Extension.Mdl, frIndex);
 
         //
         // Compute the amount to transfer this time.
@@ -331,12 +481,31 @@ NxNblTranslator::TranslateMdlChainToFragmentRangeKvmOnly(
         size_t const copySize = min(remain, mdlByteCount - MdlOffset);
 
         RtlZeroMemory(fragment, sizeof(NET_FRAGMENT));
-        fragment->Offset = MdlOffset;
-        fragment->Capacity = mdlByteCount;
-        fragment->ValidLength = copySize;
-        virtualAddress->VirtualAddress = MmGetSystemAddressForMdlSafe(
-            mdl, LowPagePriority | MdlMappingNoExecute);
-        fragmentMdl->Mdl = mdl;
+
+        if (m_extensions.Extension.Mdl.Enabled)
+        {
+            // when the MDL extension is enabled, the NET_FRAGMENT.Offset field is used to
+            // store the NET_BUFFER's currentMdlOffset. We need to preserve that
+            
+            auto fragmentMdl = NetExtensionGetFragmentMdl(
+                &m_extensions.Extension.Mdl, frIndex);
+
+            fragment->Offset = MdlOffset;
+            fragment->Capacity = mdlByteCount;
+            fragment->ValidLength = copySize;
+            virtualAddress->VirtualAddress = MmGetSystemAddressForMdlSafe(
+                mdl, LowPagePriority | MdlMappingNoExecute);
+            fragmentMdl->Mdl = mdl;
+        }
+        else
+        {
+            // otherwise roll the offset to the base Va
+            fragment->Offset = 0;
+            fragment->Capacity = mdlByteCount - MdlOffset;
+            fragment->ValidLength = copySize;
+            virtualAddress->VirtualAddress = (PCHAR) MmGetSystemAddressForMdlSafe(
+                mdl, LowPagePriority | MdlMappingNoExecute) + MdlOffset;
+        }
 
         if (ShouldBounceFragment(fragment, virtualAddress, logicalAddress))
         {
@@ -390,8 +559,8 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRange(
 static
 bool
 CanTranslateSglToNetPacket(
-    _In_ SCATTER_GATHER_LIST const &Sgl,
-    _In_ MDL const &Mdl
+    _In_ SCATTER_GATHER_LIST const & Sgl,
+    _In_ MDL const & Mdl
 )
 {
     auto mdlCount = 0ull;
@@ -406,10 +575,10 @@ CanTranslateSglToNetPacket(
 _Use_decl_annotations_
 MdlTranlationResult
 NxNblTranslator::TranslateScatterGatherListToFragmentRange(
-    MDL &MappedMdl,
+    MDL & MappedMdl,
     size_t BytesToCopy,
     size_t MdlOffset,
-    NxScatterGatherList const &Sgl
+    SCATTER_GATHER_LIST const * Sgl
 ) const
 {
     if (Sgl->NumberOfElements > m_maxFragmentsPerPacket)
@@ -428,7 +597,7 @@ NxNblTranslator::TranslateScatterGatherListToFragmentRange(
         return { NxNblTranslationStatus::InsufficientResources };
     }
 
-    MDL *currentMdl = &MappedMdl;
+    MDL * currentMdl = &MappedMdl;
     size_t currentMdlBytesToCopy = MmGetMdlByteCount(currentMdl) - MdlOffset;
     size_t currentMdlOffset = MdlOffset;
     size_t remain = BytesToCopy;
@@ -479,6 +648,7 @@ NxNblTranslator::TranslateScatterGatherListToFragmentRange(
     if (remain != 0)
     {
         // Something went wrong, we need to bounce this packet
+
         return { NxNblTranslationStatus::BounceRequired };
     }
 
@@ -488,7 +658,7 @@ NxNblTranslator::TranslateScatterGatherListToFragmentRange(
 _Use_decl_annotations_
 bool
 NxNblTranslator::MapMdlChainToSystemVA(
-    MDL &Mdl
+    MDL & Mdl
 ) const
 {
     auto currentMdl = &Mdl;
@@ -547,57 +717,74 @@ NxNblTranslator::MapMdlChainToSystemVA(
 _Use_decl_annotations_
 MdlTranlationResult
 NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeUseHal(
-    MDL &Mdl,
+    MDL & Mdl,
     size_t MdlOffset,
     size_t BytesToCopy,
-    NxDmaTransfer const &DmaTransfer
+    NxDmaTransfer const & DmaTransfer
 ) const
 {
-    NxScatterGatherList sgl { *m_dmaAdapter };
+    SCATTER_GATHER_LIST * sgl;
 
     // Build the scatter/gather list using HAL
-    NTSTATUS buildSglStatus = m_dmaAdapter->BuildScatterGatherListEx(
+    NTSTATUS const buildSglStatus = m_dmaAdapter->BuildScatterGatherListEx(
         DmaTransfer,
         &Mdl,
         MdlOffset,
         BytesToCopy,
-        sgl.releaseAndGetAddressOf());
+        &sgl);
 
     if (buildSglStatus == STATUS_INSUFFICIENT_RESOURCES)
     {
-        // DMA engine might be out of map registers or some other resource, let's try again later
-        m_stats.DMA.InsufficientResouces += 1;
+        // DMA engine might be out of map registers or some other resource,
+        // let's try again later
+        InterlockedIncrementNoFence64(
+            reinterpret_cast<LONG64 *>(&m_statistics.DMA.InsufficientResources));
+
         return { NxNblTranslationStatus::InsufficientResources };
     }
     else if (buildSglStatus == STATUS_BUFFER_TOO_SMALL)
     {
-        // Our pre-allocated SGL did not have enough space to hold the Scatter/Gather list, bounce the packet
-        m_stats.DMA.BufferTooSmall += 1;
+        // Our pre-allocated SGL did not have enough space to hold the Scatter/Gather
+        // list, bounce the packet
+        InterlockedIncrementNoFence64(
+            reinterpret_cast<LONG64 *>(&m_statistics.DMA.BufferTooSmall));
+
         return { NxNblTranslationStatus::BounceRequired };
     }
     else if (buildSglStatus != STATUS_SUCCESS)
     {
         // If we can't map this packet using HAL APIs let's try to bounce it
-        m_stats.DMA.OtherErrors += 1;
+        InterlockedIncrementNoFence64(
+            reinterpret_cast<LONG64 *>(&m_statistics.DMA.OtherErrors));
+
         return { NxNblTranslationStatus::BounceRequired };
     }
 
+    auto sglGuard = wil::scope_exit([this, sgl]()
+    {
+        m_dmaAdapter->PutScatterGatherList(sgl);
+    });
+
     auto const mappedMdl = m_dmaAdapter->GetMappedMdl(
-        sgl.get(),
+        sgl,
         &Mdl);
 
     if (mappedMdl == nullptr)
     {
         // We need the mapped MDL chain to be able to translate the Scatter/Gather list
         // to a chain of NET_FRAGMENT, if we don't have it we need to bounce
+
         return { NxNblTranslationStatus::BounceRequired };
     }
 
     if (!CanTranslateSglToNetPacket(*sgl, *mappedMdl))
     {
-        // If this is the case we can't calculate the VAs of each physical fragment. This should be really rare,
-        // so instead of trying to create MDLs and map each physical fragment into VA space just bounce the buffers
-        m_stats.DMA.CannotMapSglToFragments += 1;
+        // If this is the case we can't calculate the VAs of each physical fragment.
+        // This should be really rare, so instead of trying to create MDLs and map each
+        // physical fragment into VA space just bounce the buffers
+        InterlockedIncrementNoFence64(
+            reinterpret_cast<LONG64 *>(&m_statistics.DMA.CannotMapSglToFragments));
+
         return { NxNblTranslationStatus::BounceRequired };
     }
 
@@ -606,8 +793,9 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeUseHal(
 
     if (mappedMdl != &Mdl)
     {
-        // HAL did not directly use the buffers we passed in to BuildScatterGatherList. This means we have a new
-        // MDL chain that does not have virtual memory mapping. The physical pages are locked.
+        // HAL did not directly use the buffers we passed in to BuildScatterGatherList.
+        // This means we have a new MDL chain that does not have virtual memory mapping.
+        // The physical pages are locked.
         MdlOffset = 0;
 
         if (MapMdlChainToSystemVA(*mappedMdl))
@@ -620,7 +808,7 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeUseHal(
         }
     }
 
-    auto result = TranslateScatterGatherListToFragmentRange(
+    auto const result = TranslateScatterGatherListToFragmentRange(
         *mappedMdl,
         BytesToCopy,
         MdlOffset,
@@ -628,10 +816,9 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeUseHal(
 
     if (result.Status == NxNblTranslationStatus::Success)
     {
-        // Release the ownership of the SGL and save the pointer to it in
-        // the packet's DMA context. When the packet is completed we will
-        // call PutScatterGatherList
-        dmaContext.ScatterGatherList = sgl.release();
+        // When the packet is returned by the client driver we will call PutScatterGatherList
+        sglGuard.release();
+        dmaContext.ScatterGatherList = sgl;
     }
 
     return result;
@@ -640,7 +827,7 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeUseHal(
 _Use_decl_annotations_
 MdlTranlationResult
 NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeBypassHal(
-    MDL &Mdl,
+    MDL & Mdl,
     size_t MdlOffset,
     size_t BytesToCopy
 ) const
@@ -669,7 +856,8 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeBypassHal(
 
         size_t const copySize = min(remain, mdlByteCount - MdlOffset);
 
-        ULONG_PTR vaStart = reinterpret_cast<ULONG_PTR>(MmGetSystemAddressForMdlSafe(mdl, LowPagePriority | MdlMappingNoExecute)) + MdlOffset;
+        ULONG_PTR vaStart = reinterpret_cast<ULONG_PTR>(
+            MmGetSystemAddressForMdlSafe(mdl, LowPagePriority | MdlMappingNoExecute)) + MdlOffset;
         ULONG_PTR vaEnd = vaStart + static_cast<ULONG>(copySize);
 
         if (vaStart == vaEnd)
@@ -742,6 +930,7 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeBypassHal(
     return { NxNblTranslationStatus::Success, frOsBegin, i };
 }
 
+static
 UINT32
 GetPacketBytes(
     _In_ NET_RING_COLLECTION const * descriptor,
@@ -749,102 +938,446 @@ GetPacketBytes(
 )
 {
     NT_ASSERT(packet->FragmentCount != 0);
-    
-    UINT32 bytes = 0;
-    for (UINT32 i = 0; i < packet->FragmentCount; ++i)
+
+    auto const fr = NetRingCollectionGetFragmentRing(descriptor);
+    auto const endIndex = NetRingAdvanceIndex(fr, packet->FragmentIndex, packet->FragmentCount);
+
+    UINT64 bytes = 0u;
+    for (auto index = packet->FragmentIndex; index != endIndex; index = NetRingIncrementIndex(fr, index))
     {
-        auto fr = NetRingCollectionGetFragmentRing(descriptor);
-        auto const fragment = NetRingGetFragmentAtIndex(fr, i);
-        bytes += (UINT32) fragment->ValidLength;
+        bytes += NetRingGetFragmentAtIndex(fr, index)->ValidLength;
     }
 
-    return bytes;
+    return static_cast<UINT32>(bytes);
+}
+
+bool
+NxNblTranslator::TranslateLayout(
+    void
+)
+{
+    int layerDone = 0;
+    size_t offset = 0;
+    auto mdl = m_currentNetBuffer->CurrentMdl;
+    size_t remainingLength = m_currentNetBuffer->DataLength;
+    auto pointer = 
+        static_cast<UINT8 const *>(MmGetSystemAddressForMdlSafe(mdl, LowPagePriority | MdlMappingNoExecute))
+        + m_currentNetBuffer->CurrentMdlOffset;
+    size_t length = 
+        min(MmGetMdlByteCount(mdl) - m_currentNetBuffer->CurrentMdlOffset, 
+            m_currentNetBuffer->DataLength);
+
+    m_layout = {};
+    m_layout.Layer2Type = m_layer2Type;
+
+    // parse L2, L3 and L4 headers, and each layer's header must be contiguous
+    for (auto ParseLayerFunc : ParseLayerDispatch)
+    {
+        if (ParseLayerFunc(m_layout, pointer, offset, length))
+        {
+            layerDone++;
+            
+            if (layerDone == 3)
+            {
+                // all 3 layers have been parsed, we are done
+                break;
+            }
+            
+            // if the length remained is larger than zero, we will continue to parse next 
+            // layer header in the current MDL; if the length is 0, it means we reach the 
+            // end of current MDL, and we need to move to next MDL before contiuing to parse
+            if (length == 0)
+            {
+                if (mdl->Next == nullptr)
+                {
+                    // encountered a layer header that we cannot parse properly
+                    return false; 
+                }
+
+                // end of current MDL, continue to parse the next MDL
+                mdl = mdl->Next;
+                pointer = static_cast<UINT8 const *>(
+                    MmGetSystemAddressForMdlSafe(mdl, LowPagePriority | MdlMappingNoExecute));
+                remainingLength -= offset;
+                length = min(MmGetMdlByteCount(mdl), remainingLength);
+                offset = 0;
+            }
+        }
+        else
+        {
+            return false; // encountered a layer header that we cannot parse properly
+        }
+    }
+
+    return true;
 }
 
 _Use_decl_annotations_
+void
+NxNblTranslator::ReplaceCurrentNetBufferList(
+    NET_BUFFER_LIST * NetBufferList
+)
+{
+    NetBufferList->Next = m_currentNetBufferList->Next;
+    m_currentNetBufferList = NetBufferList;
+    m_currentNetBuffer = NetBufferList->FirstNetBuffer;
+}
+
+_Use_decl_annotations_
+bool
+NxNblTranslator::IsSoftwareGsoRequired(
+    void
+) const
+{
+    // Check if this packet needs GSO
+    if (m_layout.Layer4Type != NetPacketLayer4TypeTcp && m_layout.Layer4Type != NetPacketLayer4TypeUdp)
+    {
+        return false;
+    }
+
+    if (m_layout.Layer4Type == NetPacketLayer4TypeTcp && m_gso.TCP.Mss == 0U)
+    {
+        return false;
+    }
+
+    if (m_layout.Layer4Type == NetPacketLayer4TypeUdp && m_gso.UDP.Mss == 0U)
+    {
+        return false;
+    }
+
+    if (m_gsoHardwareCapabilities.Layer3Flags == 0x0 &&
+        m_gsoHardwareCapabilities.Layer4Flags == 0x0)
+    {
+        return true;
+    }
+
+    // Software fallback is required if
+    // 1) Hardware has any layer 3 limitation
+    switch (m_layout.Layer3Type)
+    {
+
+    case NetPacketLayer3TypeIPv4NoOptions:
+        if (WI_IsFlagClear(m_gsoHardwareCapabilities.Layer3Flags, NetClientAdapterOffloadLayer3FlagIPv4NoOptions))
+        {
+            return true;
+        }
+        break;
+
+    case NetPacketLayer3TypeIPv4WithOptions:
+        if (WI_IsFlagClear(m_gsoHardwareCapabilities.Layer3Flags, NetClientAdapterOffloadLayer3FlagIPv4WithOptions))
+        {
+            return true;
+        }
+        break;
+
+    case NetPacketLayer3TypeIPv6NoExtensions:
+        if (WI_IsFlagClear(m_gsoHardwareCapabilities.Layer3Flags, NetClientAdapterOffloadLayer3FlagIPv6NoExtensions))
+        {
+            return true;
+        }
+        break;
+
+    case NetPacketLayer3TypeIPv6WithExtensions:
+        if (WI_IsFlagClear(m_gsoHardwareCapabilities.Layer3Flags, NetClientAdapterOffloadLayer3FlagIPv6WithExtensions))
+        {
+            return true;
+        }
+        break;
+
+    case NetPacketLayer3TypeUnspecified:
+    case NetPacketLayer3TypeIPv4UnspecifiedOptions:
+    case NetPacketLayer3TypeIPv6UnspecifiedExtensions:
+        return false;
+    }
+
+    // 2) Hardware has any layer 4 limitation
+    switch (m_layout.Layer4Type)
+    {
+
+    case NetPacketLayer4TypeTcp:
+        {
+            auto const tcpHeaderContainsOptions = TcpHeaderContainsOptions(m_layout);
+            if (tcpHeaderContainsOptions &&
+                WI_IsFlagClear(m_gsoHardwareCapabilities.Layer4Flags, NetClientAdapterOffloadLayer4FlagTcpWithOptions))
+            {
+                return true;
+            }
+
+            if (! tcpHeaderContainsOptions &&
+                WI_IsFlagClear(m_gsoHardwareCapabilities.Layer4Flags, NetClientAdapterOffloadLayer4FlagTcpNoOptions))
+            {
+                return true;
+            }
+        }
+        break;
+
+    case NetPacketLayer4TypeUdp:
+        if (WI_IsFlagClear(m_gsoHardwareCapabilities.Layer4Flags, NetClientAdapterOffloadLayer4FlagUdp))
+        {
+            return true;
+        }
+        break;
+
+    }
+
+    // 3) Hardware has layer 4 header offset limitation
+    auto const layer4HeaderOffset = m_layout.Layer2HeaderLength + m_layout.Layer3HeaderLength;
+
+    if (m_gsoHardwareCapabilities.Layer4HeaderOffsetLimit != 0U &&
+        m_gsoHardwareCapabilities.Layer4HeaderOffsetLimit < layer4HeaderOffset)
+    {
+        return true;
+    }
+
+    return false;
+}
+
+_Use_decl_annotations_
+bool
+NxNblTranslator::GenericSendOffloadFallback(
+    void
+)
+{
+    NT_FRE_ASSERT(m_layout.Layer4Type == NetPacketLayer4TypeTcp ||
+                  m_layout.Layer4Type == NetPacketLayer4TypeUdp);
+
+    NET_BUFFER_LIST * segmentedNbl = nullptr;
+
+    if (m_layout.Layer4Type == NetPacketLayer4TypeTcp)
+    {
+        if (m_gsoContext.PerformLso(m_currentNetBufferList, m_layout, segmentedNbl) == STATUS_SUCCESS)
+        {
+            InterlockedIncrementNoFence64(
+                reinterpret_cast<LONG64 *>(&m_statistics.Segment.TcpSuccess));
+
+            // Replace current NBL and NB
+            ReplaceCurrentNetBufferList(segmentedNbl);
+
+            // Clear the metadata translated from m_currentNetBufferList.
+            // Since the LSO/USO OOB info in segmentedNbl is also cleared in PerformLso/PerformUso(),
+            // further metadata translating on segmentedNbl will produce m_gso.TCP/UDP.Mss = 0.
+            m_gso.TCP.Mss = 0U;
+
+            return true;
+        }
+        else
+        {
+            InterlockedIncrementNoFence64(
+                reinterpret_cast<LONG64 *>(&m_statistics.Segment.TcpFailure));
+
+            PKTMON_DROP_NBL(
+                const_cast<PKTMON_COMPONENT_CONTEXT *>(m_pktmonComponentContext),
+                m_currentNetBufferList,
+                PktMonDir_Out,
+                PktMonDrop_NetCx_LSOFailure,
+                PMLOC_NETCX_NBL_LSO_FAILURE);
+
+            return false;
+        }
+    }
+
+    if (m_layout.Layer4Type == NetPacketLayer4TypeUdp)
+    {
+        if (m_gsoContext.PerformUso(m_currentNetBufferList, m_layout, segmentedNbl) == STATUS_SUCCESS)
+        {
+            InterlockedIncrementNoFence64(
+                reinterpret_cast<LONG64 *>(&m_statistics.Segment.UdpSuccess));
+            ReplaceCurrentNetBufferList(segmentedNbl);
+            m_gso.UDP.Mss = 0U;
+
+            return true;
+        }
+        else
+        {
+            InterlockedIncrementNoFence64(
+                reinterpret_cast<LONG64 *>(&m_statistics.Segment.UdpFailure));
+
+            PKTMON_DROP_NBL(
+                const_cast<PKTMON_COMPONENT_CONTEXT *>(m_pktmonComponentContext),
+                m_currentNetBufferList,
+                PktMonDir_Out,
+                PktMonDrop_NetCx_USOFailure,
+                PMLOC_NETCX_NBL_USO_FAILURE);
+
+            return false;
+        }
+    }
+
+    return true;
+}
+
+_Use_decl_annotations_
+bool
+NxNblTranslator::TranslateNetBuffer(
+    UINT32 Index
+)
+{
+    auto & packet = *NetRingGetPacketAtIndex(NetRingCollectionGetPacketRing(m_rings), Index);
+
+    (void) TranslateLayout();
+
+    if (IsSoftwareGsoRequired())
+    {
+        if (! GenericSendOffloadFallback())
+        {
+            m_counters.Errors += 1;
+
+            packet.Ignore = true;
+            packet.FragmentCount = 0U;
+
+            return true;
+        }
+        else
+        {
+            m_checksum = m_metadataTranslator.TranslatePacketChecksum(*m_currentNetBufferList);
+        }
+    }
+
+    switch (TranslateNetBufferToNetPacket(&packet))
+    {
+
+    case NxNblTranslationStatus::BounceRequired:
+        // The buffers in the NET_BUFFER's MDL chain cannot be transmitted as is. As such we need
+        // to bounce the packet
+
+        if (! m_bouncePool.BounceNetBuffer(*m_currentNetBuffer, packet))
+        {
+            if (packet.Ignore)
+            {
+                // If it was not possible to bounce the NET_BUFFER and the
+                // current packet was marked to be ignored we should *not*
+                // try to translate it again.
+                InterlockedIncrementNoFence64(
+                    reinterpret_cast<LONG64 *>(&m_statistics.Packet.CannotTranslate));
+                m_counters.Errors += 1;
+
+                PKTMON_DROP_NBL(
+                    const_cast<PKTMON_COMPONENT_CONTEXT *>(m_pktmonComponentContext),
+                    m_currentNetBufferList,
+                    PktMonDir_Out,
+                    PktMonDrop_NetCx_BufferBounceFailureAndPacketIgnore,
+                    PMLOC_NETCX_BUFFER_BOUNCE_FAILURE)
+
+                break;
+            }
+            else
+            {
+                // It was not possible to bounce the NET_BUFFER because we're
+                // out of some resource. Try again later.
+                InterlockedIncrementNoFence64(
+                    reinterpret_cast<LONG64 *>(&m_statistics.Packet.BounceFailure));
+
+                return false;
+            }
+        }
+
+        InterlockedIncrementNoFence64(
+            reinterpret_cast<LONG64 *>(&m_statistics.Packet.BounceSuccess));
+
+        __fallthrough;
+
+    case NxNblTranslationStatus::Success:
+        packet.Layout = m_layout;
+
+        m_metadataTranslator.TranslatePacketWifiExemptionAction(*m_currentNetBufferList, Index);
+        if (m_extensions.Extension.Gso.Enabled)
+        {
+            *NetExtensionGetPacketGso(&m_extensions.Extension.Gso, Index) = m_gso;
+        }
+        if (m_extensions.Extension.Checksum.Enabled)
+        {
+            if (IsSoftwareChecksumRequired())
+            {
+                NET_PACKET_CHECKSUM checksum = m_checksum;
+                checksum.Layer3 = NetPacketTxChecksumActionPassthrough;
+                checksum.Layer4 = NetPacketTxChecksumActionPassthrough;
+
+                *NetExtensionGetPacketChecksum(&m_extensions.Extension.Checksum, Index) = checksum;
+            }
+            else
+            {
+                *NetExtensionGetPacketChecksum(&m_extensions.Extension.Checksum, Index) = m_checksum;
+            }
+        }
+        if (m_extensions.Extension.Ieee8021q.Enabled)
+        {
+            *NetExtensionGetPacketIeee8021Q(&m_extensions.Extension.Ieee8021q, Index) = m_ieee8021q;
+        }
+
+        break;
+
+    case NxNblTranslationStatus::InsufficientResources:
+        // There are not enough resources at the moment to translate the NET_BUFFER,
+        // stop processing here. Once there are enough resources available this will
+        // make forward progress
+
+        return false;
+
+    case NxNblTranslationStatus::CannotTranslate:
+        // For some reason we won't ever be able to translate the NET_BUFFER,
+        // mark the corresponding NET_PACKET to be dropped.
+
+        packet.Ignore = true;
+        packet.FragmentCount = 0;
+
+        InterlockedIncrementNoFence64(
+            reinterpret_cast<LONG64 *>(&m_statistics.Packet.CannotTranslate));
+        m_counters.Errors += 1;
+
+        break;
+    }
+
+    return true;
+}
+
 ULONG
 NxNblTranslator::TranslateNbls(
-    NET_BUFFER_LIST *&currentNbl,
-    NET_BUFFER *&currentNetBuffer,
-    NxBounceBufferPool &BouncePool
-) const
+    void
+)
 {
     auto pr = NetRingCollectionGetPacketRing(m_rings);
     auto const endIndex = pr->EndIndex;
 
-    while (currentNbl && pr->EndIndex != ((pr->OSReserved0 - 1) & pr->ElementIndexMask))
+    TranslateNetBufferListInfo();
+
+    while (m_currentNetBufferList && pr->EndIndex != NetRingAdvanceIndex(pr, pr->OSReserved0, -1))
     {
-        if (! currentNetBuffer)
+        auto & context = m_contextBuffer.GetContext<PacketContext>(pr->EndIndex);
+
+        if (! m_currentNetBuffer)
         {
-            currentNetBuffer = currentNbl->FirstNetBuffer;
+            m_currentNetBuffer = m_currentNetBufferList->FirstNetBuffer;
         }
 
-        auto currentPacket = NetRingGetPacketAtIndex(pr, pr->EndIndex);
+        context.DestinationType = NxGetPacketAddressType(m_layer2Type, *m_currentNetBuffer);
 
-        switch (TranslateNetBufferToNetPacket(*currentNetBuffer, currentPacket))
+        if (! TranslateNetBuffer(pr->EndIndex))
         {
-        case NxNblTranslationStatus::BounceRequired:
-            // The buffers in the NET_BUFFER's MDL chain cannot be transmitted as is. As such we need
-            // to bounce the packet
-
-            if(!BouncePool.BounceNetBuffer(*currentNetBuffer, *currentPacket))
-            {
-                if (currentPacket->Ignore)
-                {
-                    // If it was not possible to bounce the NET_BUFFER and the
-                    // current packet was marked to be ignored we should *not*
-                    // try to translate it again.
-                    m_stats.Packet.CannotTranslate += 1;
-                    m_genStats.Increment(NxStatisticsCounters::NumberOfErrors);
-                    break;
-                }
-                else
-                {
-                    // It was not possible to bounce the NET_BUFFER because we're
-                    // out of some resource. Try again later.
-                    m_stats.Packet.BounceFailure += 1;
-                    return endIndex != pr->EndIndex;
-                }
-            }
-
-            m_stats.Packet.BounceSuccess += 1;
-            __fallthrough;
-
-        case NxNblTranslationStatus::Success:
-            currentPacket->Layout = NxGetPacketLayout(m_mediaType, m_rings, m_extensions.Extension.VirtualAddress, currentPacket, m_datapathCapabilities.TxPayloadBackfill);
-            TranslateNetBufferListOOBDataToNetPacketExtensions(*currentNbl, currentPacket, pr->EndIndex);
-            m_genStats.Increment(NxStatisticsCounters::NumberOfPackets);
-            m_genStats.IncrementBy(NxStatisticsCounters::BytesOfData, (ULONG64)GetPacketBytes(m_rings, currentPacket));
-            break;
-
-        case NxNblTranslationStatus::InsufficientResources:
-            // There are not enough resources at the moment to translate the NET_BUFFER,
-            // stop processing here. Once there are enough resources available this will
-            // make forward progress
-            return endIndex != pr->EndIndex;
-
-        case NxNblTranslationStatus::CannotTranslate:
-            // For some reason we won't ever be able to translate the NET_BUFFER,
-            // mark the corresponding NET_PACKET to be dropped.
-            currentPacket->Ignore = true;
-            currentPacket->FragmentCount = 0;
-            m_stats.Packet.CannotTranslate += 1;
-            m_genStats.Increment(NxStatisticsCounters::NumberOfErrors);
             break;
         }
 
-        currentNetBuffer = currentNetBuffer->Next;
+        m_currentNetBuffer = m_currentNetBuffer->Next;
 
-        if (! currentNetBuffer)
+        if (! m_currentNetBuffer)
         {
             // This is the final NB in the NBL, so let's bundle the NBL
             // up with the NET_PACKET.  We'll find it later when completing packets.
 
-            auto &currentPacketExtension = m_contextBuffer.GetContext<PacketContext>(pr->EndIndex);
-            currentPacketExtension.NetBufferListToComplete = currentNbl;
+            PKTMON_LOG_NBL(
+                const_cast<PKTMON_EDGE_CONTEXT *>(m_pktmonLowerEdgeContext),
+                m_currentNetBufferList,
+                PktMonPayload_Ethernet,
+                true,
+                PktMonDir_Out);
+
+            context.NetBufferListToComplete = m_currentNetBufferList;
 
             // Now let's advance to the next NBL.
-            currentNbl = currentNbl->Next;
+            m_currentNetBufferList = m_currentNetBufferList->Next;
+            if (m_currentNetBufferList)
+            {
+                TranslateNetBufferListInfo();
+            }
         }
 
         pr->EndIndex = NetRingIncrementIndex(pr, pr->EndIndex);
@@ -853,66 +1386,19 @@ NxNblTranslator::TranslateNbls(
     return NetRingGetRangeCount(pr, endIndex, pr->EndIndex);
 }
 
-_Use_decl_annotations_
 void
-NxNblTranslator::TranslateNetPacketExtensionsCompletionToNetBufferList(
-    const NET_PACKET *netPacket,
-    PNET_BUFFER_LIST netBufferList
-) const
+NxNblTranslator::TranslateNetBufferListInfo(
+    void
+)
 {
-    auto const & lsoExtension = m_extensions.Extension.Lso;
-    if (lsoExtension.Enabled && netPacket->Layout.Layer4Type == NetPacketLayer4TypeTcp)
-    {
-        // lso requires special markings upon completion.
-        auto &lsoInfo =
-            *reinterpret_cast<NDIS_TCP_LARGE_SEND_OFFLOAD_NET_BUFFER_LIST_INFO*>(
-                &netBufferList->NetBufferListInfo[TcpLargeSendNetBufferListInfo]);
-
-        if (lsoInfo.Value != 0)
-        {
-            auto const lsoType = lsoInfo.Transmit.Type;
-            lsoInfo.Value = 0;
-
-            switch (lsoType)
-            {
-            case NDIS_TCP_LARGE_SEND_OFFLOAD_V1_TYPE:
-                {
-                    size_t totalPacketSize = 0;
-
-                    auto fr = NetRingCollectionGetFragmentRing(m_rings);
-                    for (UINT32 i = 0; i < netPacket->FragmentCount; i++)
-                    {
-                        totalPacketSize += static_cast<size_t>(NetRingGetFragmentAtIndex(fr, (netPacket->FragmentIndex + i) & fr->ElementIndexMask)->ValidLength);
-                    }
-
-                    auto const tcpPayloadOffset =
-                        netPacket->Layout.Layer2HeaderLength +
-                        netPacket->Layout.Layer3HeaderLength +
-                        netPacket->Layout.Layer4HeaderLength;
-
-                    lsoInfo.LsoV1TransmitComplete.Type = lsoType;
-                    lsoInfo.LsoV1TransmitComplete.TcpPayload = (ULONG)(totalPacketSize - tcpPayloadOffset);
-                }
-                break;
-            case NDIS_TCP_LARGE_SEND_OFFLOAD_V2_TYPE:
-                lsoInfo.LsoV2TransmitComplete.Type = lsoType;
-                break;
-            }
-        }
-    }
-    else
-    {
-        auto const &lsoInfo =
-            *reinterpret_cast<NDIS_TCP_LARGE_SEND_OFFLOAD_NET_BUFFER_LIST_INFO*>(
-                &netBufferList->NetBufferListInfo[TcpLargeSendNetBufferListInfo]);
-        WIN_VERIFY(lsoInfo.Value == 0);
-    }
+    m_gso = m_metadataTranslator.TranslatePacketGso(*m_currentNetBufferList);
+    m_checksum = m_metadataTranslator.TranslatePacketChecksum(*m_currentNetBufferList);
+    m_ieee8021q = m_metadataTranslator.TranslatePacketIeee8021q(*m_currentNetBufferList);
 }
 
-_Use_decl_annotations_
 TxPacketCompletionStatus
 NxNblTranslator::CompletePackets(
-    NxBounceBufferPool &BouncePool
+    void
 ) const
 {
     TxPacketCompletionStatus result;
@@ -920,7 +1406,7 @@ NxNblTranslator::CompletePackets(
     auto pr = NetRingCollectionGetPacketRing(m_rings);
     auto const osreserved0 = pr->OSReserved0;
 
-    for (; pr->OSReserved0 != pr->BeginIndex;
+    for (; ((pr->OSReserved0 != pr->BeginIndex) && (result.NumCompletedNbls < NBL_SEND_COMPLETION_BATCH_SIZE));
         pr->OSReserved0 = NetRingIncrementIndex(pr, pr->OSReserved0))
     {
         auto packet = NetRingGetPacketAtIndex(pr, pr->OSReserved0);
@@ -932,21 +1418,53 @@ NxNblTranslator::CompletePackets(
         }
 
         // Free any bounce buffers allocated for this packet
-        BouncePool.FreeBounceBuffers(*packet);
+        m_bouncePool.FreeBounceBuffers(*packet);
 
         if (auto completedNbl = extension.NetBufferListToComplete)
         {
             extension.NetBufferListToComplete = nullptr;
 
+            if (IsNetBufferListSoftwareSegmented(completedNbl))
+            {
+                auto originNbl = completedNbl->ParentNetBufferList;
+                m_gsoContext.FreeSoftwareSegmentedNetBufferList(completedNbl);
+                completedNbl = originNbl;
+            }
+
             completedNbl->Status = NDIS_STATUS_SUCCESS;
             completedNbl->Next = result.CompletedChain;
             result.CompletedChain = completedNbl;
 
-            TranslateNetPacketExtensionsCompletionToNetBufferList(
-                packet,
-                completedNbl);
+            m_metadataTranslator.TranslatePacketGsoComplete(*completedNbl, pr->OSReserved0);
 
             result.NumCompletedNbls += 1;
+        }
+
+        if (! packet->Ignore)
+        {
+            switch (extension.DestinationType)
+            {
+
+            case AddressType::Unicast:
+                m_counters.Unicast.Packets += 1;
+                m_counters.Unicast.Bytes += GetPacketBytes(m_rings, packet);
+
+                break;
+
+            case AddressType::Multicast:
+                m_counters.Multicast.Packets += 1;
+                m_counters.Multicast.Bytes += GetPacketBytes(m_rings, packet);
+
+                break;
+
+            case AddressType::Broadcast:
+
+                m_counters.Broadcast.Packets += 1;
+                m_counters.Broadcast.Bytes += GetPacketBytes(m_rings, packet);
+
+                break;
+
+            }
         }
 
         RtlZeroMemory(packet, pr->ElementStride);
@@ -957,3 +1475,10 @@ NxNblTranslator::CompletePackets(
     return result;
 }
 
+TxPacketCounters const &
+NxNblTranslator::GetCounters(
+    void
+) const
+{
+    return m_counters;
+}

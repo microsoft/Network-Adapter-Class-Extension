@@ -1,5 +1,7 @@
 #pragma once
 
+#include <ndis/nblqueue.h>
+#include <ndis/nblreceive.h>
 #include "RtlHomogenousSequence.h"
 
 // Utility class that builds on top of a simple NBL_QUEUE.
@@ -15,7 +17,7 @@ public:
 
     NxNblSequence()
     {
-        ndisInitializeNblQueue(&m_queue);
+        NdisInitializeNblQueue(&m_queue);
     }
 
     void AddNbl(_In_ NET_BUFFER_LIST *nbl)
@@ -25,7 +27,7 @@ public:
         m_frameTypes.AddValue((USHORT)nbl->NetBufferListInfo[NetBufferListFrameType]);
 
         m_count += 1;
-        ndisAppendNblChainToNblQueueFast(&m_queue, nbl, nbl);
+        NdisAppendNblChainToNblQueueFast(&m_queue, nbl, nbl);
     }
 
     operator bool() const
@@ -51,6 +53,32 @@ public:
             receiveFlags |= NDIS_RECEIVE_FLAGS_SINGLE_ETHER_TYPE;
 
         return receiveFlags;
+    }
+
+    // Calling PopAllNblsFromNblQueue() + PushNblsToNblQueue() will temporarily
+    // get the NBL chain out of NBL_QUEUE, perform coalescing,
+    // and then put NBL chain back to NBL_QUEUE.
+    // Frame type of coalesced NBLs is not changed, so m_frameTypes remain unchanged.
+    NET_BUFFER_LIST *
+    PopAllNblsFromNblQueue(
+        void
+    )
+    {
+        NET_BUFFER_LIST * nblChain = NdisPopAllFromNblQueue(&m_queue);
+        m_count = 0U;
+
+        return nblChain;
+    }
+
+    void
+    PushNblsToNblQueue(
+        _In_ NET_BUFFER_LIST * NblChainHead,
+        _In_ NET_BUFFER_LIST * NblChainTail,
+        _In_ ULONG NblCount
+    )
+    {
+        NdisAppendNblChainToNblQueueFast(&GetNblQueue(), NblChainHead, NblChainTail);
+        m_count += NblCount;
     }
 
 private:

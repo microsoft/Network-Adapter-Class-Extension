@@ -31,6 +31,10 @@ Notes:
 #include <ntintsafe.h>
 #include <wil/wistd_type_traits.h>
 
+#ifndef _KERNEL_MODE
+#include "UmPool.h"
+#endif // _KERNEL_MODE
+
 class ndisTriageClass;
 VOID ndisInitGlobalTriageBlock();
 
@@ -54,7 +58,7 @@ public:
     friend class KArray;
     protected:
 
-        PAGED const_iterator(KArray const *a, size_t i) : _a{ const_cast<KArray*>(a) }, _i{ i } { }
+        PAGED const_iterator(KArray const *a, size_t i) : _a{ const_cast<KArray*>(a) }, _i{ i } { ensure_valid(); }
 
     public:
 
@@ -67,6 +71,8 @@ public:
         PAGED const_iterator &operator++() { _i++; return *this; }
         PAGED const_iterator operator++(int) { auto result = *this; ++(*this); return result; }
 
+        PAGED const_iterator &operator+=(size_t offset) { _i += offset; return *this;}
+
         PAGED T const &operator*() const { return (*_a)[_i]; }
         PAGED T const *operator->() const { return &(*_a)[_i]; }
 
@@ -74,6 +80,8 @@ public:
         PAGED bool operator!=(const_iterator const &rhs) const { return !(rhs == *this); }
 
     protected:
+
+        PAGED void ensure_valid() const { if (_i > _a->count()) RtlFailFast(FAST_FAIL_RANGE_CHECK_FAILURE); }
 
         KArray *_a;
         size_t _i;
@@ -252,6 +260,44 @@ public:
         return true;
     }
 
+    PAGED bool insertAt(const iterator &destination, const const_iterator &start, const const_iterator &end)
+    {
+        if (end._i < start._i || destination._a != this)
+            RtlFailFast(FAST_FAIL_INVALID_ARG);
+        if (end._i == start._i)
+            return true;
+
+        const size_t countToInsert = end._i - start._i;
+
+        size_t countToGrow;
+        if (!NT_SUCCESS(RtlSIZETAdd(m_numElements, countToInsert, reinterpret_cast<SIZE_T*>(&countToGrow))))
+            return false;
+
+        if (!grow(countToGrow))
+            return false;
+
+        moveElements((ULONG)destination._i, (ULONG)(destination._i+countToInsert), (ULONG)(m_numElements - destination._i));
+
+        if constexpr(__is_trivially_copyable(T))
+        {
+            memcpy(_p + destination._i, wistd::addressof((*start._a)[start._i]), countToInsert * sizeof(T));
+        }
+        else
+        {
+            const_iterator readCursor(start);
+            iterator writeCursor(destination);
+            while (readCursor != end)
+            {
+                new(wistd::addressof(_p[writeCursor._i])) T(wistd::move((*readCursor._a)[readCursor._i]));
+                writeCursor++;
+                readCursor++;
+            }
+        }
+
+        m_numElements += static_cast<ULONG>(countToInsert);
+        return true;
+    }
+
     PAGED bool insertAt(size_t index, T &&t)
     {
         if (index > m_numElements)
@@ -397,7 +443,7 @@ private:
     {
         if (from == to || number == 0)
         {
-            NOTHING;
+            return;
         }
         else if constexpr(__is_trivially_copyable(T))
         {
@@ -415,13 +461,13 @@ private:
                 new (wistd::addressof(_p[i - 1])) T(wistd::move(_p[i - delta - 1]));
             }
 
-            for (NOTHING; i > to; i--)
+            for (; i > to; i--)
             {
                 _p[i - 1].~T();
                 new (wistd::addressof(_p[i - 1])) T(wistd::move(_p[i - delta - 1]));
             }
 
-            for (NOTHING; i > from; i--)
+            for (; i > from; i--)
             {
                 _p[i - 1].~T();
             }
@@ -438,13 +484,13 @@ private:
                 new (wistd::addressof(_p[i])) T(wistd::move(_p[i + delta]));
             }
 
-            for (NOTHING; i < to + number; i++)
+            for (; i < to + number; i++)
             {
                 _p[i].~T();
                 new (wistd::addressof(_p[i])) T(wistd::move(_p[i + delta]));
             }
 
-            for (NOTHING; i < from + number; i++)
+            for (; i < from + number; i++)
             {
                 _p[i].~T();
             }

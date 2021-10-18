@@ -2,11 +2,13 @@
 
 #include <KMacros.h>
 
-class KSpinLock
+class KSpinLockBase
 {
-public:
+protected:
 
-    KSpinLock()
+    KSpinLockBase() = default;
+
+    void InitializeBase()
     {
 #if _KERNEL_MODE
         KeInitializeSpinLock(&m_lock);
@@ -14,6 +16,13 @@ public:
         InitializeSRWLock(&m_lock);
 #endif
     }
+
+public:
+
+    KSpinLockBase(KSpinLockBase&) = delete;
+    KSpinLockBase(KSpinLockBase&&) = delete;
+    KSpinLockBase& operator=(KSpinLockBase&) = delete;
+    KSpinLockBase& operator=(KSpinLockBase&&) = delete;
 
     _Requires_lock_not_held_(*this)
     _Acquires_lock_(*this)
@@ -68,6 +77,28 @@ private:
 #endif
 };
 
+class KSpinLock : public KSpinLockBase
+{
+public:
+
+    KSpinLock()
+    {
+        InitializeBase();
+    }
+};
+
+class KSpinLockManualConstruct : public KSpinLockBase
+{
+public:
+
+    KSpinLockManualConstruct() = default;
+
+    void Initialize()
+    {
+        InitializeBase();
+    }
+};
+
 class KAcquireSpinLock
 {
 public:
@@ -76,7 +107,7 @@ public:
     _Acquires_lock_(lock)
     _IRQL_requires_max_(DISPATCH_LEVEL)
     _IRQL_raises_(DISPATCH_LEVEL)
-    KAcquireSpinLock(KSpinLock &lock) :
+    KAcquireSpinLock(KSpinLockBase &lock) :
         m_lock(lock)
     {
         Acquire();
@@ -121,5 +152,5 @@ private:
 
     static const KIRQL NOT_ACQUIRED = (KIRQL)-1;
     KIRQL m_oldIrql = NOT_ACQUIRED;
-    KSpinLock &m_lock;
+    KSpinLockBase &m_lock;
 };

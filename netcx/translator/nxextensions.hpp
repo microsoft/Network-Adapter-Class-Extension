@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <net/extension.h>
+
 #pragma warning(push)
 #pragma warning(default:4820) // warn if the compiler inserted padding
 
@@ -14,7 +16,10 @@ union TxExtensions {
             Checksum;
 
         NET_EXTENSION
-            Lso;
+            Gso;
+
+        NET_EXTENSION
+            WifiExemptionAction;
 
         NET_EXTENSION
             LogicalAddress;
@@ -24,6 +29,9 @@ union TxExtensions {
 
         NET_EXTENSION
             Mdl;
+
+        NET_EXTENSION
+            Ieee8021q;
 
     } Extension;
 
@@ -47,17 +55,22 @@ union RxExtensions {
             RscTimestamp;
 
         NET_EXTENSION
+            DataBuffer;
+
+        NET_EXTENSION
             LogicalAddress;
 
         NET_EXTENSION
             VirtualAddress;
 
         NET_EXTENSION
-            Mdl;
-
-        NET_EXTENSION
             ReturnContext;
 
+        NET_EXTENSION
+            Ieee8021q;
+
+        NET_EXTENSION
+            Hash;
     } Extension;
 
     NET_EXTENSION

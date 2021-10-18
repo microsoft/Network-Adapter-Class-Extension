@@ -10,20 +10,24 @@
 #include <net/fragment.h>
 #include <net/logicaladdress_p.h>
 #include <net/virtualaddress_p.h>
+#include <net/mdl_p.h>
 
 struct FragmentContext
 {
     NET_CLIENT_BUFFER_POOL BufferPool;
     NET_CLIENT_BUFFER_POOL_DISPATCH const * BufferPoolDispatch;
+    SIZE_T BufferIndex;
 };
 
 NxBounceBufferPool::NxBounceBufferPool(
     NET_RING_COLLECTION const & Rings,
     NET_EXTENSION const & VirtualAddressExtension,
-    NET_EXTENSION const & LogicalAddressExtension
+    NET_EXTENSION const & LogicalAddressExtension,
+    NET_EXTENSION const & MdlExtension
 )
     : m_virtualAddressExtension(VirtualAddressExtension)
     , m_logicalAddressExtension(LogicalAddressExtension)
+    , m_mdlExtension(MdlExtension)
     , m_rings(&Rings)
     , m_fragmentContext(Rings, NetRingTypeFragment)
 {
@@ -48,12 +52,19 @@ NxBounceBufferPool::Initialize(
     size_t NumberOfBuffers
 )
 {
+    if (m_bufferPool != nullptr)
+    {
+        m_bufferPoolDispatch->NetClientDestroyBufferPool(m_bufferPool);
+        m_bufferPool = nullptr;
+        m_bufferPoolDispatch = nullptr;
+    }
+
     //
     // Current bouncing logic ensures that a bounced NET_PACKET always has a single NET_FRAGMENT
     // So we can include NET_PACKET backfill in the buffer size
     //
     m_txPayloadBackfill = DatapathCapabilities.TxPayloadBackfill;
-    m_bufferSize = DatapathCapabilities.MaximumTxFragmentSize + m_txPayloadBackfill;
+    m_bufferSize = DatapathCapabilities.MaximumTxFragmentSize;
 
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         m_fragmentContext.Initialize(sizeof(FragmentContext)),
@@ -70,7 +81,7 @@ NxBounceBufferPool::Initialize(
         m_bufferSize,
         0,
         0,
-        MM_ANY_NODE_OK,
+        MM_ANY_NODE_OK, //use the numa node supplied by adapter capabilities
         NET_CLIENT_BUFFER_POOL_FLAGS_NONE
     };
 
@@ -128,24 +139,38 @@ Remarks:
     auto fragment = NetRingGetFragmentAtIndex(fr, frOsBegin);
     auto virtualAddress = NetExtensionGetFragmentVirtualAddress(
         &m_virtualAddressExtension, frOsBegin);
-    auto logicalAddress = NetExtensionGetFragmentLogicalAddress(
-        &m_logicalAddressExtension, frOsBegin);
 
     RtlZeroMemory(fragment, sizeof(NET_FRAGMENT));
 
-    SIZE_T offset, capacity;
+    NET_DATA_HEADER dataHeader;
+    SIZE_T offset, bufferIndex;
     if (STATUS_SUCCESS != m_bufferPoolDispatch->NetClientAllocateBuffer(
-            m_bufferPool,
-            &virtualAddress->VirtualAddress,
-            &logicalAddress->LogicalAddress,
-            &offset,
-            &capacity))
+        m_bufferPool,
+        &bufferIndex,
+        &dataHeader,
+        &offset))
     {
         return false;
     }
+ 
+    virtualAddress->VirtualAddress = dataHeader.VirtualAddress;
+
+    if (m_logicalAddressExtension.Enabled)
+    {
+        auto logicalAddress = NetExtensionGetFragmentLogicalAddress(
+            &m_logicalAddressExtension, frOsBegin);
+        logicalAddress->LogicalAddress = dataHeader.LogicalAddress;
+    }
+
+    if (m_mdlExtension.Enabled)
+    {
+        auto fragmentMdl = NetExtensionGetFragmentMdl(
+            &m_mdlExtension, frOsBegin);
+        fragmentMdl->Mdl = dataHeader.Mdl;
+    }
 
     fragment->Offset = offset;
-    fragment->Capacity = capacity;
+    fragment->Capacity = m_bufferSize;
     fragment->ValidLength = m_txPayloadBackfill;
 
     PMDL mdl = NET_BUFFER_CURRENT_MDL(&NetBuffer);
@@ -184,7 +209,7 @@ Remarks:
 
     if (fragment->ValidLength != packetSize)
     {
-        m_bufferPoolDispatch->NetClientFreeBuffers(m_bufferPool, &virtualAddress->VirtualAddress, 1);
+        m_bufferPoolDispatch->NetClientFreeBuffers(m_bufferPool, &bufferIndex, 1);
         NetPacket.Ignore = TRUE;
         NetPacket.FragmentCount = 0;
 
@@ -200,6 +225,7 @@ Remarks:
     auto & fragmentContext = m_fragmentContext.GetContext<FragmentContext>(frOsBegin);
     fragmentContext.BufferPool = m_bufferPool;
     fragmentContext.BufferPoolDispatch = m_bufferPoolDispatch;
+    fragmentContext.BufferIndex = bufferIndex;
 
     return true;
 }
@@ -220,18 +246,15 @@ NxBounceBufferPool::FreeBounceBuffers(
     {
         auto const index = (NetPacket.FragmentIndex + i) & fr->ElementIndexMask;
         auto & fragmentContext = m_fragmentContext.GetContext<FragmentContext>(index);
-        auto virtualAddress = NetExtensionGetFragmentVirtualAddress(
-            &m_virtualAddressExtension, index);
 
         if (fragmentContext.BufferPool != nullptr)
         {
             fragmentContext.BufferPoolDispatch->NetClientFreeBuffers(
                 fragmentContext.BufferPool,
-                &virtualAddress->VirtualAddress,
+                &fragmentContext.BufferIndex,
                 1);
 
             fragmentContext = {};
         }
     }
 }
-

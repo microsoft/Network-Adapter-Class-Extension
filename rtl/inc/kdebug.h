@@ -14,10 +14,13 @@ struct KRTL_CLASS NdisDebugBlock
     }
 #endif
 
-    NONPAGED void ASSERT_VALID() const
+    _IRQL_requires_max_(HIGH_LEVEL)
+    NONPAGEDX bool ASSERT_VALID() const
     {
 #if DBG
-        WIN_ASSERT(Signature == SIGNATURE);
+        return NT_VERIFY(Signature == SIGNATURE);
+#else
+        return true;
 #endif
     }
 

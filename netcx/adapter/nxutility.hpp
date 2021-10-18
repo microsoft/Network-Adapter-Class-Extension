@@ -12,6 +12,9 @@ Abstract:
 
 #include <FxObjectBase.hpp>
 #include <KWaitEvent.h>
+#include <KArray.h>
+
+#include "ExecutionContext.hpp"
 
 class AsyncResult
 {
@@ -29,28 +32,18 @@ public:
 
 private:
 
-    KAutoEvent m_signal;
-    NTSTATUS m_status = STATUS_SUCCESS;
+    KAutoEvent
+        m_signal;
+
+    NTSTATUS
+        m_status = STATUS_SUCCESS;
 };
 
 enum class DeviceState
 {
     Initialized = 0,
     SelfManagedIoInitialized,
-    Started,
-
-    // In a framework initiated removal (orderly or surprise PnP remove)
-    // the releasing of a device needs to be split in two phases. In phase
-    // 1 NDIS unbinds and halts all the network adapters, in phase 2 we wait
-    // until any outstanding reference on said adapters are released.
-    //
-    // ReleasingPhase1Pending and ReleasingPhase2Pending are used to keep track
-    // of which phase is still pending execution so that we can do only what is
-    // needed in case a client driver calls NetAdapterStop in the middle of a
-    // release
-    ReleasingPhase1Pending,
-    ReleasingPhase2Pending,
-
+    Releasing,
     Released,
     Removed
 };
@@ -59,12 +52,10 @@ _Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS
 NxWdfCollectionAddMultiSz(
-    _Inout_  WDFCOLLECTION                         Collection,
-    _In_opt_ WDF_OBJECT_ATTRIBUTES *               StringsAttributes,
-    _In_reads_bytes_(BufferLength)
-             PWCHAR                                MultiSzBuffer,
-    _In_     ULONG                                 BufferLength,
-    _In_opt_ RECORDER_LOG                          RecorderLog
+    _Inout_ WDFCOLLECTION Collection,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES * StringsAttributes,
+    _In_reads_bytes_(BufferLength) PWCHAR MultiSzBuffer,
+    _In_ ULONG BufferLength
 );
 
 template<typename T>
@@ -73,7 +64,8 @@ NDIS_STATUS_INDICATION_INIT(
     _Out_ PNDIS_STATUS_INDICATION statusIndication,
     _In_ NDIS_HANDLE sourceHandle,
     NDIS_STATUS statusCode,
-    _In_ T const * payload)
+    _In_ T const * payload
+)
 {
     static_assert(!wistd::is_pointer<T>::value, "Status indication payload cannot be a pointer.");
 
@@ -91,7 +83,11 @@ NDIS_STATUS_INDICATION_INIT(
 
 template<typename T>
 NDIS_STATUS_INDICATION
-MakeNdisStatusIndication(_In_ NDIS_HANDLE sourceHandle, NDIS_STATUS statusCode, T const & payload)
+MakeNdisStatusIndication(
+    _In_ NDIS_HANDLE sourceHandle,
+    NDIS_STATUS statusCode,
+    T const & payload
+)
 {
     NDIS_STATUS_INDICATION statusIndication;
     NDIS_STATUS_INDICATION_INIT(&statusIndication, sourceHandle, statusCode, &payload);
@@ -101,7 +97,9 @@ MakeNdisStatusIndication(_In_ NDIS_HANDLE sourceHandle, NDIS_STATUS statusCode, 
 
 inline
 void
-_WdfObjectDereference(_In_ WDFOBJECT Object)
+_WdfObjectDereference(
+    _In_ WDFOBJECT Object
+)
 {
     WdfObjectDereference(Object);
 }
@@ -112,15 +110,39 @@ using unique_wdf_reference = wil::unique_any<TWdfHandle, decltype(&::_WdfObjectD
 template<typename TFxObject>
 using unique_fx_ptr = wistd::unique_ptr<TFxObject, CFxObjectDeleter>;
 
-NET_ADAPTER_DATAPATH_CALLBACKS
-GetDefaultDatapathCallbacks(
-    void
-);
+using unique_file_object_reference = wistd::unique_ptr<FILE_OBJECT, wil::function_deleter<decltype(&::ObfDereferenceObject), &::ObfDereferenceObject>>;
+
+struct unique_ptr_array_deleter
+{
+    template <typename T>
+    void operator()(_Pre_opt_valid_ _Frees_ptr_opt_ T * RawPointer) const
+    {
+        wistd::unique_ptr<T []> uniquePtr{ RawPointer };
+        uniquePtr.reset();
+    }
+};
+
+template <typename T>
+wil::unique_any_array_ptr<T, unique_ptr_array_deleter>
+make_unique_array(
+    _In_ size_t NumberOfElements
+)
+{
+    auto allocation = wil::make_unique_nothrow<T []>(NumberOfElements);
+
+    if (!allocation)
+    {
+        return {};
+    }
+
+    return { allocation.release(), NumberOfElements };
+}
 
 ULONG
 inline
 InterlockedIncrementU(
-    _In_ ULONG volatile *Addend)
+    _In_ ULONG volatile * Addend
+)
 {
     return static_cast<ULONG>(InterlockedIncrement(reinterpret_cast<LONG volatile*>(Addend)));
 }
@@ -128,7 +150,71 @@ InterlockedIncrementU(
 ULONG
 inline
 InterlockedDecrementU(
-    _In_ ULONG volatile *Addend)
+    _In_ ULONG volatile * Addend
+)
 {
     return static_cast<ULONG>(InterlockedDecrement(reinterpret_cast<LONG volatile*>(Addend)));
+}
+
+inline
+LONG
+NxInterlockedDecrementFloor(
+    __inout LONG  volatile *Target,
+    __in LONG Floor
+    )
+{
+    LONG startVal;
+    LONG currentVal;
+
+    currentVal = *Target;
+
+    do
+    {
+        if (currentVal <= Floor)
+        {
+            //
+            // This value cannot be returned in the success path
+            //
+            return Floor - 1;
+        }
+
+        startVal = currentVal;
+
+        //
+        // currentVal will be the value that used to be Target if the exchange was made
+        // or its current value if the exchange was not made.
+        //
+        currentVal = InterlockedCompareExchange(Target, startVal - 1, startVal);
+
+        //
+        // If startVal == currentVal, then no one updated Target in between the deref at the top
+        // and the InterlockedCompareExchange afterward.
+        //
+    } while (startVal != currentVal);
+
+    //
+    // startVal is the old value of Target. Since InterlockedDecrement returns the new
+    // decremented value of Target, we should do the same here.
+    //
+    return startVal - 1;
+}
+
+FORCEINLINE
+void
+InitializeListEntry(
+    _Out_ PLIST_ENTRY ListEntry
+    )
+/*++
+
+Routine Description:
+
+    Initialize a list entry to NULL.
+
+    - Using this improves catching list manipulation errors
+    - This should not be called on a list head
+    - Callers may depend on use of NULL value
+
+--*/
+{
+    ListEntry->Flink = ListEntry->Blink = NULL;
 }

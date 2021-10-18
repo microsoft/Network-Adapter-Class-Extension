@@ -1,8 +1,9 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
 #include "precompiled.hpp"
 
-#include "NxWakeSource.tmh"
 #include "NxWakeSource.hpp"
+
+#include "NxWakeSource.tmh"
 
 _Use_decl_annotations_
 NxWakeSource::NxWakeSource(
@@ -216,3 +217,37 @@ NxWakeMagicPacket::NxWakeMagicPacket(
     : NxWakePattern(NetWakeSourceTypeMagicPacket, Adapter, Id)
 {
 }
+
+_Use_decl_annotations_
+NTSTATUS
+NxWakeEapolPacket::CreateFromNdisWoLPattern(
+    NETADAPTER Adapter,
+    NDIS_PM_WOL_PATTERN const * NdisPattern,
+    NxWakePattern ** EapolPacket
+)
+{
+    *EapolPacket = nullptr;
+
+    NT_FRE_ASSERT(NdisPattern->WoLPacketType == NdisPMWoLPacketEapolRequestIdMessage);
+
+    auto eapolPacket = wil::make_unique_nothrow<NxWakeEapolPacket>(Adapter, NdisPattern->PatternId);
+
+    if (!eapolPacket)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    *EapolPacket = eapolPacket.release();
+
+    return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+NxWakeEapolPacket::NxWakeEapolPacket(
+    NETADAPTER Adapter,
+    ULONG Id
+)
+    : NxWakePattern(NetWakeSourceTypeEapolPacket, Adapter, Id)
+{
+}
+

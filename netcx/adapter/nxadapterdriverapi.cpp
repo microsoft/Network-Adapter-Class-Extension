@@ -1,22 +1,18 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
 
-/*++
-
-Abstract:
-
-    This module contains the "C" interface for the NxAdapter object.
-
---*/
-
 #include "Nx.hpp"
 
 #include <NxApi.hpp>
 
-#include "NxAdapterDriverApi.tmh"
-
 #include "NxDriver.hpp"
 #include "verifier.hpp"
 #include "version.hpp"
+
+#include "NxAdapterDriverApi.tmh"
+
+extern
+WDFWAITLOCK
+    g_RegistrationLock;
 
 _Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -61,7 +57,7 @@ Return Value:
         NxDriver *nxDriver = GetNxDriverFromWdfDriver(Driver);
 
         if (nxDriver->GetNdisMiniportDriverHandle() != NULL) {
-            LogError(NULL, FLAG_DRIVER, "Driver already registered");
+            LogError(FLAG_DRIVER, "Driver already registered");
             CX_RETURN_IF_NOT_NT_SUCCESS(STATUS_INVALID_DEVICE_STATE);
         }
 

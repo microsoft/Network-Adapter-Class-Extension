@@ -1,10 +1,10 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
 #include "precompiled.hpp"
 
-#include "NxPowerList.tmh"
 #include "NxPowerList.hpp"
-
 #include "NxPowerPolicy.hpp"
+
+#include "NxPowerList.tmh"
 
 _Use_decl_annotations_
 NxPowerOffloadList const *

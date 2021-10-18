@@ -159,3 +159,25 @@ public:
     );
 
 };
+
+class NxWakeEapolPacket : public NxWakePattern
+{
+
+public:
+
+    static
+    NTSTATUS
+    CreateFromNdisWoLPattern(
+        _In_ NETADAPTER Adapter,
+        _In_ NDIS_PM_WOL_PATTERN const * NdisPattern,
+        _Outptr_result_nullonfailure_ NxWakePattern ** EapolPacket
+    );
+
+public:
+
+    NxWakeEapolPacket(
+        _In_ NETADAPTER Adapter,
+        _In_ ULONG Id
+    );
+
+};

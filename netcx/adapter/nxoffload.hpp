@@ -4,23 +4,51 @@
 
 #include <KArray.h>
 
+#include <netadapteroffload.h>
 #include <preview/netadapteroffload.h>
 
 enum class OffloadType {
     Checksum,
-    Lso,
-    Rsc
+    Rsc,
+    TxChecksum,
+    RxChecksum,
+    Gso
 };
+
+typedef struct _NET_OFFLOAD_TX_CHECKSUM_CAPABILITIES
+{
+    NET_ADAPTER_OFFLOAD_TX_CHECKSUM_CAPABILITIES
+        IPv4Capabilities;
+
+    NET_ADAPTER_OFFLOAD_TX_CHECKSUM_CAPABILITIES
+        TcpCapabilities;
+
+    NET_ADAPTER_OFFLOAD_TX_CHECKSUM_CAPABILITIES
+        UdpCapabilities;
+
+} NET_OFFLOAD_TX_CHECKSUM_CAPABILITIES;
+
+typedef struct _NET_OFFLOAD_GSO_CAPABILITIES
+{
+    NET_ADAPTER_OFFLOAD_GSO_CAPABILITIES
+        LsoCapabilities;
+
+    NET_ADAPTER_OFFLOAD_GSO_CAPABILITIES
+        UsoCapabilities;
+
+} NET_OFFLOAD_GSO_CAPABILITIES;
 
 template <typename P>
 using NxOffloadCallBack = void (*)(NETADAPTER, NETOFFLOAD);
 
 class NxAdapter;
 
-class NxOffloadBase : public NxNonpagedAllocation<'fOxN'>
+class NxOffloadBase
+    : public NxNonpagedAllocation<'fOxN'>
 {
 private:
-    OffloadType m_OffloadType;
+    OffloadType
+        m_offloadType;
 
 public:
     NxOffloadBase(
@@ -45,15 +73,19 @@ public:
 };
 
 template <typename T>
-class NxOffload : public NxOffloadBase
+class NxOffload
+    : public NxOffloadBase
 {
 private:
 
-    T m_HardwareCapabilities;
+    T
+        m_hardwareCapabilities;
 
-    NxOffloadCallBack<T> m_NxOffloadCallback = nullptr;
+    NxOffloadCallBack<T>
+        m_offloadCallback = nullptr;
 
-    bool m_HardwareSupport = false;
+    bool
+        m_hardwareSupport = false;
 
 public:
 
@@ -65,6 +97,11 @@ public:
     void
     SetHardwareCapabilities(
         _In_ T const * HardwareCapabilities,
+        _In_ NxOffloadCallBack<T> OffloadCallback
+    );
+
+    void
+    SetOffloadCallback(
         _In_ NxOffloadCallBack<T> OffloadCallback
     );
 
@@ -84,7 +121,8 @@ public:
         ) const override;
 };
 
-class INxOffloadFacade : public NxNonpagedAllocation<'fOxN'>
+class INxOffloadFacade
+    : public NxNonpagedAllocation<'fOxN'>
 {
 public:
 
@@ -93,7 +131,7 @@ public:
     RegisterExtension(
         _In_ OffloadType OffloadType,
         _In_ NxOffloadBase const * Offload
-        ) = 0;
+    ) = 0;
 
     virtual
     NETADAPTER
@@ -106,14 +144,16 @@ public:
     QueryStandardizedKeywordSetting(
         _In_ PCUNICODE_STRING ValueName,
         _Out_ PULONG Value
-        ) = 0;
+    ) = 0;
 };
 
-class NxOffloadFacade : public INxOffloadFacade
+class NxOffloadFacade
+    : public INxOffloadFacade
 {
 
 private:
-    NxAdapter& m_NxAdapter;
+    NxAdapter &
+        m_adapter;
 
 public:
     NxOffloadFacade(
@@ -131,6 +171,7 @@ public:
         void
         ) const;
 
+    // Queries standardized keyword setting from the device scope.
     NTSTATUS
     QueryStandardizedKeywordSetting(
         _In_ PCUNICODE_STRING ValueName,
@@ -138,12 +179,18 @@ public:
     );
 };
 
-class NxOffloadManager : public NxNonpagedAllocation<'fOxN'>
+class NxOffloadManager
+    : public NxNonpagedAllocation<'fOxN'>
 {
 private:
-    Rtl::KArray<wistd::unique_ptr<NxOffloadBase>, NonPagedPoolNx> m_NxOffloads;
+    Rtl::KArray<wistd::unique_ptr<NxOffloadBase>, NonPagedPoolNx>
+        m_offloads;
 
-    wistd::unique_ptr<INxOffloadFacade> m_NxOffloadFacade;
+    wistd::unique_ptr<INxOffloadFacade>
+        m_offloadFacade;
+
+    bool
+        m_isChecksumRegistered = false;
 
     template <typename T>
     void
@@ -166,6 +213,13 @@ private:
         _In_ OffloadType OffloadType
     );
 
+    template <typename T>
+    void
+    SetOffloadCallback(
+        _In_ OffloadType OffloadType,
+        _In_ NxOffloadCallBack<T> OffloadCallback
+    );
+
     NxOffloadBase *
     FindNxOffload(
         _In_ OffloadType OffloadType
@@ -176,9 +230,20 @@ private:
         _In_ NDIS_STRING Keyword
     ) const;
 
+    bool
+    IsKeywordPresent(
+        _In_ UNICODE_STRING Keyword
+    ) const;
+
+    ULONG
+    GetStandardizedKeywordSetting(
+        _In_ NDIS_STRING Keyword,
+        _In_ ULONG DefaultValue
+    ) const;
+
 public:
     NxOffloadManager(
-        _In_ INxOffloadFacade *NxOffloadFacade
+        _In_ INxOffloadFacade * NxOffloadFacade
     );
 
     NTSTATUS
@@ -207,24 +272,107 @@ public:
     );
 
     void
-    SetLsoHardwareCapabilities(
-        _In_ NET_ADAPTER_OFFLOAD_LSO_CAPABILITIES const * HardwareCapabilities
+    SetTxChecksumHardwareCapabilities(
+        _In_ NET_ADAPTER_OFFLOAD_TX_CHECKSUM_CAPABILITIES const * HardwareCapabilities
     );
 
     void
-    GetLsoHardwareCapabilities(
-        _Out_ NET_CLIENT_OFFLOAD_LSO_CAPABILITIES * HardwareCapabilities
+    GetTxChecksumHardwareCapabilities(
+        _Out_ NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES * HardwareCapabilities
     ) const;
+
+    void
+    GetTxChecksumSoftwareCapabilities(
+        _Out_ NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES * SoftwareCapabilities
+    ) const;
+
+    void
+    GetTxIPv4ChecksumDefaultCapabilities(
+        _Out_ NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES * DefaultCapabilities
+    ) const;
+
+    void
+    GetTxTcpChecksumDefaultCapabilities(
+        _Out_ NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES * DefaultCapabilities
+    ) const;
+
+    void
+    GetTxUdpChecksumDefaultCapabilities(
+        _Out_ NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES * DefaultCapabilities
+    ) const;
+
+    void
+    SetTxChecksumActiveCapabilities(
+        _In_ NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES const * ActiveIPv4Capabilities,
+        _In_ NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES const * ActiveTcpCapabilities,
+        _In_ NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES const * ActiveUdpCapabilities
+    );
+
+    bool
+    IsTxChecksumSoftwareFallbackEnabled(
+        void
+    ) const;
+
+    void
+    SetRxChecksumCapabilities(
+        _In_ NET_ADAPTER_OFFLOAD_RX_CHECKSUM_CAPABILITIES const * Capabilities
+    );
+
+    void
+    GetRxChecksumHardwareCapabilities(
+        _Out_ NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES * HardwareCapabilities
+    ) const;
+
+    void
+    GetRxChecksumDefaultCapabilities(
+        _Out_ NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES * DefaultCapabilities
+    ) const;
+
+    void
+    SetRxChecksumActiveCapabilities(
+        _In_ NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES const * ActiveCapabilities
+    );
+
+    void
+    SetGsoHardwareCapabilities(
+        _In_ NET_ADAPTER_OFFLOAD_GSO_CAPABILITIES const * HardwareCapabilities
+    );
+
+    void
+    GetGsoHardwareCapabilities(
+        _Out_ NET_CLIENT_OFFLOAD_GSO_CAPABILITIES * HardwareCapabilities
+    ) const;
+
+    void
+    GetGsoSoftwareCapabilities(
+        _Out_ NET_CLIENT_OFFLOAD_GSO_CAPABILITIES * SoftwareCapabilities
+    ) const;
+
+    void
+    SetGsoActiveCapabilities(
+        _In_ NET_CLIENT_OFFLOAD_GSO_CAPABILITIES const * LsoActiveCapabilities,
+        _In_ NET_CLIENT_OFFLOAD_GSO_CAPABILITIES const * UsoActiveCapabilities
+    );
 
     void
     GetLsoDefaultCapabilities(
-        _Out_ NET_CLIENT_OFFLOAD_LSO_CAPABILITIES * DefaultCapabilities
+        _Out_ NET_CLIENT_OFFLOAD_GSO_CAPABILITIES * DefaultCapabilities
     ) const;
 
     void
-    SetLsoActiveCapabilities(
-        _In_ NET_CLIENT_OFFLOAD_LSO_CAPABILITIES const * ActiveCapabilities
-    );
+    GetUsoDefaultCapabilities(
+        _Out_ NET_CLIENT_OFFLOAD_GSO_CAPABILITIES * DefaultCapabilities
+    ) const;
+
+    bool
+    IsLsoSoftwareFallbackEnabled(
+        void
+    ) const;
+
+    bool
+    IsUsoSoftwareFallbackEnabled(
+        void
+    ) const;
 
     NTSTATUS
     RegisterExtensions(
@@ -242,6 +390,11 @@ public:
     ) const;
 
     void
+    GetRscSoftwareCapabilities(
+        _Out_ NET_CLIENT_OFFLOAD_RSC_CAPABILITIES * SoftwareCapabilities
+    ) const;
+
+    void
     GetRscDefaultCapabilities(
         _Out_ NET_CLIENT_OFFLOAD_RSC_CAPABILITIES * DefaultCapabilities
     ) const;
@@ -250,5 +403,10 @@ public:
     SetRscActiveCapabilities(
         _In_ NET_CLIENT_OFFLOAD_RSC_CAPABILITIES const * ActiveCapabilities
     );
+
+    bool
+    IsRscSoftwareFallbackEnabled(
+        void
+    ) const;
 };
 

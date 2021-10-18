@@ -4,13 +4,13 @@
 
 #include <NxApi.hpp>
 
-#include "NxPowerPolicyApi.tmh"
-
 #include "NxDevice.hpp"
 #include "powerpolicy/NxPowerPolicy.hpp"
 #include "powerpolicy/NxPowerList.hpp"
 #include "verifier.hpp"
 #include "version.hpp"
+
+#include "NxPowerPolicyApi.tmh"
 
 _IRQL_requires_(PASSIVE_LEVEL)
 WDFAPI
@@ -28,6 +28,24 @@ NETEXPORT(NetPowerOffloadGetType)(
 
     auto powerOffload = reinterpret_cast<NxPowerOffload const *>(PowerOffload);
     return powerOffload->GetType();
+}
+
+_IRQL_requires_(PASSIVE_LEVEL)
+WDFAPI
+NETADAPTER
+NTAPI
+NETEXPORT(NetPowerOffloadGetAdapter)(
+    _In_ PNET_DRIVER_GLOBALS DriverGlobals,
+    _In_ NETPOWEROFFLOAD PowerOffload
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+
+    auto powerOffload = reinterpret_cast<NxPowerOffload const *>(PowerOffload);
+    return powerOffload->GetAdapter();
 }
 
 _IRQL_requires_(PASSIVE_LEVEL)

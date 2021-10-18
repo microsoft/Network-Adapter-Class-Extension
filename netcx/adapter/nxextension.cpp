@@ -3,11 +3,9 @@
 #pragma once
 
 #include "Nx.hpp"
-
-#include "NxExtension.tmh"
 #include "NxExtension.hpp"
 
-#include "NxMacros.hpp"
+#include "NxExtension.tmh"
 
 _Use_decl_annotations_
 NTSTATUS

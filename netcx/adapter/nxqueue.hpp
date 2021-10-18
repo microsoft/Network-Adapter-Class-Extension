@@ -5,14 +5,21 @@
 #include <FxObject.hpp>
 #include <KArray.h>
 #include <KPtr.h>
+#include <NetClientBuffer.h>
 #include <NetClientQueue.h>
 
 #include "extension/NxExtensionLayout.hpp"
+#include "queue/Queue.hpp"
+
+#include "ExecutionContext.hpp"
 
 struct NX_PRIVATE_GLOBALS;
 class NxAdapter;
+class NxQueueVerifier;
 
 #define QUEUE_CREATION_CONTEXT_SIGNATURE 0x7840dd95
+
+using unique_packet_queue = wil::unique_wdf_any<NETPACKETQUEUE>;
 
 struct QUEUE_CREATION_CONTEXT
 {
@@ -31,8 +38,8 @@ struct QUEUE_CREATION_CONTEXT
     NET_CLIENT_QUEUE_DISPATCH const **
         AdapterDispatch = nullptr;
 
-    NxAdapter *
-        Adapter = nullptr;
+    WDFOBJECT
+        ParentObject = WDF_NO_HANDLE;
 
     Rtl::KArray<NET_EXTENSION_PRIVATE>
         Extensions;
@@ -43,27 +50,27 @@ struct QUEUE_CREATION_CONTEXT
     void *
         ClientQueue = nullptr;
 
-    wil::unique_wdf_object
+    unique_packet_queue
         CreatedQueueObject;
 
+    ExecutionContext *
+        ExecutionContext = nullptr;
 };
 
 class NxQueue
+    : public NetCx::Core::Queue
 {
 public:
 
-    enum class Type
-    {
-        Rx,
-        Tx,
-    };
-
     NxQueue(
-        _In_ NX_PRIVATE_GLOBALS const & PrivateGlobals,
         _In_ QUEUE_CREATION_CONTEXT const & InitContext,
-        _In_ ULONG QueueId,
         _In_ NET_PACKET_QUEUE_CONFIG const & QueueConfig,
-        _In_ NxQueue::Type QueueType
+        _In_ NetCx::Core::Queue::Type QueueType
+    );
+
+    void
+    Cleanup(
+        void
     );
 
     virtual
@@ -71,15 +78,27 @@ public:
         void
     ) = default;
 
+    _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
     Initialize(
-        _In_ QUEUE_CREATION_CONTEXT & InitContext
+        _Inout_ QUEUE_CREATION_CONTEXT & InitContext
+    );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    ExecutionContext *
+    GetExecutionContext(
+        void
     );
 
     void
     NotifyMorePacketsAvailable(
         void
     );
+
+    NET_CLIENT_QUEUE_TX_DEMUX_PROPERTY const *
+    GetTxDemuxProperty(
+        NET_CLIENT_QUEUE_TX_DEMUX_TYPE Type
+    ) const;
 
     void
     Start(
@@ -97,13 +116,8 @@ public:
     );
 
     void
-    AdvanceVerifying(
-        void
-    );
-
-    void
-    CancelVerifying(
-        void
+    Advance(
+        NxQueueVerifier & Verifier
     );
 
     void
@@ -112,8 +126,18 @@ public:
     );
 
     void
+    Cancel(
+        NxQueueVerifier & Verifier
+    );
+
+    void
     SetArmed(
         _In_ bool isArmed
+    );
+
+    WDFOBJECT
+    GetParent(
+        void
     );
 
     WDFOBJECT
@@ -121,78 +145,21 @@ public:
         void
     );
 
-    NET_RING_COLLECTION const *
-    GetRingCollection(
-        void
-    ) const;
-
-    NxAdapter *
-    GetAdapter(
-        void
-    );
-
-    void
-    GetExtension(
-        _In_ const NET_EXTENSION_PRIVATE* ExtensionToQuery,
-        _Out_ NET_EXTENSION* Extension
-    );
-
     ULONG const
-        m_queueId = ~0U;
+        m_queueId;
 
-    NxQueue::Type const
+    NetCx::Core::Queue::Type const
         m_queueType;
-
-protected:
-
-    NxAdapter *
-        m_adapter = nullptr;
-
-    NxExtensionLayout
-        m_packetLayout;
-
-    NxExtensionLayout
-        m_fragmentLayout;
 
 private:
 
+    _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
-    CreateRing(
-        _In_ size_t ElementSize,
-        _In_ UINT32 ElementCount,
-        _In_ NET_RING_TYPE RingType
-    );
-
-    void
-    AdvancePreVerifying(
+    CreateFrameworkExecutionContext(
         void
     );
 
-    void
-    AdvancePostVerifying(
-        void
-    ) const;
-
-    NX_PRIVATE_GLOBALS const &
-        m_privateGlobals;
-
-    KPoolPtr<NET_RING>
-        m_rings[NetRingTypeFragment + 1];
-
-    NET_RING_COLLECTION
-        m_ringCollection;
-
-    UINT32
-        m_verifiedPacketIndex = 0;
-
-    UINT32
-        m_verifiedFragmentIndex = 0;
-
-    KPoolPtr<NET_RING>
-        m_verifiedRings[NetRingTypeFragment + 1];
-
-    NET_RING_COLLECTION
-        m_verifiedRingCollection;
+private:
 
     void *
         m_clientQueue = nullptr;
@@ -200,104 +167,34 @@ private:
     NET_CLIENT_QUEUE_NOTIFY_DISPATCH const *
         m_clientDispatch = nullptr;
 
-    NET_PACKET_QUEUE_CONFIG const
-        m_packetQueueConfig;
+    NET_PACKET_QUEUE_CONFIG
+        m_packetQueueConfig = {};
 
-    UINT8
-        m_toggle = 0;
+    NETPACKETQUEUE const
+        m_queue;
 
-protected:
+    WDFOBJECT const
+        m_parent;
 
-    NETPACKETQUEUE
-        m_queue = nullptr;
+    // Used when client driver does not provide their own execution context
+    wistd::unique_ptr<ExecutionContext>
+        m_frameworkExecutionContext;
+
+    ExecutionContext *
+        m_executionContext = nullptr;
+
+    EXECUTION_CONTEXT_NOTIFICATION
+        m_driverNotification = {};
 };
 
-class NxTxQueue;
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxQueue, GetNxQueueFromHandle);
 
-FORCEINLINE
-NxTxQueue *
-GetTxQueueFromHandle(
-    _In_ NETPACKETQUEUE TxQueue
-    );
-
-class NxTxQueue :
-    public NxQueue,
-    public CFxObject<NETPACKETQUEUE, NxTxQueue, GetTxQueueFromHandle, true>
-{
-public:
-
-    NxTxQueue(
-        _In_ WDFOBJECT Object,
-        _In_ NX_PRIVATE_GLOBALS const & PrivateGlobals,
-        _In_ QUEUE_CREATION_CONTEXT const & InitContext,
-        _In_ ULONG QueueId,
-        _In_ NET_PACKET_QUEUE_CONFIG const & QueueConfig
-    );
-
-    virtual
-    ~NxTxQueue(
-        void
-    ) = default;
-
-    NTSTATUS
-    Initialize(
-        _In_ QUEUE_CREATION_CONTEXT & InitContext
-    );
-};
-
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxTxQueue, _GetTxQueueFromHandle);
-
-FORCEINLINE
-NxTxQueue *
-GetTxQueueFromHandle(
-    NETPACKETQUEUE TxQueue
-    )
-{
-    return _GetTxQueueFromHandle(TxQueue);
-}
-
-class NxRxQueue;
-
-FORCEINLINE
-NxRxQueue *
-GetRxQueueFromHandle(
-    _In_ NETPACKETQUEUE RxQueue
+NTSTATUS
+PacketQueueCreate(
+    _In_ NX_PRIVATE_GLOBALS const & PrivateGlobals,
+    _In_ NET_PACKET_QUEUE_CONFIG const & Configuration,
+    _In_ QUEUE_CREATION_CONTEXT & InitContext,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES * ClientAttributes,
+    _In_ NetCx::Core::Queue::Type Type,
+    _Out_ NETPACKETQUEUE * PacketQueue
 );
-
-class NxRxQueue :
-    public NxQueue,
-    public CFxObject<NETPACKETQUEUE, NxRxQueue, GetRxQueueFromHandle, true>
-{
-
-public:
-
-    NxRxQueue(
-        _In_ WDFOBJECT Object,
-        _In_ NX_PRIVATE_GLOBALS const & PrivateGlobals,
-        _In_ QUEUE_CREATION_CONTEXT const & InitContext,
-        _In_ ULONG QueueId,
-        _In_ NET_PACKET_QUEUE_CONFIG const & QueueConfig
-    );
-
-    virtual
-    ~NxRxQueue(
-        void
-    ) = default;
-
-    NTSTATUS
-    Initialize(
-        _In_ QUEUE_CREATION_CONTEXT & InitContext
-    );
-};
-
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxRxQueue, _GetRxQueueFromHandle);
-
-FORCEINLINE
-NxRxQueue *
-GetRxQueueFromHandle(
-    NETPACKETQUEUE RxQueue
-    )
-{
-    return _GetRxQueueFromHandle(RxQueue);
-}
-

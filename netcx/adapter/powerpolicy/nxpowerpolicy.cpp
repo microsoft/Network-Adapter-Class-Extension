@@ -1,20 +1,30 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
 #include "precompiled.hpp"
 
-#include "NxPowerPolicy.tmh"
+#include "idle/IdleStateMachine.hpp"
+#include "WdfObjectCallback.hpp"
 #include "NxPowerPolicy.hpp"
+
+#include "NxPowerPolicy.tmh"
+
+#ifdef _KERNEL_MODE
+
+#include "NxConfiguration.hpp"
+
+#endif
 
 NxPowerPolicy::NxPowerPolicy(
     _In_ WDFDEVICE Device,
     _In_ NET_DEVICE_POWER_POLICY_EVENT_CALLBACKS const & PowerPolicyCallbacks,
     _In_ NETADAPTER Adapter,
-    _In_ RECORDER_LOG RecorderLog
+    bool shouldAcquirePowerReferencesForAdapter
 )
     : m_device(Device)
     , m_adapter(Adapter)
-    , m_recorderLog(RecorderLog)
     , m_wakeOnMediaChange(Adapter)
     , m_wakeOnPacketFilterMatch(Adapter)
+    , m_shouldAcquirePowerReferencesForAdapter(shouldAcquirePowerReferencesForAdapter)
+    , m_idleRestrictions(Adapter, Device)
 {
     if (PowerPolicyCallbacks.Size != 0)
     {
@@ -32,6 +42,8 @@ NxPowerPolicy::~NxPowerPolicy(
     while (m_WakeListHead.Next != nullptr)
     {
         auto listEntry = PopEntryList(&m_WakeListHead);
+        m_wakeListEntryCount--;
+
         auto powerEntry = CONTAINING_RECORD(listEntry, NxWakeSource, m_powerPolicyLinkage);
 
         powerEntry->~NxWakeSource();
@@ -43,15 +55,80 @@ NxPowerPolicy::~NxPowerPolicy(
         auto listEntry = PopEntryList(&m_ProtocolOffloadListHead);
         auto powerEntry = CONTAINING_RECORD(listEntry, NxPowerOffload, m_powerPolicyLinkage);
 
+        if (powerEntry->GetType() == NetPowerOffloadTypeArp)
+        {
+            m_protocolOffloadArpCount--;
+        }
+        else
+        {
+            m_protocolOffloadNsCount--;
+        }
+
         powerEntry->~NxPowerOffload();
         ExFreePoolWithTag(powerEntry, NETCX_POWER_TAG);
     }
+
+    NT_FRE_ASSERT(m_wakeListEntryCount == 0u);
+    NT_FRE_ASSERT(m_protocolOffloadArpCount == 0u);
+    NT_FRE_ASSERT(m_protocolOffloadNsCount == 0u);
+}
+
+bool IsS0IdleRestrictionPolicyValueValid(ULONG queriedKeywordValue)
+{
+    return  queriedKeywordValue >= static_cast<ULONG>(NxIdleRestrictions::IdleRestrictionSettings::None) &&
+            queriedKeywordValue <= static_cast<ULONG>(NxIdleRestrictions::IdleRestrictionSettings::HighLatencyResume);
+}
+
+void
+NxPowerPolicy::Initialize()
+{
+    // Initialize S0Idle Restriction
+    ULONG restrictionPolicy = static_cast<ULONG>(NxIdleRestrictions::IdleRestrictionSettings::None);
+    DECLARE_CONST_UNICODE_STRING(restrictionPolicyKeyword, L"*IdleRestriction");
+    QueryStandardizedKeyword(restrictionPolicyKeyword, restrictionPolicy);
+
+    if (!IsS0IdleRestrictionPolicyValueValid(restrictionPolicy))
+    {
+        LogError(FLAG_POWER,
+            "Driver indicated invalid value for keyword *IdleRestriction, Value: %u. Using default (0).",
+            restrictionPolicy);
+        restrictionPolicy = static_cast<ULONG>(NxIdleRestrictions::IdleRestrictionSettings::None);
+    }
+
+    m_driverSpecifiedRestrictionSettings = static_cast<NxIdleRestrictions::IdleRestrictionSettings>(restrictionPolicy);
+
+    const auto restrictionPolicyStatus = SetS0IdleRestriction();
+
+    if (!NT_SUCCESS(restrictionPolicyStatus))
+    {
+        LogError(FLAG_POWER,
+            "Failed to set restriction policy on WDFDEVICE: %p, NETADAPTER: %p, Staus: %!STATUS!",
+            m_device,
+            m_adapter,
+            restrictionPolicyStatus);
+    }
+}
+
+bool
+NxPowerPolicy::IsPowerCapable(
+    void
+) const
+{
+    return
+        m_powerOffloadArpCapabilities.Size != 0 ||
+        m_powerOffloadNSCapabilities.Size != 0 ||
+        m_wakeBitmapCapabilities.Size != 0 ||
+        m_magicPacketCapabilities.Size != 0 ||
+        m_eapolPacketCapabilities.Size != 0 ||
+        m_wakeMediaChangeCapabilities.Size != 0 ||
+        m_wakePacketFilterCapabilities.Size != 0;
 }
 
 _Use_decl_annotations_
 void
 NxPowerPolicy::InitializeNdisCapabilities(
     ULONG MediaSpecificWakeUpEvents,
+    ULONG SupportedProtocolOffloads,
     NDIS_PM_CAPABILITIES * NdisPowerCapabilities
 )
 {
@@ -61,6 +138,9 @@ NxPowerPolicy::InitializeNdisCapabilities(
     NdisPowerCapabilities->Header.Revision = NDIS_PM_CAPABILITIES_REVISION_2;
 
     NdisPowerCapabilities->MediaSpecificWakeUpEvents = MediaSpecificWakeUpEvents;
+    NdisPowerCapabilities->SupportedProtocolOffloads = SupportedProtocolOffloads;
+
+    NdisPowerCapabilities->Flags |= NDIS_PM_SELECTIVE_SUSPEND_SUPPORTED;
 
     if (m_wakeMediaChangeCapabilities.MediaConnect)
     {
@@ -77,17 +157,23 @@ NxPowerPolicy::InitializeNdisCapabilities(
         NdisPowerCapabilities->SupportedWoLPacketPatterns |= NDIS_PM_WOL_MAGIC_PACKET_SUPPORTED;
     }
 
+    if (m_eapolPacketCapabilities.EapolPacket)
+    {
+        NdisPowerCapabilities->SupportedWoLPacketPatterns |= NDIS_PM_WOL_EAPOL_REQUEST_ID_MESSAGE_SUPPORTED;
+    }
+
     if (m_wakeBitmapCapabilities.BitmapPattern)
     {
+        NdisPowerCapabilities->Flags |= NDIS_PM_S0_IDLE_SUPPORTED;
         NdisPowerCapabilities->SupportedWoLPacketPatterns |= NDIS_PM_WOL_BITMAP_PATTERN_SUPPORTED;
     }
 
     NdisPowerCapabilities->MaxWoLPatternSize = static_cast<ULONG>(m_wakeBitmapCapabilities.MaximumPatternSize);
     NdisPowerCapabilities->NumTotalWoLPatterns = static_cast<ULONG>(m_wakeBitmapCapabilities.MaximumPatternCount);
 
-    if (m_wakePacketFilterCapabilities.PacketFilterMatch)
+    if (NdisPowerCapabilities->SupportedWoLPacketPatterns)
     {
-        NdisPowerCapabilities->Flags |= NDIS_PM_SELECTIVE_SUSPEND_SUPPORTED;
+        NdisPowerCapabilities->Flags |= NDIS_PM_WAKE_PACKET_INDICATION_SUPPORTED;
     }
 
     if (m_powerOffloadArpCapabilities.ArpOffload)
@@ -110,11 +196,18 @@ NxPowerPolicy::InitializeNdisCapabilities(
     {
         NdisPowerCapabilities->MinPatternWakeUp = NdisDeviceStateD2;
     }
-    if (NdisPowerCapabilities->SupportedWoLPacketPatterns & NDIS_PM_WOL_MAGIC_PACKET_ENABLED)
+
+    if (NdisPowerCapabilities->SupportedWoLPacketPatterns & NDIS_PM_WOL_MAGIC_PACKET_SUPPORTED)
     {
         NdisPowerCapabilities->MinMagicPacketWakeUp = NdisDeviceStateD2;
     }
+
     if (NdisPowerCapabilities->SupportedWakeUpEvents & NDIS_PM_WAKE_ON_MEDIA_CONNECT_SUPPORTED)
+    {
+        NdisPowerCapabilities->MinLinkChangeWakeUp = NdisDeviceStateD2;
+    }
+
+    if (NdisPowerCapabilities->SupportedWakeUpEvents & NDIS_PM_WAKE_ON_MEDIA_DISCONNECT_SUPPORTED)
     {
         NdisPowerCapabilities->MinLinkChangeWakeUp = NdisDeviceStateD2;
     }
@@ -158,6 +251,15 @@ NxPowerPolicy::SetMagicPacketCapabilities(
 
 _Use_decl_annotations_
 void
+NxPowerPolicy::SetEapolPacketCapabilities(
+    NET_ADAPTER_WAKE_EAPOL_PACKET_CAPABILITIES const * Capabilities
+)
+{
+    RtlCopyMemory(&m_eapolPacketCapabilities, Capabilities, Capabilities->Size);
+}
+
+_Use_decl_annotations_
+void
 NxPowerPolicy::SetWakeMediaChangeCapabilities(
     NET_ADAPTER_WAKE_MEDIA_CHANGE_CAPABILITIES const * Capabilities
 )
@@ -172,6 +274,9 @@ NxPowerPolicy::SetWakePacketFilterCapabilities(
 )
 {
     RtlCopyMemory(&m_wakePacketFilterCapabilities, Capabilities, Capabilities->Size);
+
+    // If wake on packet filter match capabilites change we may need to update the idle restrictions
+    SetS0IdleRestriction();
 }
 
 _Use_decl_annotations_
@@ -245,9 +350,9 @@ NxPowerPolicy::AddProtocolOffload(
     _In_ NDIS_OID_REQUEST::_REQUEST_DATA::_SET const * SetInformation
 )
 {
-    if (SetInformation->InformationBufferLength < sizeof(NDIS_PM_PROTOCOL_OFFLOAD))
+    if (SetInformation->InformationBufferLength < NDIS_SIZEOF_NDIS_PM_PROTOCOL_OFFLOAD_REVISION_1)
     {
-        LogError(GetRecorderLog(), FLAG_POWER,
+        LogError(FLAG_POWER,
             "Invalid InformationBufferLength (%u) for OID_PM_ADD_PROTOCOL_OFFLOAD", SetInformation->InformationBufferLength);
 
         return NDIS_STATUS_INVALID_PARAMETER;
@@ -265,6 +370,18 @@ NxPowerPolicy::AddProtocolOffload(
             if (!m_powerOffloadArpCapabilities.ArpOffload)
             {
                 return NDIS_STATUS_NOT_SUPPORTED;
+            }
+
+            NT_FRE_ASSERT(m_powerOffloadArpCapabilities.MaximumOffloadCount != 0);
+            if (m_protocolOffloadArpCount == m_powerOffloadArpCapabilities.MaximumOffloadCount)
+            {
+                return NDIS_STATUS_PM_PROTOCOL_OFFLOAD_LIST_FULL;
+            }
+
+            NT_FRE_ASSERT(m_powerOffloadArpCapabilities.MaximumOffloadCount != 0);
+            if (m_protocolOffloadArpCount == m_powerOffloadArpCapabilities.MaximumOffloadCount)
+            {
+                return NDIS_STATUS_PM_PROTOCOL_OFFLOAD_LIST_FULL;
             }
 
             auto const ndisStatus = NxArpOffload::CreateFromNdisPmOffload(
@@ -285,6 +402,18 @@ NxPowerPolicy::AddProtocolOffload(
             if (!m_powerOffloadNSCapabilities.NSOffload)
             {
                 return NDIS_STATUS_NOT_SUPPORTED;
+            }
+
+            NT_FRE_ASSERT(m_powerOffloadNSCapabilities.MaximumOffloadCount != 0);
+            if (m_protocolOffloadNsCount == m_powerOffloadNSCapabilities.MaximumOffloadCount)
+            {
+                return NDIS_STATUS_PM_PROTOCOL_OFFLOAD_LIST_FULL;
+            }
+
+            NT_FRE_ASSERT(m_powerOffloadNSCapabilities.MaximumOffloadCount != 0);
+            if (m_protocolOffloadNsCount == m_powerOffloadNSCapabilities.MaximumOffloadCount)
+            {
+                return NDIS_STATUS_PM_PROTOCOL_OFFLOAD_LIST_FULL;
             }
 
             auto const ndisStatus = NxNSOffload::CreateFromNdisPmOffload(
@@ -308,7 +437,10 @@ NxPowerPolicy::AddProtocolOffload(
 
     if (pfnPreview != nullptr)
     {
-        auto const previewStatus = pfnPreview(m_device, powerOffload->GetHandle());
+        auto const previewStatus = InvokePoweredCallback(
+            pfnPreview,
+            m_device,
+            powerOffload->GetHandle());
 
         if (previewStatus == STATUS_NDIS_PM_PROTOCOL_OFFLOAD_LIST_FULL)
         {
@@ -326,6 +458,15 @@ NxPowerPolicy::AddProtocolOffload(
     UpdateProtocolOffloadEntryEnabledField(powerOffload.get());
 
     PushEntryList(&m_ProtocolOffloadListHead, &powerOffload->m_powerPolicyLinkage);
+
+    if (ndisProtocolOffload->ProtocolOffloadType == NdisPMProtocolOffloadIdIPv4ARP)
+    {
+        m_protocolOffloadArpCount++;
+    }
+    else
+    {
+        m_protocolOffloadNsCount++;
+    }
 
     powerOffload.release();
 
@@ -348,6 +489,16 @@ NxPowerPolicy::RemovePowerOffloadByID(
         if (powerOffload->GetID() == OffloadID)
         {
             PopEntryList(prevEntry);
+
+            if (powerOffload->GetType() == NetPowerOffloadTypeArp)
+            {
+                m_protocolOffloadArpCount--;
+            }
+            else
+            {
+                m_protocolOffloadNsCount--;
+            }
+
             return powerOffload;
         }
         prevEntry = listEntry;
@@ -368,7 +519,7 @@ Routine Description:
 {
     if (SetInformation->InformationBufferLength < sizeof(ULONG))
     {
-        LogError(GetRecorderLog(), FLAG_POWER,
+        LogError(FLAG_POWER,
             "Invalid InformationBufferLength (%u) for OID_PM_REMOVE_PROTOCOL_OFFLOAD", SetInformation->InformationBufferLength);
 
         return NDIS_STATUS_INVALID_PARAMETER;
@@ -389,12 +540,12 @@ Routine Description:
     return NDIS_STATUS_SUCCESS;
 }
 
-RECORDER_LOG
-NxPowerPolicy::GetRecorderLog(
+void
+NxPowerPolicy::OnWdfStopIdleRefsSupported(
     void
 )
 {
-    return m_recorderLog;
+    m_idleRestrictions.OnWdfStopIdleRefsSupported();
 }
 
 NDIS_STATUS
@@ -404,7 +555,7 @@ NxPowerPolicy::AddWakePattern(
 {
     if (SetInformation->InformationBufferLength < sizeof(NDIS_PM_WOL_PATTERN))
     {
-        LogError(GetRecorderLog(), FLAG_POWER,
+        LogError(FLAG_POWER,
             "Invalid InformationBufferLength (%u) for OID_PM_ADD_WOL_PATTERN", SetInformation->InformationBufferLength);
 
         return NDIS_STATUS_INVALID_PARAMETER;
@@ -422,6 +573,12 @@ NxPowerPolicy::AddWakePattern(
             if (!m_wakeBitmapCapabilities.BitmapPattern)
             {
                 return NDIS_STATUS_NOT_SUPPORTED;
+            }
+
+            NT_FRE_ASSERT(m_wakeBitmapCapabilities.MaximumPatternCount != 0);
+            if (m_wakeListEntryCount == m_wakeBitmapCapabilities.MaximumPatternCount)
+            {
+                return NDIS_STATUS_PM_WOL_PATTERN_LIST_FULL;
             }
 
             auto const ndisStatus = NxWakeBitmapPattern::CreateFromNdisWoLPattern(
@@ -458,6 +615,27 @@ NxPowerPolicy::AddWakePattern(
             pfnPreview = nullptr;
             break;
         }
+        case NdisPMWoLPacketEapolRequestIdMessage:
+        {
+            if (!m_eapolPacketCapabilities.EapolPacket)
+            {
+                return NDIS_STATUS_NOT_SUPPORTED;
+            }
+
+            auto const ndisStatus = NxWakeEapolPacket::CreateFromNdisWoLPattern(
+                m_adapter,
+                ndisWolPattern,
+                wil::out_param(wakePattern));
+
+            if (ndisStatus != NDIS_STATUS_SUCCESS)
+            {
+                return ndisStatus;
+            }
+
+            // No preview for eapol packet
+            pfnPreview = nullptr;
+            break;
+        }
         default:
         {
             return NDIS_STATUS_NOT_SUPPORTED;
@@ -466,7 +644,10 @@ NxPowerPolicy::AddWakePattern(
 
     if (pfnPreview != nullptr)
     {
-        auto const previewStatus = pfnPreview(m_device, wakePattern->GetHandle());
+        auto const previewStatus = InvokePoweredCallback(
+            pfnPreview,
+            m_device,
+            wakePattern->GetHandle());
 
         if (previewStatus == STATUS_NDIS_PM_WOL_PATTERN_LIST_FULL)
         {
@@ -484,6 +665,7 @@ NxPowerPolicy::AddWakePattern(
     UpdatePatternEntryEnabledField(wakePattern.get());
 
     PushEntryList(&m_WakeListHead, &wakePattern->m_powerPolicyLinkage);
+    m_wakeListEntryCount++;
 
     wakePattern.release();
 
@@ -501,7 +683,7 @@ Routine Description:
 {
     if (SetInformation->InformationBufferLength < sizeof(ULONG))
     {
-        LogError(GetRecorderLog(), FLAG_POWER,
+        LogError(FLAG_POWER,
             "Invalid InformationBufferLength (%u) for OID_PM_REMOVE_WOL_PATTERN", SetInformation->InformationBufferLength);
 
         return NDIS_STATUS_INVALID_PARAMETER;
@@ -537,6 +719,8 @@ NxPowerPolicy::RemoveWakePatternByID(
         if (wakePattern->GetID() == PatternID)
         {
             PopEntryList(prevEntry);
+            m_wakeListEntryCount--;
+
             return wakePattern;
         }
         prevEntry = listEntry;
@@ -546,9 +730,9 @@ NxPowerPolicy::RemoveWakePatternByID(
     return nullptr;
 }
 
-NDIS_STATUS
+void
 NxPowerPolicy::SetParameters(
-    _In_ NDIS_OID_REQUEST::_REQUEST_DATA::_SET const * Set
+    _Inout_ NDIS_PM_PARAMETERS * PmParams
 )
 /*++
 Routine Description:
@@ -556,17 +740,7 @@ Routine Description:
     have changed then it updates the Wake patterns to reflect the change
 --*/
 {
-    if (Set->InformationBufferLength < sizeof(NDIS_PM_PARAMETERS))
-    {
-        LogError(GetRecorderLog(), FLAG_POWER,
-            "Invalid InformationBufferLength (%u) for OID_PM_PARAMETERS", Set->InformationBufferLength);
-
-        return NDIS_STATUS_INVALID_PARAMETER;
-    }
-
-    auto const PmParams = static_cast<NDIS_PM_PARAMETERS *>(Set->InformationBuffer);
-
-    LogInfo(GetRecorderLog(), FLAG_POWER,
+    LogInfo(FLAG_POWER,
         "Received NDIS_PM_PARAMETERS: EnabledWoLPacketPatterns=0x%08x, EnabledProtocolOffloads=0x%08x, WakeUpFlags=0x%08x",
         PmParams->EnabledWoLPacketPatterns, PmParams->EnabledProtocolOffloads, PmParams->WakeUpFlags);
 
@@ -591,7 +765,7 @@ Routine Description:
         PmParams->EnabledWoLPacketPatterns = 0;
     }
 
-    LogInfo(GetRecorderLog(), FLAG_POWER,
+    LogInfo(FLAG_POWER,
         "Saved NDIS_PM_PARAMETERS: EnabledWoLPacketPatterns=0x%08x, EnabledProtocolOffloads=0x%08x, WakeUpFlags=0x%08x",
         PmParams->EnabledWoLPacketPatterns, PmParams->EnabledProtocolOffloads, PmParams->WakeUpFlags);
 
@@ -627,12 +801,12 @@ Routine Description:
             supportedWakeUpFlags |= NDIS_PM_SELECTIVE_SUSPEND_ENABLED | NDIS_PM_AOAC_NAPS_ENABLED;
         }
 
-        LogInfo(GetRecorderLog(), FLAG_POWER,
+        LogInfo(FLAG_POWER,
             "Supported WakeUpFlags=0x%08x", supportedWakeUpFlags);
 
         auto const effectiveWakeUpFlags = m_PMParameters.WakeUpFlags & supportedWakeUpFlags;
 
-        LogInfo(GetRecorderLog(), FLAG_POWER,
+        LogInfo(FLAG_POWER,
             "Effective WakeUpFlags=0x%08x", effectiveWakeUpFlags);
 
         m_wakeOnMediaChange.SetWakeUpFlags(effectiveWakeUpFlags);
@@ -662,8 +836,6 @@ Routine Description:
             listEntry = listEntry->Next;
         }
     }
-
-    return NDIS_STATUS_SUCCESS;
 }
 
 void
@@ -704,7 +876,101 @@ NxPowerPolicy::UpdatePatternEntryEnabledField(
         case NetWakeSourceTypeMagicPacket:
             enabled = !!(m_PMParameters.EnabledWoLPacketPatterns & NDIS_PM_WOL_MAGIC_PACKET_ENABLED);
             break;
+        case NetWakeSourceTypeEapolPacket:
+            enabled = !!(m_PMParameters.EnabledWoLPacketPatterns & NDIS_PM_WOL_EAPOL_REQUEST_ID_MESSAGE_ENABLED);
+            break;
     }
 
     Entry->SetEnabled(enabled);
+}
+
+NTSTATUS
+NxPowerPolicy::SetS0IdleRestriction()
+/*++
+Routine Description:
+    Enforces S0-Idle restriction policy based upon policy indicated by driver and
+    wake capabilities.
+
+    If the driver does not indicate support for wake by packet filter match, we restrict S0Idle to Idle Conditions
+    >= NdisIdleConditionUnicastOnly.
+
+    Else if the driver indicates HighLatencyResume via advanced keyword S0IdleRestrictionPolicy,
+    we restrict S0Idle to Idle Conditions >= NdisIdleConditionAny.
+
+    Otherwise, we enforce no restrictions on S0Idle (S0Idle restricted to Idle Conditions >= NdisIdleConditionAnyLowLatency) .
+--*/
+{
+    if (!ShouldAcquirePowerReferencesForAdapter())
+    {
+        // If we are not acquring power references on behalf of the adapter, enforce no idle restrictions
+        return m_idleRestrictions.SetMinimumIdleCondition(NdisIdleConditionAnyLowLatency);
+    }
+
+    if (!m_wakePacketFilterCapabilities.PacketFilterMatch)
+    {
+        return m_idleRestrictions.SetMinimumIdleCondition(NdisIdleConditionUnicastOnly);
+    }
+    else if (m_driverSpecifiedRestrictionSettings == NxIdleRestrictions::IdleRestrictionSettings::HighLatencyResume)
+    {
+        return m_idleRestrictions.SetMinimumIdleCondition(NdisIdleConditionAny);
+    }
+    else
+    {
+        return m_idleRestrictions.SetMinimumIdleCondition(NdisIdleConditionAnyLowLatency);
+    }
+}
+
+NTSTATUS
+NxPowerPolicy::SetCurrentIdleCondition(
+    NDIS_IDLE_CONDITION IdleCondition
+)
+{
+    return m_idleRestrictions.SetCurrentIdleCondition(IdleCondition);
+}
+
+#ifdef _KERNEL_MODE
+
+NTSTATUS
+NxPowerPolicy::QueryStandardizedKeyword(
+    UNICODE_STRING const & Keyword,
+    ULONG & Value
+)
+{
+    NxConfiguration * configuration;
+
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        NxConfiguration::_Create(nullptr, m_adapter, NULL, &configuration));
+
+    auto status = configuration->Open();
+    if (status != STATUS_SUCCESS)
+    {
+        configuration->Close();
+        return status;
+    }
+
+    status = configuration->QueryUlong(NET_CONFIGURATION_QUERY_ULONG_NO_FLAGS, &Keyword, &Value);
+
+    configuration->Close();
+
+    return status;
+}
+#else
+
+NTSTATUS
+NxPowerPolicy::QueryStandardizedKeyword(
+    UNICODE_STRING const & Keyword,
+    ULONG & Value
+)
+{
+    UNREFERENCED_PARAMETER(Keyword);
+    Value = 0;
+    return STATUS_SUCCESS;
+}
+
+#endif
+
+bool
+NxPowerPolicy::ShouldAcquirePowerReferencesForAdapter() const
+{
+    return m_shouldAcquirePowerReferencesForAdapter;
 }

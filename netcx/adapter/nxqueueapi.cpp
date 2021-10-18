@@ -6,12 +6,13 @@
 #include <net/ring.h>
 #include <net/packet.h>
 
-#include "NxQueueApi.tmh"
-
 #include "NxAdapter.hpp"
+#include "NxDevice.hpp"
 #include "NxQueue.hpp"
 #include "verifier.hpp"
 #include "version.hpp"
+
+#include "NxQueueApi.tmh"
 
 _Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -31,44 +32,27 @@ NETEXPORT(NetTxQueueCreate)(
     Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
     Verifier_VerifyIrqlPassive(nxPrivateGlobals);
     Verifier_VerifyQueueInitContext(nxPrivateGlobals, &InitContext);
-    Verifier_VerifyTypeSize(nxPrivateGlobals, Configuration);
 
     // A NETPACKETQUEUE's parent is always the NETADAPTER
     Verifier_VerifyObjectAttributesParentIsNull(nxPrivateGlobals, TxQueueAttributes);
     Verifier_VerifyObjectAttributesContextSize(nxPrivateGlobals, TxQueueAttributes, MAXULONG);
-    Verifier_VerifyNetPacketQueueConfiguration(nxPrivateGlobals, Configuration);
+    Verifier_VerifyNetTxQueueConfiguration(nxPrivateGlobals, Configuration);
 
     *TxQueue = nullptr;
 
-    WDF_OBJECT_ATTRIBUTES objectAttributes;
-    CFX_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&objectAttributes, NxTxQueue);
-    objectAttributes.ParentObject = InitContext.Adapter->GetFxObject();
-
-    wil::unique_wdf_object object;
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        WdfObjectCreate(&objectAttributes, &object),
-        "WdfObjectCreate for NxTxQueue failed.");
-
-    NxTxQueue * txQueue = new (NxTxQueue::_FromFxBaseObject(object.get()))
-        NxTxQueue (object.get(), *nxPrivateGlobals, InitContext, InitContext.QueueId, *Configuration);
-
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        txQueue->Initialize(InitContext),
-        "Tx queue creation failed. NxPrivateGlobals=%p", nxPrivateGlobals);
-
-    if (TxQueueAttributes != WDF_NO_OBJECT_ATTRIBUTES)
-    {
-        CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-            WdfObjectAllocateContext(object.get(), TxQueueAttributes, NULL),
-            "Failed to allocate client context. NxQueue=%p", txQueue);
-    }
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        PacketQueueCreate(
+            *nxPrivateGlobals,
+            *Configuration,
+            InitContext,
+            TxQueueAttributes,
+            NxQueue::Type::Tx,
+            &InitContext.CreatedQueueObject));
 
     // Note: We cannot have failure points after we allocate the client's context, otherwise
     // they might get their EvtCleanupContext callback even for a failed queue creation
 
-    InitContext.CreatedQueueObject = wistd::move(object);
-    *TxQueue = static_cast<NETPACKETQUEUE>(
-        InitContext.CreatedQueueObject.get());
+    *TxQueue = InitContext.CreatedQueueObject.get();
 
     return STATUS_SUCCESS;
 }
@@ -86,7 +70,7 @@ NETEXPORT(NetTxQueueNotifyMoreCompletedPacketsAvailable)(
     Verifier_VerifyPrivateGlobals(GetPrivateGlobals(DriverGlobals));
     Verifier_VerifyTxQueueHandle(GetPrivateGlobals(DriverGlobals), TxQueue);
 
-    GetTxQueueFromHandle(TxQueue)->NotifyMorePacketsAvailable();
+    GetNxQueueFromHandle(TxQueue)->NotifyMorePacketsAvailable();
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -125,7 +109,7 @@ NETEXPORT(NetTxQueueGetRingCollection)(
     Verifier_VerifyIrqlPassive(nxPrivateGlobals);
     Verifier_VerifyTxQueueHandle(nxPrivateGlobals, NetTxQueue);
 
-    return GetTxQueueFromHandle(NetTxQueue)->GetRingCollection();
+    return GetNxQueueFromHandle(NetTxQueue)->GetRingCollection();
 }
 
 _Must_inspect_result_
@@ -147,44 +131,27 @@ NETEXPORT(NetRxQueueCreate)(
     Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
     Verifier_VerifyIrqlPassive(nxPrivateGlobals);
     Verifier_VerifyQueueInitContext(nxPrivateGlobals, &InitContext);
-    Verifier_VerifyTypeSize(nxPrivateGlobals, Configuration);
 
     // A NETPACKETQUEUE's parent is always the NETADAPTER
     Verifier_VerifyObjectAttributesParentIsNull(nxPrivateGlobals, RxQueueAttributes);
     Verifier_VerifyObjectAttributesContextSize(nxPrivateGlobals, RxQueueAttributes, MAXULONG);
-    Verifier_VerifyNetPacketQueueConfiguration(nxPrivateGlobals, Configuration);
+    Verifier_VerifyNetRxQueueConfiguration(nxPrivateGlobals, Configuration);
 
     *RxQueue = nullptr;
 
-    WDF_OBJECT_ATTRIBUTES objectAttributes;
-    CFX_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&objectAttributes, NxRxQueue);
-    objectAttributes.ParentObject = InitContext.Adapter->GetFxObject();
-
-    wil::unique_wdf_object object;
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        WdfObjectCreate(&objectAttributes, &object),
-        "WdfObjectCreate for NxTxQueue failed.");
-
-    NxRxQueue * rxQueue = new (NxRxQueue::_FromFxBaseObject(object.get()))
-        NxRxQueue(object.get(), *nxPrivateGlobals, InitContext, InitContext.QueueId, *Configuration);
-
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        rxQueue->Initialize(InitContext),
-        "Rx queue creation failed. NxPrivateGlobals=%p", nxPrivateGlobals);
-
-    if (RxQueueAttributes != WDF_NO_OBJECT_ATTRIBUTES)
-    {
-        CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-            WdfObjectAllocateContext(object.get(), RxQueueAttributes, NULL),
-            "Failed to allocate client context. NxQueue=%p", rxQueue);
-    }
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        PacketQueueCreate(
+            *nxPrivateGlobals,
+            *Configuration,
+            InitContext,
+            RxQueueAttributes,
+            NxQueue::Type::Rx,
+            &InitContext.CreatedQueueObject));
 
     // Note: We cannot have failure points after we allocate the client's context, otherwise
     // they might get their EvtCleanupContext callback even for a failed queue creation
 
-    InitContext.CreatedQueueObject = wistd::move(object);
-    *RxQueue = static_cast<NETPACKETQUEUE>(
-        InitContext.CreatedQueueObject.get());
+    *RxQueue = InitContext.CreatedQueueObject.get();
 
     return STATUS_SUCCESS;
 }
@@ -204,7 +171,7 @@ NETEXPORT(NetRxQueueNotifyMoreReceivedPacketsAvailable)(
     Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
     Verifier_VerifyRxQueueHandle(nxPrivateGlobals, RxQueue);
 
-    GetRxQueueFromHandle(RxQueue)->NotifyMorePacketsAvailable();
+    GetNxQueueFromHandle(RxQueue)->NotifyMorePacketsAvailable();
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -243,7 +210,7 @@ NETEXPORT(NetRxQueueGetRingCollection)(
     Verifier_VerifyIrqlPassive(nxPrivateGlobals);
     Verifier_VerifyRxQueueHandle(nxPrivateGlobals, NetRxQueue);
 
-    return GetRxQueueFromHandle(NetRxQueue)->GetRingCollection();
+    return GetNxQueueFromHandle(NetRxQueue)->GetRingCollection();
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -266,7 +233,7 @@ NETEXPORT(NetTxQueueGetExtension)(
     Verifier_VerifyNetExtensionQuery(nxPrivateGlobals, Query);
     Verifier_VerifyTxQueueHandle(nxPrivateGlobals, NetTxQueue);
 
-    NxTxQueue *txQueue = GetTxQueueFromHandle(NetTxQueue);
+    auto txQueue = GetNxQueueFromHandle(NetTxQueue);
 
     NET_EXTENSION_PRIVATE const extension = {
         Query->Name,
@@ -299,7 +266,7 @@ NETEXPORT(NetRxQueueGetExtension)(
     Verifier_VerifyNetExtensionQuery(nxPrivateGlobals, Query);
     Verifier_VerifyRxQueueHandle(nxPrivateGlobals, NetRxQueue);
 
-    NxRxQueue *rxQueue = GetRxQueueFromHandle(NetRxQueue);
+    auto rxQueue = GetNxQueueFromHandle(NetRxQueue);
 
     NET_EXTENSION_PRIVATE const extension = {
         Query->Name,
@@ -310,4 +277,103 @@ NETEXPORT(NetRxQueueGetExtension)(
     };
 
     rxQueue->GetExtension(&extension, Extension);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+UINT8
+NTAPI
+NETEXPORT(NetTxQueueGetDemux8021p)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETPACKETQUEUE Queue
+    )
+{
+    auto const privateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(privateGlobals);
+    Verifier_VerifyIrqlPassive(privateGlobals);
+    Verifier_VerifyTxQueueHandle(privateGlobals, Queue);
+
+    auto const queue = GetNxQueueFromHandle(Queue);
+    auto const property = queue->GetTxDemuxProperty(TxDemuxType8021p);
+
+    if (! property)
+    {
+        auto const adapter = GetNxAdapterFromHandle(queue->GetParent());
+
+        Verifier_ReportViolation(
+            privateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_DemuxNotPresent,
+            reinterpret_cast<ULONG_PTR>(adapter),
+            reinterpret_cast<ULONG_PTR>(queue));
+    }
+
+    return property->Property.UserPriority;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+UINT8
+NTAPI
+NETEXPORT(NetTxQueueGetDemuxWmmInfo)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETPACKETQUEUE Queue
+    )
+{
+    auto const privateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(privateGlobals);
+    Verifier_VerifyIrqlPassive(privateGlobals);
+    Verifier_VerifyTxQueueHandle(privateGlobals, Queue);
+
+    auto const queue = GetNxQueueFromHandle(Queue);
+    auto const property = GetNxQueueFromHandle(Queue)->GetTxDemuxProperty(TxDemuxTypeWmmInfo);
+
+    if (! property)
+    {
+        auto const adapter = GetNxAdapterFromHandle(queue->GetParent());
+
+        Verifier_ReportViolation(
+            privateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_DemuxNotPresent,
+            reinterpret_cast<ULONG_PTR>(adapter),
+            reinterpret_cast<ULONG_PTR>(queue));
+    }
+
+    return property->Property.WmmInfo;
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+NET_EUI48_ADDRESS
+NTAPI
+NETEXPORT(NetTxQueueGetDemuxPeerAddress)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETPACKETQUEUE Queue
+    )
+{
+    auto const privateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(privateGlobals);
+    Verifier_VerifyIrqlPassive(privateGlobals);
+    Verifier_VerifyTxQueueHandle(privateGlobals, Queue);
+
+    auto const queue = GetNxQueueFromHandle(Queue);
+    auto const property = GetNxQueueFromHandle(Queue)->GetTxDemuxProperty(TxDemuxTypePeerAddress);
+
+    if (! property)
+    {
+        auto const adapter = GetNxAdapterFromHandle(queue->GetParent());
+
+        Verifier_ReportViolation(
+            privateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_DemuxNotPresent,
+            reinterpret_cast<ULONG_PTR>(adapter),
+            reinterpret_cast<ULONG_PTR>(queue));
+    }
+
+    return *reinterpret_cast<NET_EUI48_ADDRESS const *>(&property->Property.PeerAddress);
 }

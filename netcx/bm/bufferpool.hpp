@@ -1,147 +1,149 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
 
-/*++
-
-Abstract:
-
-    This is the definition of the NxBufferPool object.
-
---*/
-
 #pragma once
 
+#include "KPtr.h"
 #include "KBitmap.h"
-#include "Mdl.hpp"
+#include "kStackstorage.h"
+#include "BufferHeader.hpp"
+#include "IBufferVector.hpp"
+#include "IBufferVectorAllocator.hpp"
 
-class PAGED NxBufferPool :
-    public NONPAGED_OBJECT<'pbxn'> // 'nxbp'
+typedef struct _NET_DATA_REF
+{
+    UINT32          OsRefCount;
+    BOOLEAN         OsOwned;
+} NET_DATA_REF;
+
+class PAGED BufferPool :
+    public KStackPool<size_t> // 'nxbp'
 {
 
 public:
 
-    NxBufferPool(
+    ~BufferPool(
         void
-        );
-
-    ~NxBufferPool(
-        void
-        );
+    );
 
     NTSTATUS
-    Initialize(
-        _In_ size_t PoolSize,
-        _In_ size_t RequestedSize,
-        _In_ size_t AlignmentOffset,
-        _In_ size_t Alignment,
-        _Out_ size_t * MinimumSizeRequested,
-        _Out_ size_t * MinimumChunkSize
-        );
-
-    NTSTATUS
-    AddMemoryChunks(
-        _In_ Rtl::KArray<wistd::unique_ptr<INxMemoryChunk>>& MemoryChunks
-        );
+    Fill(
+        _In_ IBufferVector* BufferVector
+    );
 
     NONPAGED
     NTSTATUS
     Allocate(
-        _Out_ void ** VirtualAddress,
-        _Out_ LOGICAL_ADDRESS * LogicalAddress,
-        _Out_ SIZE_T * Offset,
-        _Out_ SIZE_T * AllocatedSize
-        );
+        _Out_ SIZE_T * BufferIndex
+    );
+
+    NONPAGED
+    VOID
+    AddRef(
+        _In_ size_t BufferIndex
+    );
+
+    NONPAGED
+    VOID
+    DeRef(
+        _In_ size_t BufferIndex
+    );
 
     NONPAGED
     VOID
     Free(
-        _In_ PVOID VirtualAddress
-        );
+        _In_ size_t BufferIndex
+    );
 
     NONPAGED
+    VOID
+    Preview(
+        _In_ size_t BufferIndex,
+        _Out_ NET_DATA_HEADER* NetDataHeader
+    );
+
+    NONPAGED
+    VOID
+    OwnedByOs(
+        _In_ size_t BufferIndex
+    );
+
+    void
+    Enumerate(
+        _In_ ENUMERATE_CALLBACK Callback,
+        _In_ void* Context
+    );
+
     size_t
-    AvailableBuffersCount(
-        void
-        );
+    GetOffset();
+
+    size_t
+    GetCapacity();
+
+    size_t
+    GetPoolSize();
 
 private:
 
-    UINT64
-        m_Id = 0;
-
-    PVOID
-        m_BaseVirtualAddress = nullptr;
-
     size_t
-        m_ContiguousVirtualLength = 0;
+        m_PoolSize = 0;
 
-    wistd::unique_ptr<RtlMdl>
-        m_StitchedMdl;
+    wistd::unique_ptr<IBufferVector>
+        m_BufferVector;
 
-    size_t
-        m_NumMemoryChunks = 0;
-
-    size_t
-        m_MemoryChunkSize = 0;
-
-    Rtl::KArray<wistd::unique_ptr<INxMemoryChunk>>
-        m_MemoryChunks;
-
-    struct NxChunkBaseAddress
-    {
-        PVOID VirtualAddress;
-        LOGICAL_ADDRESS LogicalAddress;
-    };
-
-    Rtl::KArray<NxChunkBaseAddress>
-        m_MemoryChunkBaseAddresses;
-
-    size_t
-        m_NumBuffersPerChunk = 0;
-
-    //individual buffer size information
-    size_t
-        m_StrideSize = 0;
-
-    size_t
-        m_ChunkOffset = 0;
-
-    size_t
-        m_AlignmentOffset = 0;
-
-    size_t
-        m_Alignment = 1;
-
-    //Pool wide size information
-    size_t
-        m_RequestedPoolSize = 0;
-
-    size_t
-        m_PopulatedPoolSize = 0;
-
-    size_t
-        m_NumBuffersInUse = 0;
-
-    struct NxBufferDescriptor
-    {
-        PVOID VirtualAddress;
-        LOGICAL_ADDRESS LogicalAddress;
-        size_t ChunkIndex;
-        size_t BufferIndex;
-        PVOID Context;
-    };
-
-    Rtl::KArray<NxBufferDescriptor>
-        m_Buffers;
+    Rtl::KArray<NET_DATA_REF, NonPagedPoolNxCacheAligned>
+        m_BuffersRef;
 
     Rtl::KBitmap
         m_BuffersInUseFlag;
+};
+
+class BufferPool2 : public NONPAGED_OBJECT<'2lPB'>
+{
+#ifdef TEST_HARNESS_CLASS_NAME
+    friend class
+        TEST_HARNESS_CLASS_NAME;
+#endif
+
+public:
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    BufferPool2(
+        _In_ size_t BufferSize,
+        _In_ size_t BufferAlignment
+    );
+
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    ~BufferPool2(
+        void
+    );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    Initialize(
+        _In_ IBufferVectorAllocator * Allocator,
+        _In_ size_t InitialNumberOfBuffers
+    );
+
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    BufferHeader *
+    Allocate(
+        void
+    );
 
 private:
 
-    NTSTATUS
-        StitchMemoryChunks();
+    wistd::unique_ptr<IBufferVector>
+        m_bufferVector;
 
-    void
-        FillBufferPool();
+    size_t const
+        m_bufferSize;
+
+    size_t const
+        m_bufferAlignment;
+
+    LIST_ENTRY
+        m_freeBufferList;
+
+    LIST_ENTRY
+        m_usedBufferList;
 };
-

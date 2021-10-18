@@ -4,33 +4,23 @@
 
 #include "NxRingContext.hpp"
 #include "NxDma.hpp"
-#include "NxScatterGatherList.hpp"
 #include "NxBounceBufferPool.hpp"
 #include "NxExtensions.hpp"
 #include "NxStatistics.hpp"
+#include "metadata/MetadataTranslator.hpp"
+#include "checksum/Checksum.hpp"
+#include "segmentation/Segmentation.hpp"
+
+#include <KArray.h>
 
 #include <net/virtualaddresstypes_p.h>
 #include <net/logicaladdresstypes_p.h>
 
-struct NxNblTranslationStats
-{
-    struct
-    {
-        UINT64 BounceSuccess = 0;
-        UINT64 BounceFailure = 0;
-        UINT64 CannotTranslate = 0;
-        UINT64 UnalignedBuffer = 0;
-    } Packet;
+#include "NxNbl.hpp"
+#include "NxPacketLayout.hpp"
 
-    struct
-    {
-        UINT64 InsufficientResouces = 0;
-        UINT64 BufferTooSmall = 0;
-        UINT64 CannotMapSglToFragments = 0;
-        UINT64 PhysicalAddressTooLarge = 0;
-        UINT64 OtherErrors = 0;
-    } DMA;
-};
+typedef struct _PKTMON_EDGE_CONTEXT PKTMON_EDGE_CONTEXT;
+typedef struct _PKTMON_COMPONENT_CONTEXT PKTMON_COMPONENT_CONTEXT;
 
 enum class NxNblTranslationStatus
 {
@@ -87,30 +77,149 @@ struct TxPacketCompletionStatus
 // NET_FRAGMENT pool, but it should be added with a mind for test-ability.
 class NONPAGED NxNblTranslator
 {
+
+public:
+
+    struct PAGED PacketContext
+    {
+        NET_BUFFER_LIST * NetBufferListToComplete = nullptr;
+        AddressType DestinationType;
+    };
+
+    NxNblTranslator(
+        NET_BUFFER_LIST * & CurrentNetBufferList,
+        NET_BUFFER * & CurrentNetBuffer,
+        NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES const & DatapathCapabilities,
+        TxExtensions const & Extensions,
+        NxTxCounters & Statistics,
+        NxBounceBufferPool & BouncePool,
+        const NxRingContext & ContextBuffer,
+        const NxDmaAdapter * DmaAdapter,
+        NDIS_MEDIUM MediaType,
+        NET_RING_COLLECTION * Rings,
+        Checksum & ChecksumContext,
+        GenericSegmentationOffload & GsoContext,
+        Rtl::KArray<UINT8, NonPagedPoolNx> & LayoutParseBuffer,
+        NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES & checksumHardwareCapabilities,
+        NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES & txChecksumHardwareCapabilities,
+        NET_CLIENT_OFFLOAD_GSO_CAPABILITIES & GsoHardwareCapabilities,
+        PKTMON_LOWEREDGE_HANDLE PktMonEdgeContext,
+        PKTMON_COMPONENT_HANDLE PktMonComponentContext
+    );
+
+    NxNblTranslationStatus
+    TranslateNetBufferToNetPacket(
+        _Inout_ NET_PACKET * netPacket
+    ) const;
+
+    ULONG
+    TranslateNbls(
+        void
+    );
+
+    TxPacketCompletionStatus
+    CompletePackets(
+        void
+    ) const;
+
+    TxPacketCounters const &
+    GetCounters(
+        void
+    ) const;
+
+private:
+
+    NET_BUFFER_LIST * &
+        m_currentNetBufferList;
+
+    NET_BUFFER * &
+        m_currentNetBuffer;
+
+    NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES const &
+        m_datapathCapabilities;
+
     TxExtensions const &
         m_extensions;
 
-    NxNblTranslationStats &m_stats;
-    const NxRingContext & m_contextBuffer;
-    const NxDmaAdapter * m_dmaAdapter;
-    const NDIS_MEDIUM m_mediaType;
-    NET_RING_COLLECTION * m_rings;
-    const NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES & m_datapathCapabilities;
-    size_t m_maxFragmentsPerPacket;
-    NxStatistics & m_genStats;
+    NxTxCounters &
+        m_statistics;
+
+    NxBounceBufferPool &
+        m_bouncePool;
+
+    NxRingContext const &
+        m_contextBuffer;
+
+    mutable
+    TxPacketCounters
+        m_counters = {};
+
+    NxDmaAdapter const *
+        m_dmaAdapter;
+
+    NET_PACKET_LAYER2_TYPE const
+        m_layer2Type;
+
+    NET_RING_COLLECTION *
+        m_rings;
+
+    TxMetadataTranslator
+        m_metadataTranslator;
+
+    size_t
+        m_maxFragmentsPerPacket = 0;
+
+    NET_PACKET_GSO
+        m_gso = {};
+
+    NET_PACKET_CHECKSUM
+        m_checksum = {};
+
+    NET_PACKET_LAYOUT
+        m_layout = {};
+
+    NET_PACKET_IEEE8021Q
+        m_ieee8021q = {};
+
+    Checksum &
+        m_checksumContext;
+
+    GenericSegmentationOffload &
+        m_gsoContext;
+
+    Rtl::KArray<UINT8, NonPagedPoolNx> &
+        m_layoutParseBuffer;
+
+    NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES const &
+        m_checksumHardwareCapabilities;
+
+    NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES const &
+        m_txChecksumHardwareCapabilities;
+
+    NET_CLIENT_OFFLOAD_GSO_CAPABILITIES const &
+        m_gsoHardwareCapabilities;
+
+    PKTMON_EDGE_CONTEXT const *
+        m_pktmonLowerEdgeContext = nullptr;
+
+    PKTMON_COMPONENT_CONTEXT const *
+        m_pktmonComponentContext = nullptr;
+
+    bool
+    TranslateLayout(
+        void
+    );
 
     void
-    TranslateNetBufferListOOBDataToNetPacketExtensions(
-        _In_ NET_BUFFER_LIST const &netBufferList,
-        _Inout_ NET_PACKET* netPacket,
-        _In_ UINT32 packetIndex
-    ) const;
+    TranslateNetBufferListInfo(
+        void
+    );
 
-    void
-    TranslateNetPacketExtensionsCompletionToNetBufferList(
-        _In_ const NET_PACKET *netPacket,
-        _Inout_ PNET_BUFFER_LIST netBufferList
-    ) const;
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    bool
+    TranslateNetBuffer(
+        UINT32 Index
+    );
 
     bool
     RequiresDmaMapping(
@@ -126,29 +235,29 @@ class NONPAGED NxNblTranslator
 
     MdlTranlationResult
     TranslateMdlChainToFragmentRangeKvmOnly(
-        _In_ MDL &Mdl,
+        _In_ MDL & Mdl,
         _In_ size_t MdlOffset,
         _In_ size_t BytesToCopy
     ) const;
 
     MdlTranlationResult
     TranslateMdlChainToDmaMappedFragmentRange(
-        _In_ MDL &Mdl,
+        _In_ MDL & Mdl,
         _In_ size_t MdlOffset,
         _In_ size_t BytesToCopy,
-        _In_ NET_PACKET const &Packet
+        _In_ NET_PACKET const & Packet
     ) const;
 
     MdlTranlationResult
     TranslateMdlChainToDmaMappedFragmentRangeBypassHal(
-        _In_ MDL &Mdl,
+        _In_ MDL & Mdl,
         _In_ size_t MdlOffset,
         _In_ size_t BytesToCopy
     ) const;
 
     MdlTranlationResult
     TranslateMdlChainToDmaMappedFragmentRangeUseHal(
-        _In_ MDL &Mdl,
+        _In_ MDL & Mdl,
         _In_ size_t MdlOffset,
         _In_ size_t BytesToCopy,
         _In_ NxDmaTransfer const &DmaTransfer
@@ -156,50 +265,37 @@ class NONPAGED NxNblTranslator
 
     bool
     MapMdlChainToSystemVA(
-        _Inout_ MDL &Mdl
+        _Inout_ MDL & Mdl
     ) const;
 
     MdlTranlationResult
     TranslateScatterGatherListToFragmentRange(
-        _In_ MDL &MappedMdl,
+        _In_ MDL & MappedMdl,
         _In_ size_t MdlOffset,
         _In_ size_t BytesToCopy,
-        _In_ NxScatterGatherList const &Sgl
+        _In_ SCATTER_GATHER_LIST const * Sgl
     ) const;
 
-public:
-    struct PAGED PacketContext
-    {
-        PNET_BUFFER_LIST NetBufferListToComplete = nullptr;
-    };
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    bool
+    IsSoftwareChecksumRequired(
+        void
+    ) const;
 
-    NxNblTranslator(
-        TxExtensions const & Extensions,
-        NxNblTranslationStats &Stats,
-        NET_RING_COLLECTION * Rings,
-        const NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES & DatapathCapabilities,
-        const NxDmaAdapter *DmaAdapter,
-        const NxRingContext & ContextBuffer,
-        NDIS_MEDIUM MediaType,
-        NxStatistics & GenStats
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    bool
+    IsSoftwareGsoRequired(
+        void
+    ) const;
+
+    void
+    ReplaceCurrentNetBufferList(
+        _In_ NET_BUFFER_LIST * NetBufferList
     );
 
-    NxNblTranslationStatus
-    TranslateNetBufferToNetPacket(
-        _In_ NET_BUFFER &netBuffer,
-        _Inout_ NET_PACKET* netPacket
-    ) const;
-
-    ULONG
-    TranslateNbls(
-        _Inout_ NET_BUFFER_LIST *&currentNbl,
-        _Inout_ NET_BUFFER *&currentNetBuffer,
-        _In_ NxBounceBufferPool &BouncePool
-    ) const;
-
-    TxPacketCompletionStatus
-    CompletePackets(
-        _In_ NxBounceBufferPool &BouncePool
-    ) const;
-
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    bool
+    GenericSendOffloadFallback(
+        void
+    );
 };

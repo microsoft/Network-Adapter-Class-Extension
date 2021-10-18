@@ -12,7 +12,7 @@ Abstract:
 #pragma once
 
 #include <KSpinLock.h>
-#include <nblutil.h>
+#include <ndis/nblqueue.h>
 
 class NxNblQueue
 {
@@ -34,6 +34,9 @@ public:
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
     ULONG64 GetNblQueueDepth() const;
+
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    NET_BUFFER_LIST const * PeekNbl() const;
 
 private:
 

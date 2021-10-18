@@ -9,41 +9,9 @@
 
 #include <NxXlat.hpp>
 
-extern WDFWAITLOCK g_RegistrationLock;
-
-#define NX_PRIVATE_GLOBALS_SIG          'IxNG'
-
-class NxDriver;
-enum class MediaExtensionType;
-
-struct NX_PRIVATE_GLOBALS {
-    //
-    // Equal to GLOBALS_SIG
-    //
-    ULONG Signature;
-
-    //
-    // Enable runtime verification checks for the client driver.
-    //
-    BOOLEAN CxVerifierOn;
-
-    //
-    // Public part of the globals
-    //
-    NET_DRIVER_GLOBALS Public;
-
-    //
-    // Pointer to the NxDriver
-    //
-    NxDriver * NxDriver;
-
-    //
-    // Pointer to the client driver's WDF globals
-    //
-    WDF_DRIVER_GLOBALS *ClientDriverGlobals;
-
-    MediaExtensionType ExtensionType;
-};
+#include "NxPrivateGlobals.hpp"
+#include "NxCollection.hpp"
+#include "NxDevice.hpp"
 
 class CxDriverContext
 {
@@ -51,11 +19,36 @@ public:
     //
     // Built-in datapath apps: NBL translator
     //
-    NxTranslationAppFactory TranslationAppFactory;
+    NxTranslationAppFactory
+        TranslationAppFactory;
 
-    NTSTATUS Init();
+    NTSTATUS
+    Init(
+        _In_ UNICODE_STRING const * RegistryPath
+    );
 
-    static void Destroy(_In_ WDFOBJECT Driver);
+    static void
+    Destroy(
+        _In_ WDFOBJECT Driver
+    );
+
+    NxCollection<NxDevice> &
+    GetDeviceCollection(
+        void
+    );
+
+    UNICODE_STRING const *
+    GetRegistryPath(
+        void
+    ) const;
+
+private:
+    NxCollection<NxDevice>
+        m_deviceCollection;
+
+    KPoolPtr<UNICODE_STRING>
+        m_registryPath;
+
 };
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(CxDriverContext, GetCxDriverContextFromHandle);
@@ -65,24 +58,11 @@ FORCEINLINE
 void
 NxDbgBreak(
     NX_PRIVATE_GLOBALS * PrivateGlobals
-    )
+)
 {
     if (PrivateGlobals->CxVerifierOn && ! KdRefreshDebuggerNotPresent())
     {
         DbgBreakPoint();
     }
 }
-
-FORCEINLINE
-NX_PRIVATE_GLOBALS *
-GetPrivateGlobals(
-    NET_DRIVER_GLOBALS * PublicGlobals
-    )
-{
-    return CONTAINING_RECORD(PublicGlobals,
-                             NX_PRIVATE_GLOBALS,
-                             Public);
-}
-
-extern NDIS_WDF_CX_DRIVER NetAdapterCxDriverHandle;
 

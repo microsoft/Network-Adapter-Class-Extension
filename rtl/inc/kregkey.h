@@ -325,6 +325,14 @@ public:
         _In_ PCUNICODE_STRING Name,
         _In_ ULONG Value);
 
+    PAGED NTSTATUS SetValueUlong64(
+        _In_ PCWSTR Name,
+        _In_ ULONG64 Value);
+
+    PAGED NTSTATUS SetValueUlong64(
+        _In_ PCUNICODE_STRING Name,
+        _In_ ULONG64 Value);
+
     PAGED NTSTATUS SetValueBlob(
         _In_ PCWSTR Name,
         _In_ ULONG ValueLength,

@@ -4,14 +4,14 @@
 
 #include <NxApi.hpp>
 
-#include "NxDeviceApi.tmh"
-
 #include "NxDevice.hpp"
 #include "NxAdapterExtension.hpp"
 #include "NxConfiguration.hpp"
 #include "NxDriver.hpp"
 #include "verifier.hpp"
 #include "version.hpp"
+
+#include "NxDeviceApi.tmh"
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
@@ -100,7 +100,7 @@ NETEXPORT(NetDeviceOpenConfiguration)(
     _In_ NET_DRIVER_GLOBALS * Globals,
     _In_ WDFDEVICE Device,
     _In_opt_ WDF_OBJECT_ATTRIBUTES * ConfigurationAttributes,
-    _Out_ NETCONFIGURATION* Configuration
+    _Out_ NETCONFIGURATION * Configuration
 )
 /*++
 Routine Description:
@@ -130,18 +130,36 @@ Returns:
     Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
     Verifier_VerifyIrqlPassive(nxPrivateGlobals);
 
-    *Configuration = NULL;
+    *Configuration = nullptr;
 
     NxConfiguration * nxConfiguration;
-    CX_RETURN_IF_NOT_NT_SUCCESS(NxConfiguration::_Create(nxPrivateGlobals,
-        GetNxDeviceFromHandle(Device),
-        ConfigurationAttributes,
+    CX_RETURN_IF_NOT_NT_SUCCESS(NxConfiguration::_Create<WDFDEVICE>(nxPrivateGlobals,
+        Device,
         NULL,
         &nxConfiguration));
 
+    NTSTATUS status = nxConfiguration->Open();
+
+    if (!NT_SUCCESS(status)){
+
+        nxConfiguration->Close();
+        return status;
+    }
+
+    if (ConfigurationAttributes != WDF_NO_OBJECT_ATTRIBUTES){
+
+        status = nxConfiguration->AddAttributes(ConfigurationAttributes);
+
+        if (!NT_SUCCESS(status)){
+            nxConfiguration->Close();
+
+            return status;
+        }
+    }
+
     *Configuration = nxConfiguration->GetFxObject();
 
-    return STATUS_SUCCESS;
+    return status;
 }
 
 WDFAPI
@@ -170,7 +188,11 @@ Arguments:
 --*/
 {
     auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
-    nxPrivateGlobals->ExtensionType = MediaExtensionTypeFromClientGlobals(nxPrivateGlobals->ClientDriverGlobals);
+
+    if (!nxPrivateGlobals->IsClientVersionGreaterThanOrEqual(2, 1))
+    {
+        nxPrivateGlobals->ExtensionType = MediaExtensionTypeFromClientGlobals(nxPrivateGlobals->ClientDriverGlobals);
+    }
 
     Verifier_VerifyExtensionGlobals(nxPrivateGlobals);
     Verifier_VerifyIrqlPassive(nxPrivateGlobals);
@@ -220,4 +242,67 @@ NETEXPORT(NetDeviceInitSetPowerPolicyEventCallbacks)(
         NxDevice);
 
     nxDevice->SetPowerPolicyEventCallbacks(Callbacks);
+}
+
+_IRQL_requires_(PASSIVE_LEVEL)
+WDFAPI
+void
+NETEXPORT(NetDeviceInitSetResetCapabilities)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _Inout_ PWDFDEVICE_INIT DeviceInit,
+    _In_ const NET_DEVICE_RESET_CAPABILITIES * Capabilities
+)
+{
+    auto nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, Capabilities);
+
+    auto nxDevice = WdfCxDeviceInitGetTypedContext(DeviceInit, NxDevice);
+    nxDevice->SetResetCapabilities(Capabilities);
+}
+
+_IRQL_requires_(PASSIVE_LEVEL)
+WDFAPI
+void
+NETEXPORT(NetDeviceStoreResetDiagnostics)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ WDFDEVICE Device,
+    _In_ SIZE_T ResetDiagnosticsSize,
+    _In_reads_bytes_(ResetDiagnosticsSize) const UINT8 * ResetDiagnosticsBuffer
+)
+{
+    auto nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyResetDiagnosticsSize(nxPrivateGlobals, ResetDiagnosticsSize);
+
+    auto nxDevice = GetNxDeviceFromHandle(Device);
+
+    //
+    // NetDeviceStoreResetDiagnostics can only be called once when client
+    // driver is handling EVT_NET_DEVICE_COLLECT_RESET_DIAGNOSTICS.
+    //
+    Verifier_VerifyIsCollectingResetDiagnostics(nxPrivateGlobals, nxDevice);
+
+    nxDevice->StoreResetDiagnostics(ResetDiagnosticsSize, ResetDiagnosticsBuffer);
+}
+
+_IRQL_requires_(PASSIVE_LEVEL)
+WDFAPI
+void
+NETEXPORT(NetDeviceRequestReset)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ WDFDEVICE Device
+)
+{
+    auto nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+
+    auto nxDevice = GetNxDeviceFromHandle(Device);
+    nxDevice->PlatformLevelDeviceResetWithDiagnostics();
 }

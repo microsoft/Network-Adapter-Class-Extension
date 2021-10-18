@@ -6,7 +6,6 @@
 
 #include <NxTrace.hpp>
 #include <NxTraceLogging.hpp>
-
 #include <NetClientBuffer.h>
 
 #ifndef _KERNEL_MODE

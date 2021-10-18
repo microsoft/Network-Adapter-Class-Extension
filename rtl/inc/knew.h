@@ -32,28 +32,6 @@ PAGED void operator delete[](void *p, ULONG tag);
 PAGEDX void __cdecl operator delete[](void *p);
 void __cdecl operator delete(void *p);
 
-#ifndef _KERNEL_MODE
-
-PVOID
-ExAllocatePoolWithTag(
-    POOL_TYPE PoolType,
-    SIZE_T NumberOfBytes,
-    ULONG Tag
-    );
-
-VOID
-ExFreePoolWithTag(
-    _Pre_notnull_ __drv_freesMem(Mem) PVOID P,
-    _In_ ULONG Tag
-    );
-
-VOID
-ExFreePool(
-    _Pre_notnull_ __drv_freesMem(Mem) PVOID P
-    );
-
-#endif // _KERNEL_MODE
-
 template <ULONG TAG, ULONG ARENA = PagedPool>
 struct KRTL_CLASS KALLOCATION_TAG
 {

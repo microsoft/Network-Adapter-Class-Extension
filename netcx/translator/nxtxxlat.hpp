@@ -13,7 +13,7 @@ Abstract:
 
 #include <NetClientAdapter.h>
 
-#include "NxExecutionContext.hpp"
+#include "Queue.hpp"
 #include "NxSignal.hpp"
 #include "NxRingBuffer.hpp"
 #include "NxRingContext.hpp"
@@ -25,34 +25,34 @@ Abstract:
 #include "NxExtensions.hpp"
 #include "NxStatistics.hpp"
 
+#include "checksum/Checksum.hpp"
+#include "segmentation/Segmentation.hpp"
 #include <KArray.h>
+#include <KWaitEvent.h>
 
-class NxTxXlat :
-    public INxNblTx,
-    public NxNonpagedAllocation<'xTxN'>
+struct QueueControlSynchronize;
+typedef struct _PKTMON_COMPONENT_CONTEXT PKTMON_COMPONENT_CONTEXT;
+
+class NxTxXlat
+    : public Queue
 {
 
 public:
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NxTxXlat(
+        _In_ NxTranslationApp & App,
+        _In_ bool OnDemand,
         _In_ size_t QueueId,
+        _In_ QueueControlSynchronize & QueueControl,
         _In_ NET_CLIENT_DISPATCH const * Dispatch,
         _In_ NET_CLIENT_ADAPTER Adapter,
-        _In_ NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch,
-        _In_ NxStatistics & Statistics
+        _In_ NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
     ) noexcept;
 
-    virtual
     ~NxTxXlat(
         void
     );
-
-    _IRQL_requires_max_(DISPATCH_LEVEL)
-    size_t
-    GetQueueId(
-        void
-    ) const;
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
@@ -61,26 +61,43 @@ public:
     );
 
     _IRQL_requires_(PASSIVE_LEVEL)
-    void
-    Start(
+    NTSTATUS
+    Create(
         void
     );
 
     _IRQL_requires_(PASSIVE_LEVEL)
+    PAGEDX
     void
-    Cancel(
+    Destroy(
         void
     );
 
-    _IRQL_requires_(PASSIVE_LEVEL)
-    void
-    Stop(
+    bool
+    IsCreated(
         void
+    ) const;
+
+    bool
+    IsOnDemand(
+        void
+    ) const;
+
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    bool
+    IsQueuingNetBufferLists(
+        void
+    ) const;
+
+    // Polling function executed by execution context
+    void
+    TransmitNbls(
+        _Inout_ EXECUTION_CONTEXT_POLL_PARAMETERS * Parameters
     );
 
     void
-    TransmitThread(
-        void
+    TransmitNblsStopping(
+        _Inout_ EXECUTION_CONTEXT_POLL_PARAMETERS * Parameters
     );
 
     void
@@ -88,24 +105,37 @@ public:
         void
     );
 
-    //
-    // INxNblTx
-    //
+    NET_CLIENT_QUEUE_TX_DEMUX_PROPERTY const *
+    NxTxXlat::GetTxDemuxProperty(
+        NET_CLIENT_QUEUE_TX_DEMUX_TYPE Type
+    ) const;
 
-    virtual
+    _IRQL_requires_max_(DISPATCH_LEVEL)
     void
-    SendNetBufferLists(
-        _In_ NET_BUFFER_LIST * NblChain,
-        _In_ ULONG PortNumber,
-        _In_ ULONG NumberOfNbls,
-        _In_ ULONG SendFlags
+    QueueNetBufferList(
+        _In_ NET_BUFFER_LIST * NetBufferList
+    );
+
+    const NxTxCounters &
+    GetStatistics(
+        void
+    ) const;
+
+    void
+    DropQueuedNetBufferLists(
+        void
     );
 
 private:
 
-    size_t m_queueId = ~0U;
+    bool
+        m_created = false;
 
-    NxExecutionContext m_executionContext;
+    bool const
+        m_onDemand = false;
+
+    QueueControlSynchronize &
+        m_queueControl;
 
     NET_CLIENT_DISPATCH const *
         m_dispatch = nullptr;
@@ -116,32 +146,20 @@ private:
     NET_CLIENT_ADAPTER_DISPATCH const *
         m_adapterDispatch = nullptr;
 
+    NxTxCounters
+        m_statistics = {};
+
     NET_CLIENT_ADAPTER_PROPERTIES
         m_adapterProperties = {};
 
     NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES
         m_datapathCapabilities = {};
 
-    NDIS_MEDIUM
-        m_mediaType;
-
     INxNblDispatcher *
         m_nblDispatcher = nullptr;
 
-    NxInterlockedFlag
-        m_queueNotification;
-
     NxNblQueue
         m_synchronizedNblQueue;
-
-    NxNblTranslationStats
-        m_nblTranslationStats;
-
-    NET_CLIENT_QUEUE
-        m_queue = nullptr;
-
-    NET_CLIENT_QUEUE_DISPATCH const *
-        m_queueDispatch = nullptr;
 
     TxExtensions
         m_extensions = {};
@@ -161,6 +179,9 @@ private:
     wistd::unique_ptr<NxDmaAdapter>
         m_dmaAdapter;
 
+    PKTMON_COMPONENT_CONTEXT const *
+        m_pktmonComponentContext = nullptr;
+
     //
     // Datapath variables
     // All below will change as TransmitThread runs
@@ -179,38 +200,26 @@ private:
     ULONG
         m_completedPackets = 0;
 
-    struct ArmedNotifications
-    {
-        union
-        {
-            struct
-            {
-                bool ShouldArmTxCompletion : 1;
-                bool ShouldArmNblArrival : 1;
-                UINT8 Reserved : 6;
-            } Flags;
+    Rtl::KArray<UINT8, NonPagedPoolNx>
+        m_layoutParseBuffer;
 
-            UINT8 Value = 0;
-        };
-    } m_lastArmedNotifications;
+    Rtl::KArray<NET_CLIENT_QUEUE_TX_DEMUX_PROPERTY>
+        m_properties;
 
-    NxStatistics &
-        m_statistics;
+    Checksum
+        m_checksumContext;
 
-    void
-    ArmNetBufferListArrivalNotification(
-        void
-    );
+    GenericSegmentationOffload
+        m_gsoContext;
 
-    void
-    ArmAdapterTxNotification(
-        void
-    );
+    NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES
+        m_checksumHardwareCapabilities = {};
 
-    ArmedNotifications
-    GetNotificationsToArm(
-        void
-    );
+    NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES
+        m_txChecksumHardwareCapabilities = {};
+
+    NET_CLIENT_OFFLOAD_GSO_CAPABILITIES
+        m_gsoHardwareCapabilities = {};
 
     // The high level operations of the NBL Tx translation
     void
@@ -238,18 +247,8 @@ private:
         void
     );
 
-    void
-    WaitForWork(
-        void
-    );
-
     // These operations are used exclusively while
     // winding down the Tx path
-    void
-    DropQueuedNetBufferLists(
-        void
-    );
-
     void
     AbortNbls(
         _In_opt_ NET_BUFFER_LIST * nblChain
@@ -258,16 +257,6 @@ private:
     // drain queue
     PNET_BUFFER_LIST
     DequeueNetBufferListQueue(
-        void
-    );
-
-    void
-    ArmNotifications(
-        _In_ ArmedNotifications reasons
-    );
-
-    void
-    SetupTxThreadProperties(
         void
     );
 

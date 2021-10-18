@@ -40,6 +40,8 @@ Abstract:
 
 #include "NxAdapterStateMachine.h"
 
+#include "AdapterPnpPower.hpp"
+
 #include "NxExtension.hpp"
 
 #include <NetClientApi.h>
@@ -48,9 +50,12 @@ Abstract:
 #include "NxUtility.hpp"
 
 #include "NxOffload.hpp"
-#include "NxCollection.hpp"
-#include "NxRequest.hpp"
+#include "NxAdapterCollection.hpp"
 #include "powerpolicy/NxPowerPolicy.hpp"
+#include "NxQueue.hpp"
+#include "rxscaling/NxRxScaling.hpp"
+#include "ExecutionContext.hpp"
+#include "monitor/NxPacketMonitor.hpp"
 
 #include "netadaptercx_triage.h"
 
@@ -68,22 +73,10 @@ NdisWdfCxCharacteristicsInitialize(
     _Inout_ NDIS_WDF_CX_CHARACTERISTICS & Chars
 );
 
-void
-NdisMiniportDriverCharacteristicsInitialize(
-    _Inout_ NDIS_MINIPORT_DRIVER_CHARACTERISTICS & Characteristics
-);
-
 union AdapterFlags
 {
     struct
     {
-        //
-        // TRUE if the client driver already called NetAdapterStart. Does not mean
-        // the adapter is fully started
-        //
-        UINT32
-            StartCalled : 1;
-
         //
         // TRUE if the Cx already set the NDIS general attributes
         //
@@ -91,16 +84,7 @@ union AdapterFlags
             GeneralAttributesSet : 1;
 
         UINT32
-            StartPending : 1;
-
-        UINT32
-            StopPending : 1;
-
-        UINT32
-            PowerReferenceAcquired : 1;
-
-        UINT32
-            Unused : 27;
+            Unused : 31;
     };
 
     UINT32
@@ -112,37 +96,45 @@ C_ASSERT(sizeof(AdapterFlags) == sizeof(UINT32));
 
 #pragma warning(pop)
 
-enum class AdapterState
-{
-    Initialized = 0,
-    Started,
-    Stopping,
-    Stopped,
-};
-
 #define ADAPTER_INIT_SIGNATURE 'SIAN'
 
-struct PAGED AdapterInit : PAGED_OBJECT<'nIAN'>
+struct PAGED AdapterInit
+    : PAGED_OBJECT<'nIAN'>
 {
-    ULONG InitSignature = ADAPTER_INIT_SIGNATURE;
-    NETADAPTER CreatedAdapter = nullptr;
+    ULONG
+        InitSignature = ADAPTER_INIT_SIGNATURE;
+
+    WDFDEVICE
+        ParentDevice = WDF_NO_HANDLE;
+
+    MediaExtensionType
+        ExtensionType = MediaExtensionType::None;
+
+    wil::unique_wdf_any<WDFOBJECT>
+        Object;
+
+    NETADAPTER
+        CreatedAdapter = WDF_NO_HANDLE;
 
     //
     // Common to all types of adapters
     //
-    NET_ADAPTER_DATAPATH_CALLBACKS DatapathCallbacks = {};
-    WDF_OBJECT_ATTRIBUTES NetRequestAttributes = {};
-
-    // For adapters layered on top of a WDFDEVICE
-    WDFDEVICE Device = nullptr;
+    NET_ADAPTER_DATAPATH_CALLBACKS
+        DatapathCallbacks = {};
 
     // Used by other WDF class extensions that wish to hook NETADAPTER events
-    Rtl::KArray<AdapterExtensionInit> AdapterExtensions;
+    Rtl::KArray<AdapterExtensionInit>
+        AdapterExtensions;
+
+    Rtl::KArray<NET_ADAPTER_TX_DEMUX>
+        TxDemux;
+
+    bool ShouldAcquirePowerReferencesForAdapter = true;
 };
 
 AdapterInit *
 GetAdapterInitFromHandle(
-    _In_ NX_PRIVATE_GLOBALS *PrivateGlobals,
+    _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
     _In_ NETADAPTER_INIT * Handle
 );
 
@@ -152,68 +144,84 @@ struct NX_PRIVATE_GLOBALS;
 class NxAdapter;
 class NxDriver;
 class NxQueue;
-class NxRequestQueue;
-
-FORCEINLINE
-NxAdapter *
-GetNxAdapterFromHandle(
-    _In_ NETADAPTER Adapter
-);
-
 
 class NxAdapter
-    : public CFxObject<NETADAPTER, NxAdapter, GetNxAdapterFromHandle, false>
-    , public NxAdapterStateMachine<NxAdapter>
+    : public NxAdapterStateMachine<NxAdapter>
 {
     friend class NxCollection<NxAdapter>;
     friend class NxAdapterCollection;
+    friend class AdapterPnpPower;
 
 private:
 
-    NxDriver *
-        m_NxDriver = nullptr;
+    NxPacketMonitor
+        m_packetMonitor;
+
+    //
+    // The globals from the driver that invoked NetAdapterCreate
+    //
+    NX_PRIVATE_GLOBALS &
+        m_privateGlobals;
+
+    NTSTATUS
+    QueryStandardizedKeyword(
+        _In_ UNICODE_STRING const & Keyword,
+        _Out_ bool & Enabled
+    );
+
+    NTSTATUS
+    QueryStandardizedKeyword(
+        _In_ UNICODE_STRING const & Keyword,
+        _Out_ ULONG & Value
+    );
+
+    NETADAPTER
+        m_adapter = WDF_NO_HANDLE;
 
     WDFDEVICE
-        m_Device = WDF_NO_HANDLE;
+        m_device = WDF_NO_HANDLE;
+
+    void *
+        m_plugPlayNotificationHandle = nullptr;
 
     //
     // Opaque handle returned by ndis.sys for this adapter.
     //
     NDIS_HANDLE
-        m_NdisAdapterHandle = nullptr;
+        m_ndisAdapterHandle = nullptr;
 
     AdapterFlags
-        m_Flags = {};
+        m_flags = {};
 
-    AdapterState
-        m_State = AdapterState::Initialized;
+    // Tracks how many outstanding calls to NxAdapter::PowerReference
+    // there are. This is kept for debugging purposes only
+    LONG
+        m_powerReferences = 0;
 
-    AsyncResult
-        m_StartHandled;
-
-    KAutoEvent
-        m_StopHandled;
+    // Tracks how many calls to NxAdapter::PowerReference were successful
+    LONG
+        m_successfulPowerReferences = 0;
 
     LIST_ENTRY
-        m_Linkage = {};
+        m_linkage = {};
 
-    Rtl::KArray<wil::unique_wdf_object>
+    Rtl::KArray<unique_packet_queue>
         m_rxQueues;
 
-    Rtl::KArray<wil::unique_wdf_object>
+    Rtl::KArray<unique_packet_queue>
         m_txQueues;
 
-    Rtl::KArray<NxAdapterExtension>
+    Rtl::KArray<NxAdapterExtension, NonPagedPoolNx>
         m_adapterExtensions;
 
     //
     // Data path lock. Prevent concurrent queue create and destroy.
     //
     WDFWAITLOCK
-        m_DataPathControlLock = WDF_NO_HANDLE;
+        m_dataPathControlLock = WDF_NO_HANDLE;
 
     KAutoEvent
-        m_TransitionComplete;
+        m_transitionComplete;
 
     //
     // Used to callback into NDIS when a asynchronous stop idle operation is
@@ -221,47 +229,34 @@ private:
     // WdfDeviceStopIdle is made.
     //
     WDFWORKITEM
-        m_PowerRequiredWorkItem;
+        m_powerRequiredWorkItem;
 
     //
     // Track whether the queued workitem ran.
     //
     BOOLEAN
-        m_PowerRequiredWorkItemPending = FALSE;
+        m_powerRequiredWorkItemPending = FALSE;
 
     //
-    // Used to callback into NDIS when a asynchronous AoAc disengage operation
-    // is complete.
+    // Copy of interface guid
     //
-    WDFWORKITEM
-        m_AoAcDisengageWorkItem;
-
-    //
-    // Track whether the queued workitem ran.
-    //
-    BOOLEAN
-        m_AoAcDisengageWorkItemPending = FALSE;
-
-    //
-    // For diagnostic and verification purpose only
-    //
-    BOOLEAN
-        m_AoAcEngaged = FALSE;
+    GUID
+        m_interfaceGuid{};
 
     //
     // Copy of Net LUID received in MiniportInitializeEx callback
     //
     NET_LUID
-        m_NetLuid = {};
+        m_netLuid = {};
 
     //
     // Copy of physical medium
     //
     NDIS_MEDIUM
-        m_MediaType = (NDIS_MEDIUM)0xFFFFFFFF;
+        m_mediaType = (NDIS_MEDIUM)0xFFFFFFFF;
 
     NET_CLIENT_CONTROL_DISPATCH const *
-        m_ClientDispatch = nullptr;
+        m_clientDispatch = nullptr;
 
 #ifdef _KERNEL_MODE
 
@@ -269,10 +264,10 @@ private:
     // All datapath apps on the adapter
     //
     Rtl::KArray<wistd::unique_ptr<INxApp>, NonPagedPoolNx>
-        m_Apps;
+        m_apps;
 
     NxNblDatapath
-        m_NblDatapath;
+        m_nblDatapath;
 
 #endif // _KERNEL_MODE
 
@@ -280,25 +275,31 @@ private:
     // Adapter registered packet extensions from application/miniport driver
     //
     WDFWAITLOCK
-        m_ExtensionCollectionLock = WDF_NO_HANDLE;
+        m_extensionCollectionLock = WDF_NO_HANDLE;
 
     Rtl::KArray<NxExtension>
         m_packetExtensions;
 
-    // Receive scaling capabilities
-    NET_ADAPTER_RECEIVE_SCALING_CAPABILITIES
-        m_ReceiveScalingCapabilities = {};
+    Rtl::KArray<NET_ADAPTER_TX_DEMUX>
+        m_txDemux;
 
     UNICODE_STRING
-        m_BaseName = {};
+        m_baseName = {};
 
     UNICODE_STRING
-        m_InstanceName = {};
+        m_instanceName = {};
+
+    UNICODE_STRING
+        m_driverImageName = {};
 
     WDFMEMORY
-        m_WakeReasonMemory = WDF_NO_HANDLE;
+        m_wakeReasonMemory = WDF_NO_HANDLE;
 
-private:
+    MediaExtensionType
+        m_mediaExtensionType = MediaExtensionType::None;
+
+    PFN_NET_ADAPTER_TX_PEER_DEMUX
+        m_wifiTxPeerDemux = nullptr;
 
     friend class NxAdapterStateMachine<NxAdapter>;
 
@@ -348,41 +349,44 @@ private:
 
 public:
 
+    AdapterPnpPower
+        PnpPower;
+
+    NxRxScaling
+        RxScaling;
+
     //
     // Copy of Capabilities set by the client.
     //
     NET_ADAPTER_LINK_LAYER_CAPABILITIES
-        m_LinkLayerCapabilities = {};
+        m_linkLayerCapabilities = {};
 
     NET_ADAPTER_LINK_STATE
-        m_CurrentLinkState = {};
+        m_currentLinkState = {};
 
     NET_ADAPTER_RX_CAPABILITIES
-        m_RxCapabilities = {};
+        m_rxCapabilities = {};
 
     NET_ADAPTER_DMA_CAPABILITIES
-        m_RxDmaCapabilities = {};
+        m_rxDmaCapabilities = {};
 
     NET_ADAPTER_TX_CAPABILITIES
-        m_TxCapabilities = {};
+        m_txCapabilities = {};
 
     NET_ADAPTER_DMA_CAPABILITIES
-        m_TxDmaCapabilities = {};
+        m_txDmaCapabilities = {};
 
     ULONG
-        m_MtuSize = 0;
+        m_mtuSize = 0;
 
     NET_ADAPTER_LINK_LAYER_ADDRESS
-        m_PermanentLinkLayerAddress = {};
+        m_permanentLinkLayerAddress = {};
 
     NET_ADAPTER_LINK_LAYER_ADDRESS
-        m_CurrentLinkLayerAddress = {};
+        m_currentLinkLayerAddress = {};
 
-    NET_ADAPTER_PACKET_FILTER_CAPABILITIES
-        m_PacketFilter = {};
-
-    NET_ADAPTER_MULTICAST_CAPABILITIES
-        m_MulticastList = {};
+    NET_ADAPTER_RECEIVE_FILTER_CAPABILITIES
+        m_receiveFilterCapabilities = {};
 
     //
     // A copy of the datapath callbacks structure that client passed to NetAdapterCx.
@@ -394,32 +398,8 @@ public:
     // optional callback API from the driver if rx buffer allocation mode
     // is NetRxFragmentBufferAllocationModeNone
     //
-    PFN_NET_ADAPTER_RETURN_RX_BUFFER 
-        m_EvtReturnRxBuffer = nullptr;
-
-    //
-    // Attibutes the client set to use with NETREQUEST and NETPOWERSETTINGS
-    // objects. If the client didn't provide one, the Size field will be
-    // zero.
-    //
-    WDF_OBJECT_ATTRIBUTES
-        m_NetRequestObjectAttributes = {};
-
-    //
-    // Pointer to the Default and Default Direct Oid Queus
-    //
-
-    NxRequestQueue *
-        m_DefaultRequestQueue = nullptr;
-
-    NxRequestQueue *
-        m_DefaultDirectRequestQueue = nullptr;
-
-    //
-    // List Head to track all allocated Oids
-    //
-    LIST_ENTRY
-        m_ListHeadAllOids = {};
+    PFN_NET_ADAPTER_RETURN_RX_BUFFER
+        m_evtReturnRxBuffer = nullptr;
 
     NxPowerPolicy
         m_powerPolicy;
@@ -435,7 +415,31 @@ public:
     // Checksum, Lso etc in NetAdapterCx
     //
     wistd::unique_ptr<NxOffloadManager>
-        m_NxOffloadManager;
+        m_offloadManager;
+
+    NET_CLIENT_OFFLOAD_IEEE8021Q_TAG_CAPABILITIES
+        m_ieee8021qTagCapabilties = {};
+
+    bool
+        m_isOffloadPaused = false;
+
+    EXECUTION_CONTEXT_RUNTIME_KNOBS const *
+        m_executionContextKnobs = nullptr;
+
+    NETADAPTER
+    GetFxObject(
+        void
+    ) const;
+
+    unique_miniport_reference
+    GetMiniportReference(
+        void
+    ) const;
+
+    NxAdapterExtension *
+    GetExtension(
+        _In_ NX_PRIVATE_GLOBALS const * ExtensionGlobals
+    );
 
     NTSTATUS
     CreateNdisMiniport(
@@ -478,36 +482,6 @@ public:
         _Out_ NDIS_STATUS & NdisStatus
     ) const;
 
-    NTSTATUS
-    ClientStart(
-        void
-    );
-
-    void
-    ClientStop(
-        void
-    );
-
-    void
-    StopPhase1(
-        void
-    );
-
-    void
-    StopPhase2(
-        void
-    );
-
-    void
-    FullStop(
-        _In_ DeviceState DeviceState
-    );
-
-    void
-    ReportSurpriseRemove(
-        void
-    );
-
     void
     SetDeviceFailed(
         _In_ NTSTATUS Status
@@ -524,8 +498,8 @@ public:
     ) const;
 
     void
-    GetReceiveScalingCapabilities(
-        _Out_ NET_CLIENT_ADAPTER_RECEIVE_SCALING_CAPABILITIES * Capabilities
+    GetTxDemuxConfiguration(
+        _Out_ NET_CLIENT_ADAPTER_TX_DEMUX_CONFIGURATION * Configuration
     ) const;
 
     NTSTATUS
@@ -534,7 +508,9 @@ public:
         _In_ NET_CLIENT_QUEUE_NOTIFY_DISPATCH const * ClientDispatch,
         _In_ NET_CLIENT_QUEUE_CONFIG const * ClientQueueConfig,
         _Out_ NET_CLIENT_QUEUE * AdapterQueue,
-        _Out_ NET_CLIENT_QUEUE_DISPATCH const ** AdapterDispatch
+        _Out_ NET_CLIENT_QUEUE_DISPATCH const ** AdapterDispatch,
+        _Out_ NET_EXECUTION_CONTEXT * ExecutionContext,
+        _Out_ NET_EXECUTION_CONTEXT_DISPATCH const ** ExecutionContextDispatch
     );
 
     NTSTATUS
@@ -543,7 +519,9 @@ public:
         _In_ NET_CLIENT_QUEUE_NOTIFY_DISPATCH const * ClientDispatch,
         _In_ NET_CLIENT_QUEUE_CONFIG const * ClientQueueConfig,
         _Out_ NET_CLIENT_QUEUE * AdapterQueue,
-        _Out_ NET_CLIENT_QUEUE_DISPATCH const ** AdapterDispatch
+        _Out_ NET_CLIENT_QUEUE_DISPATCH const ** AdapterDispatch,
+        _Out_ NET_EXECUTION_CONTEXT * ExecutionContext,
+        _Out_ NET_EXECUTION_CONTEXT_DISPATCH const ** ExecutionContextDispatch
     );
 
     void
@@ -561,27 +539,6 @@ public:
     );
 
     NTSTATUS
-    ReceiveScalingEnable(
-        _In_ NET_ADAPTER_RECEIVE_SCALING_HASH_TYPE HashType,
-        _In_ NET_ADAPTER_RECEIVE_SCALING_PROTOCOL_TYPE ProtocolType
-    );
-
-    void
-    ReceiveScalingDisable(
-        void
-    );
-
-    NTSTATUS
-    ReceiveScalingSetIndirectionEntries(
-        _Inout_ NET_CLIENT_RECEIVE_SCALING_INDIRECTION_ENTRIES * IndirectionEntries
-    );
-
-    NTSTATUS
-    ReceiveScalingSetHashSecretKey(
-        _In_ NET_CLIENT_RECEIVE_SCALING_HASH_SECRET_KEY const * HashSecretKey
-    );
-
-    NTSTATUS
     PowerReference(
         _In_ bool WaitForD0
     );
@@ -591,12 +548,26 @@ public:
         void
     );
 
+    void
+    ReleaseOutstandingPowerReferences(
+        void
+    );
+
+    void
+    PauseOffloads(
+        void
+    );
+
+    void
+    ResumeOffloads(
+        void
+    );
+
 private:
 
     NxAdapter(
-        _In_ NX_PRIVATE_GLOBALS const & NxPrivateGlobals,
-        _In_ AdapterInit const & AdapterInit,
-        _In_ NETADAPTER Adapter
+        _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+        _In_ AdapterInit const * AdapterInit
     );
 
     void
@@ -606,22 +577,7 @@ private:
 
     NTSTATUS
     InitializeAdapterExtensions(
-        _In_ AdapterInit const *AdapterInit
-    );
-
-    void
-    StartForClient(
-        _In_ DeviceState DeviceState
-    );
-
-    NTSTATUS
-    StartForClientInner(
-        _In_ DeviceState DeviceState
-    );
-
-    void
-    StopForClient(
-        _In_ DeviceState DeviceState
+        _In_ AdapterInit const * AdapterInit
     );
 
     void
@@ -636,21 +592,17 @@ private:
         _In_ DispatchContext * Context
     );
 
-    void
-    DispatchOidRequestToAdapter(
-        _In_ NDIS_OID_REQUEST * NdisOidRequest
-    );
-
     ULONG
     GetCombinedMediaSpecificWakeUpEvents(
         void
     ) const;
 
-public:
-
-    ~NxAdapter(
+    ULONG
+    GetCombinedSupportedProtocolOffloads(
         void
-    );
+    ) const;
+
+public:
 
     NX_PRIVATE_GLOBALS *
     GetPrivateGlobals(
@@ -672,28 +624,16 @@ public:
         void
     );
 
-    void
-    EngageAoAc(
-        void
-    );
-
-    NTSTATUS
-    DisengageAoAc(
-        _In_ bool WaitForD0
-    );
-
     static
     NTSTATUS
     _Create(
-        _In_ NX_PRIVATE_GLOBALS const & PrivateGlobals,
-        _In_ AdapterInit const & AdapterInit,
-        _In_opt_ WDF_OBJECT_ATTRIBUTES * ClientAttributes,
-        _Out_ NxAdapter ** Adapter
+        _In_ NX_PRIVATE_GLOBALS * PrivateGlobals,
+        _In_ AdapterInit const * AdapterInit
     );
 
     NTSTATUS
-    Init(
-        _In_ AdapterInit const *AdapterInit
+    Initialize(
+        _In_ AdapterInit const * AdapterInit
     );
 
     void
@@ -706,11 +646,6 @@ public:
         void
     ) const;
 
-    void
-    Refresh(
-        _In_ DeviceState DeviceState
-    );
-
     static
     void
     _EvtCleanup(
@@ -719,11 +654,6 @@ public:
 
     NTSTATUS
     NdisInitialize(
-        void
-    );
-
-    RECORDER_LOG
-    GetRecorderLog(
         void
     );
 
@@ -746,6 +676,11 @@ public:
 
     NTSTATUS
     InitializeDatapath(
+        _In_ NET_ADAPTER_DATAPATH_CALLBACKS const & Callbacks
+    );
+
+    const GUID *
+    GetInterfaceGuid(
         void
     );
 
@@ -759,8 +694,13 @@ public:
         void
     ) const;
 
-    bool
-    StartCalled(
+    UNICODE_STRING const &
+    GetInstanceName(
+        void
+    ) const;
+
+    UNICODE_STRING const &
+    GetDriverImageName(
         void
     ) const;
 
@@ -784,15 +724,29 @@ public:
         _In_ NET_ADAPTER_LINK_LAYER_ADDRESS * LinkLayerAddress
     );
 
+    NTSTATUS
+    SetReceiveFilter(
+        _In_ ULONG PacketFilter,
+        _In_ SIZE_T MulticastAddressCount,
+        _In_ IF_PHYSICAL_ADDRESS const * MulticastAddressList
+    );
+
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    size_t
+    WifiTxPeerDemux(
+        _In_ NET_EUI48_ADDRESS const * Address
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NET_ADAPTER_TX_DEMUX const *
+    GetTxPeerAddressDemux(
+        void
+    ) const;
+
     void
     SetDatapathCapabilities(
         _In_ NET_ADAPTER_TX_CAPABILITIES const * TxCapabilities,
         _In_ NET_ADAPTER_RX_CAPABILITIES const * RxCapabilities
-    );
-
-    void
-    SetReceiveScalingCapabilities(
-        _In_ NET_ADAPTER_RECEIVE_SCALING_CAPABILITIES const & Capabilities
     );
 
     void
@@ -801,13 +755,13 @@ public:
     );
 
     void
-    SetPacketFilterCapabilities(
-        _In_ NET_ADAPTER_PACKET_FILTER_CAPABILITIES const & PacketFilter
+    SetReceiveFilterCapabilities(
+        _In_ NET_ADAPTER_RECEIVE_FILTER_CAPABILITIES const & Capabilities
     );
 
     void
-    SetMulticastCapabilities(
-        _In_ NET_ADAPTER_MULTICAST_CAPABILITIES const & MulticastList
+    SetIeee8021qTagCapabiilities(
+        _In_ NET_ADAPTER_OFFLOAD_IEEE8021Q_TAG_CAPABILITIES const & Capabilities
     );
 
     void
@@ -828,6 +782,11 @@ public:
     void
     SetMagicPacketCapabilities(
         _In_ NET_ADAPTER_WAKE_MAGIC_PACKET_CAPABILITIES const * Capabilities
+    );
+
+    void
+    SetEapolPacketCapabilities(
+        _In_ NET_ADAPTER_WAKE_EAPOL_PACKET_CAPABILITIES const * Capabilities
     );
 
     void
@@ -880,46 +839,10 @@ public:
         void
     );
 
+    _IRQL_requires_(PASSIVE_LEVEL)
     void
-    PnPStartComplete(
+    InitializePowerManagement(
         void
-    );
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    void
-    InitializePowerManagement1(
-        void
-    );
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    void
-    InitializePowerManagement2(
-        void
-    );
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    void
-    SelfManagedIoStart(
-        void
-    );
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    void
-    SelfManagedIoStop(
-        void
-    );
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    void
-    SelfManagedIoRestart(
-        _In_ POWER_ACTION SystemPowerAction
-    );
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    void
-    SelfManagedIoSuspend(
-        _In_ POWER_ACTION SystemPowerAction,
-        _In_ WDF_POWER_DEVICE_STATE TargetDevicePowerState
     );
 
     bool
@@ -932,20 +855,26 @@ public:
         void
     );
 
-    _Requires_lock_held_(m_ExtensionCollectionLock)
+    _Requires_lock_held_(m_extensionCollectionLock)
     NET_EXTENSION_PRIVATE const *
     QueryExtension(
-        PCWSTR Name,
-        ULONG Version,
-        NET_EXTENSION_TYPE Type
+        _In_ PCWSTR Name,
+        _In_ ULONG Version,
+        _In_ NET_EXTENSION_TYPE Type
     ) const;
 
     NET_EXTENSION_PRIVATE const *
     QueryExtensionLocked(
-        PCWSTR Name,
-        ULONG Version,
-        NET_EXTENSION_TYPE Type
+        _In_ PCWSTR Name,
+        _In_ ULONG Version,
+        _In_ NET_EXTENSION_TYPE Type
     ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    RegisterRingExtensions(
+        void
+    );
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
@@ -975,49 +904,62 @@ public:
         _In_ DispatchContext * Context
     );
 
+    NTSTATUS
+    DispatchDirectOidRequest(
+        _In_ NDIS_OID_REQUEST * NdisOidRequest,
+        _In_ DispatchContext * Context
+    );
+
     NDIS_MEDIUM
     GetMediaType(
         void
     ) const;
 
-    void ReportWakeReasonPacket(
+    void
+    ReportWakeReasonPacket(
         _In_ const NET_ADAPTER_WAKE_REASON_PACKET * Reason
     ) const;
 
-    void ReportWakeReasonMediaChange(
+    void
+    ReportWakeReasonMediaChange(
         _In_ NET_IF_MEDIA_CONNECT_STATE MediaEvent
     ) const;
+
+    void
+    WifiDestroyPeerAddressDatapath(
+        _In_ size_t Demux
+    );
+
+    NxPacketMonitor &
+    GetPacketMonitor(
+        void
+    );
+
+    void
+    GetIeee8021qHardwareCapabilities(
+        NET_CLIENT_OFFLOAD_IEEE8021Q_TAG_CAPABILITIES * HardwareCapabilities
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    UpdateNdisPmParameters(
+        _Inout_ NDIS_PM_PARAMETERS * PmParameters
+    );
 };
 
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxAdapter, _GetNxAdapterFromHandle);
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxAdapter, GetNxAdapterFromHandle);
 
-FORCEINLINE
-NxAdapter *
-GetNxAdapterFromHandle(
-    _In_ NETADAPTER Adapter
-    )
-/*++
-Routine Description:
-
-    This routine is just a wrapper around the _GetNxAdapterFromHandle function.
-    To be able to define a the NxAdapter class above, we need a forward declaration of the
-    accessor function. Since _GetNxAdapterFromHandle is defined by Wdf, we dont want to
-    assume a prototype of that function for the foward declaration.
-
---*/
-
+struct NET_RECEIVE_FILTER
 {
-    return _GetNxAdapterFromHandle(Adapter);
-}
+    PKTHREAD
+        CurrentThread;
 
-typedef struct _NX_STOP_IDLE_WORKITEM_CONTEXT
-{
+    NET_PACKET_FILTER_FLAGS
+        PacketFilter;
 
-    BOOLEAN IsAoAcWorkItem;
+    SIZE_T
+        MulticastAddressCount;
 
-} NX_STOP_IDLE_WORKITEM_CONTEXT, *PNX_STOP_IDLE_WORKITEM_CONTEXT;
-
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(
-    NX_STOP_IDLE_WORKITEM_CONTEXT,
-    GetStopIdleWorkItemObjectContext);
-
+    IF_PHYSICAL_ADDRESS const *
+        MulticastAddressList;
+};

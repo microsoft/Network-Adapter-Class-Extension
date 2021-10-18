@@ -1,8 +1,9 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
 #include "precompiled.hpp"
 
-#include "NxPowerOffload.tmh"
 #include "NxPowerOffload.hpp"
+
+#include "NxPowerOffload.tmh"
 
 _Use_decl_annotations_
 NxPowerOffload::NxPowerOffload(

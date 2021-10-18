@@ -12,11 +12,13 @@ Abstract:
 
 #include <NxApi.hpp>
 
-#include "NxConfigurationApi.tmh"
-
+#include "NxDevice.hpp"
+#include "NxAdapter.hpp"
 #include "NxConfiguration.hpp"
 #include "verifier.hpp"
 #include "version.hpp"
+
+#include "NxConfigurationApi.tmh"
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
@@ -68,8 +70,8 @@ Routine Description:
 
 Arguments:
 
-    Configuration - Pointer to the Adapter Configuration opened
-        in a prior call to NdisCxAdapterOpenConfiguration or
+    Configuration - Pointer to the Adapter or Device Configuration opened
+        in a prior call to NetAdapterOpenConfiguration, NetDeviceOpenConfiguration, or
         NetConfigurationOpenSubConfiguration
 
     SubConfigurationName - Name of the Sub Configuration
@@ -83,27 +85,32 @@ Arguments:
 
 --*/
 {
-    NTSTATUS                 status;
-
     auto const nxPrivateGlobals = GetPrivateGlobals(Globals);
 
     Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
     Verifier_VerifyIrqlPassive(nxPrivateGlobals);
 
-
     *SubConfiguration = NULL;
 
     NxConfiguration * subNxConfiguration;
     auto nxConfiguration = GetNxConfigurationFromHandle(Configuration);
-    status = NxConfiguration::_Create(nxPrivateGlobals,
-                                      nxConfiguration->m_NxAdapter,
-                                      nxConfiguration,
-                                      &subNxConfiguration);
-    if (!NT_SUCCESS(status)){
-        return status;
+
+    if (nxConfiguration->m_isDeviceConfig)
+    {
+        CX_RETURN_IF_NOT_NT_SUCCESS(NxConfiguration::_Create<WDFDEVICE>(nxPrivateGlobals,
+            nxConfiguration->m_device->GetFxObject(),
+            nxConfiguration,
+            &subNxConfiguration));
+    }
+    else
+    {
+        CX_RETURN_IF_NOT_NT_SUCCESS(NxConfiguration::_Create<NETADAPTER>(nxPrivateGlobals,
+            nxConfiguration->m_adapter->GetFxObject(),
+            nxConfiguration,
+            &subNxConfiguration));
     }
 
-    status = subNxConfiguration->OpenAsSubConfiguration(SubConfigurationName);
+    NTSTATUS status = subNxConfiguration->OpenAsSubConfiguration(SubConfigurationName);
 
     if (!NT_SUCCESS(status)){
         subNxConfiguration->DeleteFromFailedOpen();
@@ -178,7 +185,7 @@ Arguments:
         break;
     default:
         status = STATUS_INVALID_PARAMETER;
-        LogError(nxConfiguration->GetRecorderLog(), FLAG_CONFIGURATION,
+        LogError(FLAG_CONFIGURATION,
                  "Invalid Flags Value %!NET_CONFIGURATION_QUERY_ULONG_FLAGS!", Flags);
         return status;
     }
@@ -351,7 +358,7 @@ Returns:
     Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
     Verifier_VerifyIrqlPassive(nxPrivateGlobals);
     Verifier_VerifyNotNull(nxPrivateGlobals, LinkLayerAddress);
-    Verifier_VerifyNotNull(nxPrivateGlobals, nxConfiguration->m_NxAdapter);
+    Verifier_VerifyNotNull(nxPrivateGlobals, nxConfiguration->m_adapter);
 
     return nxConfiguration->QueryLinkLayerAddress(LinkLayerAddress);
 }

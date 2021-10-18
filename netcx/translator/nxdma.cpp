@@ -5,7 +5,6 @@
 #include "NxDma.tmh"
 
 #include "NxDma.hpp"
-#include "NxScatterGatherList.hpp"
 
 MAKE_INTRUSIVE_LIST_ENUMERABLE(MDL, Next);
 

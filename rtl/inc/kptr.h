@@ -56,6 +56,19 @@ PAGED KPoolPtr<THeader> MakeSizedPoolPtr(ULONG poolTag, size_t allocationSize)
 
     WIN_ASSERT(allocationSize >= sizeof(THeader));
 
+#if (NTDDI_VERSION >= NTDDI_WIN10_VB) && !defined(KRTL_USE_LEGACY_POOL_API)
+
+    auto allocation = ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        allocationSize,
+        poolTag);
+    if (!allocation)
+    {
+        return nullptr;
+    }
+
+#else // (NTDDI_VERSION >= NTDDI_WIN10_VB && !defined(KRTL_USE_LEGACY_POOL_API)
+
     auto allocation = ExAllocatePoolWithTag(NonPagedPoolNx, allocationSize, poolTag);
     if (!allocation)
     {
@@ -63,6 +76,8 @@ PAGED KPoolPtr<THeader> MakeSizedPoolPtr(ULONG poolTag, size_t allocationSize)
     }
 
     RtlZeroMemory(allocation, allocationSize);
+
+#endif // (NTDDI_VERSION >= NTDDI_WIN10_VB) && !defined(KRTL_USE_LEGACY_POOL_API)
 
     // Still call the default constructor for the type in case of custom field initializers
     return KPoolPtr<THeader>(new (allocation) THeader());
@@ -74,6 +89,19 @@ NONPAGED KPoolPtrNP<THeader> MakeSizedPoolPtrNP(ULONG poolTag, size_t allocation
 {
     WIN_ASSERT(allocationSize >= sizeof(THeader));
 
+#if (NTDDI_VERSION >= NTDDI_WIN10_VB) && !defined(KRTL_USE_LEGACY_POOL_API)
+
+    auto allocation = ExAllocatePool2(
+        POOL_FLAG_NON_PAGED,
+        allocationSize,
+        poolTag);
+    if (!allocation)
+    {
+        return nullptr;
+    }
+
+#else // (NTDDI_VERSION >= NTDDI_WIN10_VB) && !defined(KRTL_USE_LEGACY_POOL_API)
+
     auto allocation = ExAllocatePoolWithTag(NonPagedPoolNx, allocationSize, poolTag);
     if (!allocation)
     {
@@ -81,6 +109,8 @@ NONPAGED KPoolPtrNP<THeader> MakeSizedPoolPtrNP(ULONG poolTag, size_t allocation
     }
 
     RtlZeroMemory(allocation, allocationSize);
+
+#endif // (NTDDI_VERSION >= NTDDI_WIN10_VB) && !defined(KRTL_USE_LEGACY_POOL_API)
 
     // Still call the default constructor for the type in case of custom field initializers
     return KPoolPtrNP<THeader>(new (allocation) THeader());

@@ -1,32 +1,35 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
 
+
 #ifdef _KERNEL_MODE
+
 #include <ntddk.h>
-#include <ntassert.h>
-#include <wdf.h>
-#include <preview/netadaptercx.h>
+
 #else
-#include <nt.h>
-#include <ntrtl.h>
-#include <nturtl.h>
-#include <winerror.h>
+
+#include <windows.h>
+#include <ntstatus.h>
+#include <ntintsafe.h>
+
+#include <nt/rtl/failfast.h>
+
+typedef ULONG NODE_REQUIREMENT;
+#define MM_ANY_NODE_OK 0x80000000
+
+#include <ifdef.h>
+
 #endif
+
+#include <nt/rtl/integermacro.h>
+
+#include <ntassert.h>
 
 #include <NxTrace.hpp>
 #include <NxTraceLogging.hpp>
 
-#include "NxExtensionLayout.tmh"
 #include "NxExtensionLayout.hpp"
 
-#ifndef RTL_IS_POWER_OF_TWO
-#define RTL_IS_POWER_OF_TWO(Value) \
-    ((Value != 0) && !((Value) & ((Value) - 1)))
-#endif // RTL_IS_POWER_OF_TWO
-
-#define ALIGN_DOWN_ULONG_BY(length, alignment) \
-    ((ULONG)(length) & ~(alignment - 1))
-#define ALIGN_UP_ULONG_BY(length, alignment) \
-    (ALIGN_DOWN_ULONG_BY(((ULONG)(length) + alignment - 1), alignment))
+#include "NxExtensionLayout.tmh"
 
 static
 size_t
@@ -104,7 +107,7 @@ AssignLayoutWithArray(
         if (extension == nullptr)
             break;
 
-        extension->AssignedOffset = ALIGN_UP_ULONG_BY(Offset, extension->NonWdfStyleAlignment);
+        extension->AssignedOffset = RTL_NUM_ALIGN_UP(Offset, extension->NonWdfStyleAlignment);
         Offset = extension->AssignedOffset + extension->Size;
     }
 
@@ -119,7 +122,7 @@ ComputeSizeAndUpdateExtensions(
     _In_ size_t ElementCount
 )
 {
-    return ALIGN_UP_ULONG_BY(AssignLayoutWithArray(Offset, Array, ElementCount), Offset);
+    return RTL_NUM_ALIGN_UP(AssignLayoutWithArray(Offset, Array, ElementCount), Offset);
 }
 
 NxExtensionLayout::NxExtensionLayout(
@@ -138,7 +141,7 @@ NxExtensionLayout::Generate(
 {
     if (m_extensions.count() == 0)
     {
-        return ALIGN_UP_ULONG_BY(m_startOffset, m_minimumAlignment);
+        return RTL_NUM_ALIGN_UP(m_startOffset, m_minimumAlignment);
     }
 
     m_temporary.clear();

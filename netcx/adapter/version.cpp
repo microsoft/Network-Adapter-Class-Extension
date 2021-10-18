@@ -9,14 +9,28 @@
 #include <NxApi.hpp>
 
 #include <NetClientDriverConfigurationImpl.hpp>
+#include <kstring.h>
 #include "NxDevice.hpp"
 
-#include "version.tmh"
 #include "version.hpp"
 
 #include "NxAdapter.hpp"
-#include "NxMacros.hpp"
 #include "verifier.hpp"
+
+#include "version.tmh"
+#include "monitor/NxPacketMonitor.hpp"
+#include "ExecutionContextStatistics.hpp"
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+void
+NETEXPORT(NetAdapterOffloadSetLsoCapabilities_2_1_1)(
+    _In_ NET_DRIVER_GLOBALS *,
+    _In_ NETADAPTER,
+    _In_ void *
+)
+{
+}
 
 TRACELOGGING_DEFINE_PROVIDER(
     g_hNetAdapterCxEtwProvider,
@@ -28,6 +42,9 @@ TRACELOGGING_DEFINE_PROVIDER(
 EXTERN_C
 DRIVER_INITIALIZE
     DriverEntry;
+
+EXTERN_C
+CONST NPI_MODULEID NPI_MS_NDIS_TRANSLATOR_MODULEID;
 
 static
 EVT_WDF_DRIVER_UNLOAD
@@ -47,11 +64,23 @@ WDFWAITLOCK g_RegistrationLock = NULL;
 
 
 NTSTATUS
-CxDriverContext::Init()
+CxDriverContext::Init(
+    _In_ UNICODE_STRING const * RegistryPath
+)
 {
+    m_registryPath = Rtl::DuplicateUnicodeString(
+        *RegistryPath,
+        'rDxC');
+
+    CX_RETURN_NTSTATUS_IF(
+        STATUS_INSUFFICIENT_RESOURCES,
+        !m_registryPath);
+
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         DriverConfigurationInitialize(),
         "Failed to load driver configurations");
+
+    VerifierInitialize();
 
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         TranslationAppFactory.Initialize(),
@@ -67,7 +96,29 @@ CxDriverContext::Destroy(
 {
     CxDriverContext *context = GetCxDriverContextFromHandle(Driver);
 
+    context->GetDeviceCollection().ForEach([](NxDevice & nxDevice)
+    {
+        nxDevice.WaitDeviceResetFinishIfRequested();
+    });
+
+    FreeGlobalEcStatistics();
     context->~CxDriverContext();
+}
+
+NxCollection<NxDevice> &
+CxDriverContext::GetDeviceCollection(
+    void
+)
+{
+    return m_deviceCollection;
+}
+
+UNICODE_STRING const *
+CxDriverContext::GetRegistryPath(
+    void
+) const
+{
+    return m_registryPath.get();
 }
 
 _Use_decl_annotations_
@@ -87,7 +138,7 @@ Routine Description:
         //
         // Deregister with NDIS.
         //
-        LogInitMsg(TRACE_LEVEL_VERBOSE, "Calling NdisWdfDeregisterCx");
+        LogError(FLAG_DRIVER, "Calling NdisWdfDeregisterCx");
         NdisWdfDeregisterCx(NetAdapterCxDriverHandle);
         NetAdapterCxDriverHandle = NULL;
     }
@@ -102,6 +153,9 @@ Routine Description:
         ClassLibraryDevice = NULL;
     }
 
+    PktMonClientUninitialize();
+
+    ExecutionContext::UninitializeSubsystem();
     WPP_CLEANUP(WdfDriverWdmGetDriverObject(Driver));
     TraceLoggingUnregister(g_hNetAdapterCxEtwProvider);
 }
@@ -121,16 +175,6 @@ NetAdapterCxDeinitialize(
     void
 )
 {
-}
-
-constexpr
-ULONG64
-MAKEVER(
-    ULONG major,
-    ULONG minor
-)
-{
-    return (static_cast<ULONG64>(major) << 16) | minor;
 }
 
 static
@@ -160,6 +204,9 @@ Return Value:
 
 --*/
 {
+    void * functionTable;
+    size_t functionCount;
+
     switch (MAKEVER(ClassInfo->Version.Major, ClassInfo->Version.Minor))
     {
         case MAKEVER(1,0):
@@ -183,13 +230,47 @@ Return Value:
 
             return STATUS_NOT_SUPPORTED;
 
+        case MAKEVER(2,0):
+        case MAKEVER(2,1):
+
+            if (ClassInfo->Version.Build > 0)
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "\n\n"
+                    "**********************************************************\n"
+                    "* NetAdapterCx 2 (Preview) client detected.               \n"
+                    "* Recompile your source code and target NetAdapterCx 2.x  \n"
+                    "* (Stable) or NetAdapterCx 2.2 (Preview or Stable).       \n"
+                    "**********************************************************\n"
+                    "\n");
+
+                return STATUS_NOT_SUPPORTED;
+            }
+
+            __fallthrough;
+
         case MAKEVER(NETCX_ADAPTER_MAJOR_VERSION, NETCX_ADAPTER_MINOR_VERSION):
 
-            if (ClassInfo->FunctionTableCount != NetFunctionTableNumEntries &&
-                ClassInfo->Version.Build > 0)
+            switch (ClassInfo->Version.Build)
+            {
+
+                case 0:
+                    __fallthrough;
+
+                case NETCX_ADAPTER_BUILD_VERSION:
+                    functionTable = &NetVersion.Functions;
+                    functionCount = NetVersion.FuncCount;
+                    break;
+
+                default:
+                    return STATUS_NOT_SUPPORTED;
+            }
+
+            if (ClassInfo->Version.Build == NETCX_ADAPTER_BUILD_VERSION &&
+                ClassInfo->FunctionTableCount != functionCount)
             {
                 //
-                // If a client driver is using a preview version of NetAdapterCx we only
+                // If a client driver is using the latest preview version of NetAdapterCx we only
                 // let it bind if it is targeting the latest preview the OS supports
                 //
 
@@ -213,14 +294,14 @@ Return Value:
     // Verify our function table has at least the amount of entries the class extension
     // is requesting. If not we messed up the version check above
     //
-    NT_FRE_ASSERT(NetVersion.FuncCount >= ClassInfo->FunctionTableCount);
+    NT_FRE_ASSERT(functionCount >= ClassInfo->FunctionTableCount);
 
     //
     // Setup the function table
     //
     #pragma warning(suppress:22107) //The analysis code identify buffer size
     RtlCopyMemory(ClassInfo->FunctionTable,
-                  &NetVersion.Functions,
+                  functionTable,
                   ClassInfo->FunctionTableCount * sizeof(void *));
 
     //
@@ -231,7 +312,7 @@ Return Value:
                                                            NETADAPTERCX_TAG);
 
     if (pGlobals == NULL) {
-        LogInitMsg(TRACE_LEVEL_ERROR, "Failed to allocate globals  STATUS_INSUFFICIENT_RESOURCES");
+        LogError(FLAG_DRIVER, "Failed to allocate globals  STATUS_INSUFFICIENT_RESOURCES");
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -263,6 +344,7 @@ Return Value:
     }
 
     pGlobals->ClientDriverGlobals = reinterpret_cast<WDF_DRIVER_GLOBALS *>(ClientGlobals);
+    pGlobals->ClientVersion = ClassInfo->Version;
 
     *((NET_DRIVER_GLOBALS **)ClassInfo->ClassBindInfo) = &pGlobals->Public;
     return STATUS_SUCCESS;
@@ -338,7 +420,7 @@ Arguments:
 
     pInit = WdfControlDeviceInitAllocate(WdfGetDriver(), &SDDL_DEVOBJ_KERNEL_ONLY);
     if (pInit == NULL) {
-        LogInitMsg(TRACE_LEVEL_ERROR, "Failed to allocate ControlDeviceInit");
+        LogError(FLAG_DRIVER, "Failed to allocate ControlDeviceInit");
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -352,7 +434,7 @@ Arguments:
 
         status = WdfDeviceInitAssignName(pInit, Name);
         if (!NT_SUCCESS(status)) {
-            LogInitMsg(TRACE_LEVEL_ERROR, "WdfDeviceInitAssignName failed %!STATUS!", status);
+            LogError(FLAG_DRIVER, "WdfDeviceInitAssignName failed %!STATUS!", status);
             break;
         }
 
@@ -361,7 +443,7 @@ Arguments:
     } while (status == STATUS_OBJECT_NAME_COLLISION);
 
     if (!NT_SUCCESS(status)) {
-        LogInitMsg(TRACE_LEVEL_ERROR, "ControlDevice creation failed, %!STATUS!", status);
+        LogError(FLAG_DRIVER, "ControlDevice creation failed, %!STATUS!", status);
         ASSERT(pInit != NULL);
         WdfDeviceInitFree(pInit);
         return status;
@@ -369,7 +451,7 @@ Arguments:
 
     WdfControlFinishInitializing(ClassLibraryDevice);
 
-    LogInitMsg(TRACE_LEVEL_VERBOSE, "ControlDevice Created WDF 0x%p, WDM 0x%p, Name %S",
+    LogError(FLAG_DRIVER, "ControlDevice Created WDF 0x%p, WDM 0x%p, Name %S",
                ClassLibraryDevice, WdfDeviceWdmGetDeviceObject(ClassLibraryDevice), Name->Buffer);
 
     return status;
@@ -391,7 +473,7 @@ Routine Description:
 
 --*/
 {
-    LogInitMsg(TRACE_LEVEL_VERBOSE, "ControlDevice Being Deleted WDF 0x%p, WDM 0x%p",
+    LogError(FLAG_DRIVER, "ControlDevice Being Deleted WDF 0x%p, WDM 0x%p",
                ClassLibraryDevice, WdfDeviceWdmGetDeviceObject(ClassLibraryDevice));
     WdfObjectDelete(ClassLibraryDevice);
     ClassLibraryDevice = NULL;
@@ -438,6 +520,8 @@ Routine Description:
 
     TraceLoggingRegister(g_hNetAdapterCxEtwProvider);
 
+    ExecutionContext::InitializeSubsystem();
+
     WDF_DRIVER_CONFIG_INIT(&config, NULL);
     config.DriverInitFlags = WdfDriverInitNonPnpDriver;
     config.EvtDriverUnload = EvtDriverUnload;
@@ -453,22 +537,22 @@ Routine Description:
                              &config,
                              &driver);
     if (!NT_SUCCESS(status)) {
-        LogInitMsg(TRACE_LEVEL_ERROR, "WdfDriverCreate failed status = %!STATUS!", status);
+        LogError(FLAG_DRIVER, "WdfDriverCreate failed status = %!STATUS!", status);
         goto Exit;
     }
 
     CxDriverContext *context = GetCxDriverContextFromHandle(driver);
     new (context) CxDriverContext();
 
-    status = context->Init();
+    status = context->Init(RegistryPath);
     if (!NT_SUCCESS(status)) {
-        LogInitMsg(TRACE_LEVEL_ERROR, "CxDriverContext::Init failed status = %!STATUS!", status);
+        LogError(FLAG_DRIVER, "CxDriverContext::Init failed status = %!STATUS!", status);
         goto Exit;
     }
 
     status = WdfWaitLockCreate(WDF_NO_OBJECT_ATTRIBUTES, &g_RegistrationLock);
     if (!NT_SUCCESS(status)) {
-        LogInitMsg(TRACE_LEVEL_ERROR, "WdfWaitLockCreate failed status = %!STATUS!", status);
+        LogError(FLAG_DRIVER, "WdfWaitLockCreate failed status = %!STATUS!", status);
         goto Exit;
     }
 
@@ -496,7 +580,7 @@ Routine Description:
     //
     // Register with NDIS
     //
-    LogInitMsg(TRACE_LEVEL_VERBOSE, "Calling NdisWdfRegisterCx");
+    LogError(FLAG_DRIVER, "Calling NdisWdfRegisterCx");
     status = NdisWdfRegisterCx(DriverObject,
                                RegistryPath,
                                (NDIS_WDF_CX_DRIVER_CONTEXT)driver,
@@ -504,7 +588,7 @@ Routine Description:
                                &netAdapterCxDriverHandleTmp);
 
     if (!NT_SUCCESS(status)) {
-        LogInitMsg(TRACE_LEVEL_ERROR, "NdisWdfRegisterCx failed status %!STATUS!", status);
+        LogError(FLAG_DRIVER, "NdisWdfRegisterCx failed status %!STATUS!", status);
         goto Exit;
     }
 
@@ -516,7 +600,7 @@ Routine Description:
         RegistryPath,
         &name);
     if (!NT_SUCCESS(status)) {
-        LogInitMsg(TRACE_LEVEL_ERROR, "WdfRegisterClassLibrary failed status %!STATUS!", status);
+        LogError(FLAG_DRIVER, "WdfRegisterClassLibrary failed status %!STATUS!", status);
         goto Exit;
     }
 
@@ -529,6 +613,21 @@ Routine Description:
 
     NxDevice::GetTriageInfo();
 
+    status = PktMonClientInitializeEx(
+        &NPI_MS_NDIS_TRANSLATOR_MODULEID,
+        NxPacketMonitor::EnumerateAndRegisterAdapters,
+        NxPacketMonitor::EnumerateAndUnRegisterAdapters
+    );
+
+    if (!NT_SUCCESS(status)) {
+        LogError(FLAG_ADAPTER, "Packet Monitor failed status %!STATUS!", status);
+        //
+        // This is intentionally. If fail, check whether NPI_MODULEID is accessible
+        // and whether the callback function safely enumerates components.
+        //
+        status = STATUS_SUCCESS;
+    }
+
 Exit:
 
      if (!NT_SUCCESS(status)) {
@@ -536,6 +635,7 @@ Exit:
              DeleteControlDevice();
          }
 
+         ExecutionContext::UninitializeSubsystem();
          TraceLoggingUnregister(g_hNetAdapterCxEtwProvider);
          WPP_CLEANUP(DriverObject);
      }
@@ -543,3 +643,17 @@ Exit:
      return status;
 }
 
+_Use_decl_annotations_
+bool
+NX_PRIVATE_GLOBALS::IsClientVersionGreaterThanOrEqual(
+    WDF_MAJOR_VERSION Major,
+    WDF_MINOR_VERSION Minor
+)
+{
+    if (ClientVersion.Major > Major || (ClientVersion.Major == Major && ClientVersion.Minor >= Minor))
+    {
+        return true;
+    }
+
+    return false;
+}

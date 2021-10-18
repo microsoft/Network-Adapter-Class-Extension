@@ -63,7 +63,7 @@ public:
 
         NTSTATUS NtStatus = KeWaitForSingleObject(
                 &m_event, Executive, KernelMode, FALSE, nullptr);
-        WIN_VERIFY(NtStatus == STATUS_SUCCESS);
+        NT_VERIFY(NtStatus == STATUS_SUCCESS);
 #else
         ULONG r = WaitForSingleObject(m_event, INFINITE);
         WIN_VERIFY(r == NO_ERROR);

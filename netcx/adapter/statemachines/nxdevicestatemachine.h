@@ -73,80 +73,43 @@ public:
     enum class Event : SmFx::EventIndex
     {
         _noevent_ = 0,
-        AdapterHalted = 1,
-        CxPostReleaseHardware = 2,
-        CxPostSelfManagedIoRestart = 3,
-        CxPostSelfManagedIoStart = 4,
-        CxPrePrepareHardware = 5,
-        CxPrePrepareHardwareFailedCleanup = 6,
-        CxPreReleaseHardware = 7,
-        CxPreSelfManagedIoSuspend = 8,
-        No = 9,
-        RefreshAdapterList = 10,
-        StartComplete = 11,
-        SyncFail = 12,
-        SyncSuccess = 13,
-        WdfDeviceObjectCleanup = 14,
-        Yes = 15,
+        D0EntryPostHardwareEnabled = 1,
+        D0ExitPreHardwareDisabledD3Final = 2,
+        D0ExitPreHardwareDisabledDx = 3,
+        No = 4,
+        RequestPlatformLevelDeviceReset = 5,
+        SyncFail = 6,
+        SyncSuccess = 7,
+        WdfDeviceObjectCleanup = 8,
+        Yes = 9,
     };
 
     // Enumeration of state IDs.
     enum class StateId : SmFx::StateId
     {
         _nostate_ = 0,
-        CxPrepareHardwareFailed = 1,
-        DeviceAddFailedReportToNdis = 2,
-        DeviceReleasingWaitForNdisHalt = 3,
-        Initialized = 4,
-        InitializedPrePrepareHardware = 5,
-        InitializedWaitForStart = 6,
-        RebalancingPrepareForStart = 7,
-        RebalancingPrePrepareHardware = 8,
-        RebalancingReinitializeSelfManagedIo = 9,
-        Released = 10,
-        ReleasedPrepareRebalance = 11,
-        ReleasedReportToNdis = 12,
-        ReleasingAreAllAdaptersHalted = 13,
-        ReleasingIsSurpriseRemoved = 14,
-        ReleasingReportPreReleaseToNdis = 15,
-        ReleasingReportSurpriseRemoveToNdis = 16,
-        ReleasingSurpriseRemovedAreAllAdaptersHalted = 17,
-        ReleasingSurpriseRemovedReportPreReleaseToNdis = 18,
-        ReleasingSurpriseRemovedWaitForNdisHalt = 19,
-        ReleasingSuspendIo = 20,
-        ReleasingWaitClientRelease = 21,
-        ReleasingWaitForReleaseHardware = 22,
-        Removed = 23,
-        StartedD0 = 24,
-        StartedDx = 25,
-        StartedEnteringHighPower = 26,
-        StartedEnteringLowPower = 27,
-        StartingCheckPowerPolicyOwnership = 28,
-        StartingCompleteStart = 29,
-        StartingD0 = 30,
-        StartingInitializeSelfManagedIo = 31,
-        WaitForCleanup = 32,
+        CollectingDiagnostics = 1,
+        D0 = 2,
+        D3Final = 3,
+        Dx = 4,
+        Initialized = 5,
+        PnPStarted = 6,
+        TriggeringPlatformLevelDeviceReset = 7,
     };
 
     // Enumeration of event IDs.
     enum class EventId : SmFx::EventId
     {
         _noevent_ = 0,
-        AdapterHalted = 1,
-        CxPostReleaseHardware = 2,
-        CxPostSelfManagedIoRestart = 3,
-        CxPostSelfManagedIoStart = 4,
-        CxPrePrepareHardware = 5,
-        CxPrePrepareHardwareFailedCleanup = 6,
-        CxPreReleaseHardware = 7,
-        CxPreSelfManagedIoSuspend = 8,
-        No = 9,
-        RefreshAdapterList = 10,
-        StartComplete = 11,
-        SyncFail = 12,
-        SyncSuccess = 13,
-        WdfDeviceObjectCleanup = 14,
-        Yes = 15,
+        D0EntryPostHardwareEnabled = 1,
+        D0ExitPreHardwareDisabledD3Final = 2,
+        D0ExitPreHardwareDisabledDx = 3,
+        No = 4,
+        RequestPlatformLevelDeviceReset = 5,
+        SyncFail = 6,
+        SyncSuccess = 7,
+        WdfDeviceObjectCleanup = 8,
+        Yes = 9,
     };
 
     // Event specification table.
@@ -397,85 +360,34 @@ private:
     // State entry functions.
     struct EntryFuncs
     {
-        static SmFx::StateEntryFunction CxPrepareHardwareFailedEntry;
-        static SmFx::StateEntryFunction DeviceAddFailedReportToNdisEntry;
-        static SmFx::StateEntryFunction InitializedPrePrepareHardwareEntry;
-        static SmFx::StateEntryFunction RebalancingPrePrepareHardwareEntry;
-        static SmFx::StateEntryFunction RebalancingReinitializeSelfManagedIoEntry;
-        static SmFx::StateEntryFunction ReleasedPrepareRebalanceEntry;
-        static SmFx::StateEntryFunction ReleasedReportToNdisEntry;
-        static SmFx::StateEntryFunction ReleasingAreAllAdaptersHaltedEntry;
-        static SmFx::StateEntryFunction ReleasingIsSurpriseRemovedEntry;
-        static SmFx::StateEntryFunction ReleasingReportPreReleaseToNdisEntry;
-        static SmFx::StateEntryFunction ReleasingReportSurpriseRemoveToNdisEntry;
-        static SmFx::StateEntryFunction ReleasingSurpriseRemovedAreAllAdaptersHaltedEntry;
-        static SmFx::StateEntryFunction ReleasingSurpriseRemovedReportPreReleaseToNdisEntry;
-        static SmFx::StateEntryFunction ReleasingSuspendIoEntry;
-        static SmFx::StateEntryFunction RemovedEntry;
-        static SmFx::StateEntryFunction StartedEnteringHighPowerEntry;
-        static SmFx::StateEntryFunction StartedEnteringLowPowerEntry;
-        static SmFx::StateEntryFunction StartingCheckPowerPolicyOwnershipEntry;
-        static SmFx::StateEntryFunction StartingCompleteStartEntry;
-        static SmFx::StateEntryFunction StartingInitializeSelfManagedIoEntry;
+        static SmFx::StateEntryFunction CollectingDiagnosticsEntry;
+        static SmFx::StateEntryFunction TriggeringPlatformLevelDeviceResetEntry;
     };
 
     // Internal transition actions.
     struct Actions
     {
-        static SmFx::InternalTransitionAction DeviceReleasingWaitForNdisHaltActionOnRefreshAdapterList;
-        static SmFx::InternalTransitionAction InitializedActionOnRefreshAdapterList;
-        static SmFx::InternalTransitionAction InitializedWaitForStartActionOnRefreshAdapterList;
-        static SmFx::InternalTransitionAction RebalancingPrepareForStartActionOnRefreshAdapterList;
-        static SmFx::InternalTransitionAction ReleasingSurpriseRemovedWaitForNdisHaltActionOnRefreshAdapterList;
-        static SmFx::InternalTransitionAction ReleasingWaitClientReleaseActionOnRefreshAdapterList;
-        static SmFx::InternalTransitionAction StartedD0ActionOnRefreshAdapterList;
-        static SmFx::InternalTransitionAction StartedDxActionOnRefreshAdapterList;
-        static SmFx::InternalTransitionAction StartingD0ActionOnRefreshAdapterList;
     };
 
     // Enumeration of state indices.
     enum class StateIndex : SmFx::StateIndex
     {
         _nostate_ = 0,
-        CxPrepareHardwareFailed = 1,
-        DeviceAddFailedReportToNdis = 2,
-        DeviceReleasingWaitForNdisHalt = 3,
-        Initialized = 4,
-        InitializedPrePrepareHardware = 5,
-        InitializedWaitForStart = 6,
-        RebalancingPrepareForStart = 7,
-        RebalancingPrePrepareHardware = 8,
-        RebalancingReinitializeSelfManagedIo = 9,
-        Released = 10,
-        ReleasedPrepareRebalance = 11,
-        ReleasedReportToNdis = 12,
-        ReleasingAreAllAdaptersHalted = 13,
-        ReleasingIsSurpriseRemoved = 14,
-        ReleasingReportPreReleaseToNdis = 15,
-        ReleasingReportSurpriseRemoveToNdis = 16,
-        ReleasingSurpriseRemovedAreAllAdaptersHalted = 17,
-        ReleasingSurpriseRemovedReportPreReleaseToNdis = 18,
-        ReleasingSurpriseRemovedWaitForNdisHalt = 19,
-        ReleasingSuspendIo = 20,
-        ReleasingWaitClientRelease = 21,
-        ReleasingWaitForReleaseHardware = 22,
-        Removed = 23,
-        StartedD0 = 24,
-        StartedDx = 25,
-        StartedEnteringHighPower = 26,
-        StartedEnteringLowPower = 27,
-        StartingCheckPowerPolicyOwnership = 28,
-        StartingCompleteStart = 29,
-        StartingD0 = 30,
-        StartingInitializeSelfManagedIo = 31,
-        WaitForCleanup = 32,
+        CollectingDiagnostics = 1,
+        D0 = 2,
+        D3Final = 3,
+        Dx = 4,
+        Initialized = 5,
+        PnPStarted = 6,
+        TriggeringPlatformLevelDeviceReset = 7,
     };
 
     // Enumeration of submachine names.
     enum class SubmachineName : SmFx::SubmachineIndex
     {
         _nosubmachine_ = 0,
-        StateMachine = 1,
+        PowerStateMachine = 1,
+        StateMachine = 2,
     };
 
     // Table of submachine specifications.
@@ -484,71 +396,40 @@ private:
     // Declarations of pop transitions for each state that has any.
     struct PopTransitions
     {
-        static const SmFx::POP_TRANSITION c_removed[];
+        static const SmFx::POP_TRANSITION c_d0[];
+        static const SmFx::POP_TRANSITION c_d3Final[];
+        static const SmFx::POP_TRANSITION c_initialized[];
+        static const SmFx::POP_TRANSITION c_pnPStarted[];
+        static const SmFx::POP_TRANSITION c_triggeringPlatformLevelDeviceReset[];
     };
 
     // Declarations of internal transitions for each state that has any.
     struct InternalTransitions
     {
-        static const SmFx::INTERNAL_TRANSITION c_deviceReleasingWaitForNdisHalt[];
-        static const SmFx::INTERNAL_TRANSITION c_initialized[];
-        static const SmFx::INTERNAL_TRANSITION c_initializedWaitForStart[];
-        static const SmFx::INTERNAL_TRANSITION c_rebalancingPrepareForStart[];
-        static const SmFx::INTERNAL_TRANSITION c_released[];
-        static const SmFx::INTERNAL_TRANSITION c_releasingSurpriseRemovedWaitForNdisHalt[];
-        static const SmFx::INTERNAL_TRANSITION c_releasingWaitClientRelease[];
-        static const SmFx::INTERNAL_TRANSITION c_startedD0[];
-        static const SmFx::INTERNAL_TRANSITION c_startedDx[];
-        static const SmFx::INTERNAL_TRANSITION c_startingD0[];
+        static const SmFx::INTERNAL_TRANSITION c_d3Final[];
+        static const SmFx::INTERNAL_TRANSITION c_triggeringPlatformLevelDeviceReset[];
     };
 
     // Declarations of external transitions for each state that has any.
     struct ExternalTransitions
     {
-        static const SmFx::EXTERNAL_TRANSITION c_cxPrepareHardwareFailed[];
-        static const SmFx::EXTERNAL_TRANSITION c_deviceAddFailedReportToNdis[];
-        static const SmFx::EXTERNAL_TRANSITION c_deviceReleasingWaitForNdisHalt[];
+        static const SmFx::EXTERNAL_TRANSITION c_collectingDiagnostics[];
+        static const SmFx::EXTERNAL_TRANSITION c_d0[];
+        static const SmFx::EXTERNAL_TRANSITION c_d3Final[];
+        static const SmFx::EXTERNAL_TRANSITION c_dx[];
         static const SmFx::EXTERNAL_TRANSITION c_initialized[];
-        static const SmFx::EXTERNAL_TRANSITION c_initializedPrePrepareHardware[];
-        static const SmFx::EXTERNAL_TRANSITION c_initializedWaitForStart[];
-        static const SmFx::EXTERNAL_TRANSITION c_rebalancingPrepareForStart[];
-        static const SmFx::EXTERNAL_TRANSITION c_rebalancingPrePrepareHardware[];
-        static const SmFx::EXTERNAL_TRANSITION c_rebalancingReinitializeSelfManagedIo[];
-        static const SmFx::EXTERNAL_TRANSITION c_released[];
-        static const SmFx::EXTERNAL_TRANSITION c_releasedPrepareRebalance[];
-        static const SmFx::EXTERNAL_TRANSITION c_releasedReportToNdis[];
-        static const SmFx::EXTERNAL_TRANSITION c_releasingAreAllAdaptersHalted[];
-        static const SmFx::EXTERNAL_TRANSITION c_releasingIsSurpriseRemoved[];
-        static const SmFx::EXTERNAL_TRANSITION c_releasingReportPreReleaseToNdis[];
-        static const SmFx::EXTERNAL_TRANSITION c_releasingReportSurpriseRemoveToNdis[];
-        static const SmFx::EXTERNAL_TRANSITION c_releasingSurpriseRemovedAreAllAdaptersHalted[];
-        static const SmFx::EXTERNAL_TRANSITION c_releasingSurpriseRemovedReportPreReleaseToNdis[];
-        static const SmFx::EXTERNAL_TRANSITION c_releasingSurpriseRemovedWaitForNdisHalt[];
-        static const SmFx::EXTERNAL_TRANSITION c_releasingSuspendIo[];
-        static const SmFx::EXTERNAL_TRANSITION c_releasingWaitClientRelease[];
-        static const SmFx::EXTERNAL_TRANSITION c_releasingWaitForReleaseHardware[];
-        static const SmFx::EXTERNAL_TRANSITION c_startedD0[];
-        static const SmFx::EXTERNAL_TRANSITION c_startedDx[];
-        static const SmFx::EXTERNAL_TRANSITION c_startedEnteringHighPower[];
-        static const SmFx::EXTERNAL_TRANSITION c_startedEnteringLowPower[];
-        static const SmFx::EXTERNAL_TRANSITION c_startingCheckPowerPolicyOwnership[];
-        static const SmFx::EXTERNAL_TRANSITION c_startingCompleteStart[];
-        static const SmFx::EXTERNAL_TRANSITION c_startingD0[];
-        static const SmFx::EXTERNAL_TRANSITION c_startingInitializeSelfManagedIo[];
+        static const SmFx::EXTERNAL_TRANSITION c_pnPStarted[];
+        static const SmFx::EXTERNAL_TRANSITION c_triggeringPlatformLevelDeviceReset[];
     };
 
     // Declarations of deferred events for each state that has any.
     struct DeferredEvents
     {
-        static const SmFx::EventIndex c_rebalancingPrepareForStart[];
-        static const SmFx::EventIndex c_startedDx[];
     };
 
     // Declarations of purged events for each state that has any.
     struct PurgeEvents
     {
-        static const SmFx::EventIndex c_releasedPrepareRebalance[];
-        static const SmFx::EventIndex c_releasingWaitClientRelease[];
     };
 
     // Declarations of stop-timer-on-exit details for each state that has it.
@@ -559,37 +440,13 @@ private:
     // Declarations of slot arrays for states that have a non-empty slot array.
     struct SlotArrays
     {
-        static const SmFx::StateSlot c_cxPrepareHardwareFailed[];
-        static const SmFx::StateSlot c_deviceAddFailedReportToNdis[];
-        static const SmFx::StateSlot c_deviceReleasingWaitForNdisHalt[];
+        static const SmFx::StateSlot c_collectingDiagnostics[];
+        static const SmFx::StateSlot c_d0[];
+        static const SmFx::StateSlot c_d3Final[];
+        static const SmFx::StateSlot c_dx[];
         static const SmFx::StateSlot c_initialized[];
-        static const SmFx::StateSlot c_initializedPrePrepareHardware[];
-        static const SmFx::StateSlot c_initializedWaitForStart[];
-        static const SmFx::StateSlot c_rebalancingPrepareForStart[];
-        static const SmFx::StateSlot c_rebalancingPrePrepareHardware[];
-        static const SmFx::StateSlot c_rebalancingReinitializeSelfManagedIo[];
-        static const SmFx::StateSlot c_released[];
-        static const SmFx::StateSlot c_releasedPrepareRebalance[];
-        static const SmFx::StateSlot c_releasedReportToNdis[];
-        static const SmFx::StateSlot c_releasingAreAllAdaptersHalted[];
-        static const SmFx::StateSlot c_releasingIsSurpriseRemoved[];
-        static const SmFx::StateSlot c_releasingReportPreReleaseToNdis[];
-        static const SmFx::StateSlot c_releasingReportSurpriseRemoveToNdis[];
-        static const SmFx::StateSlot c_releasingSurpriseRemovedAreAllAdaptersHalted[];
-        static const SmFx::StateSlot c_releasingSurpriseRemovedReportPreReleaseToNdis[];
-        static const SmFx::StateSlot c_releasingSurpriseRemovedWaitForNdisHalt[];
-        static const SmFx::StateSlot c_releasingSuspendIo[];
-        static const SmFx::StateSlot c_releasingWaitClientRelease[];
-        static const SmFx::StateSlot c_releasingWaitForReleaseHardware[];
-        static const SmFx::StateSlot c_removed[];
-        static const SmFx::StateSlot c_startedD0[];
-        static const SmFx::StateSlot c_startedDx[];
-        static const SmFx::StateSlot c_startedEnteringHighPower[];
-        static const SmFx::StateSlot c_startedEnteringLowPower[];
-        static const SmFx::StateSlot c_startingCheckPowerPolicyOwnership[];
-        static const SmFx::StateSlot c_startingCompleteStart[];
-        static const SmFx::StateSlot c_startingD0[];
-        static const SmFx::StateSlot c_startingInitializeSelfManagedIo[];
+        static const SmFx::StateSlot c_pnPStarted[];
+        static const SmFx::StateSlot c_triggeringPlatformLevelDeviceReset[];
     };
 
     // Declaration of the complete state machine specification.
@@ -635,7 +492,7 @@ Routine Description:
 #endif // #ifdef _KERNEL_MODE
 
     // The generation script has automatically determined the maximum stack size required.
-    engineConfig.stackSize = 1;
+    engineConfig.stackSize = 2;
 
     SetLogMachineExceptionCallback<T>(&engineConfig, true);
     SetLogEventEnqueueCallback<T>(&engineConfig, true);
@@ -724,115 +581,7 @@ NxDeviceStateMachine<T>::EvtMachineDestroyedThunk(
 
 template<typename T>
 SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::CxPrepareHardwareFailedEntry(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    NxDeviceStateMachine<T>::Event returnEvent = derived->PrepareHardwareFailedCleanup();
-
-    return static_cast<SmFx::EventIndex>(returnEvent);
-}
-
-template<typename T>
-SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::DeviceAddFailedReportToNdisEntry(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    derived->ReleasingReportDeviceAddFailureToNdis();
-
-    return static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess);
-}
-
-template<typename T>
-SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::InitializedPrePrepareHardwareEntry(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    NxDeviceStateMachine<T>::Event returnEvent = derived->PrepareHardware();
-
-    return static_cast<SmFx::EventIndex>(returnEvent);
-}
-
-template<typename T>
-SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::RebalancingPrePrepareHardwareEntry(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    NxDeviceStateMachine<T>::Event returnEvent = derived->PrepareHardware();
-
-    return static_cast<SmFx::EventIndex>(returnEvent);
-}
-
-template<typename T>
-SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::RebalancingReinitializeSelfManagedIoEntry(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    NxDeviceStateMachine<T>::Event returnEvent = derived->ReinitializeSelfManagedIo();
-
-    return static_cast<SmFx::EventIndex>(returnEvent);
-}
-
-template<typename T>
-SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::ReleasedPrepareRebalanceEntry(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    NxDeviceStateMachine<T>::Event returnEvent = derived->PrepareForRebalance();
-
-    return static_cast<SmFx::EventIndex>(returnEvent);
-}
-
-template<typename T>
-SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::ReleasedReportToNdisEntry(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    NxDeviceStateMachine<T>::Event returnEvent = derived->ReleasingReportPostReleaseToNdis();
-
-    return static_cast<SmFx::EventIndex>(returnEvent);
-}
-
-template<typename T>
-SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::ReleasingAreAllAdaptersHaltedEntry(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    NxDeviceStateMachine<T>::Event returnEvent = derived->AreAllAdaptersHalted();
-
-    return static_cast<SmFx::EventIndex>(returnEvent);
-}
-
-template<typename T>
-SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::ReleasingIsSurpriseRemovedEntry(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    NxDeviceStateMachine<T>::Event returnEvent = derived->ReleasingIsSurpriseRemoved();
-
-    return static_cast<SmFx::EventIndex>(returnEvent);
-}
-
-template<typename T>
-SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::ReleasingReportPreReleaseToNdisEntry(
+NxDeviceStateMachine<T>::EntryFuncs::CollectingDiagnosticsEntry(
     void* context)
 {
     auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
@@ -841,241 +590,99 @@ NxDeviceStateMachine<T>::EntryFuncs::ReleasingReportPreReleaseToNdisEntry(
     _Analysis_assume_(KeGetCurrentIrql() == PASSIVE_LEVEL);
 #endif // #ifdef _KERNEL_MODE
 
-    NxDeviceStateMachine<T>::Event returnEvent = derived->ReleasingReportPreReleaseToNdis();
+    NxDeviceStateMachine<T>::Event returnEvent = derived->CollectDiagnostics();
 
     return static_cast<SmFx::EventIndex>(returnEvent);
 }
 
 template<typename T>
 SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::ReleasingReportSurpriseRemoveToNdisEntry(
+NxDeviceStateMachine<T>::EntryFuncs::TriggeringPlatformLevelDeviceResetEntry(
     void* context)
 {
     auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
 
-    NxDeviceStateMachine<T>::Event returnEvent = derived->ReleasingReportSurpriseRemoveToNdis();
+    derived->TriggerPlatformLevelDeviceReset();
 
-    return static_cast<SmFx::EventIndex>(returnEvent);
-}
-
-template<typename T>
-SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::ReleasingSurpriseRemovedAreAllAdaptersHaltedEntry(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    NxDeviceStateMachine<T>::Event returnEvent = derived->AreAllAdaptersHalted();
-
-    return static_cast<SmFx::EventIndex>(returnEvent);
-}
-
-template<typename T>
-SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::ReleasingSurpriseRemovedReportPreReleaseToNdisEntry(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-#ifdef _KERNEL_MODE
-    _Analysis_assume_(KeGetCurrentIrql() == PASSIVE_LEVEL);
-#endif // #ifdef _KERNEL_MODE
-
-    NxDeviceStateMachine<T>::Event returnEvent = derived->ReleasingReportPreReleaseToNdis();
-
-    return static_cast<SmFx::EventIndex>(returnEvent);
-}
-
-template<typename T>
-SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::ReleasingSuspendIoEntry(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    NxDeviceStateMachine<T>::Event returnEvent = derived->SuspendSelfManagedIo();
-
-    return static_cast<SmFx::EventIndex>(returnEvent);
-}
-
-template<typename T>
-SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::RemovedEntry(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    derived->RemovedReportRemoveToNdis();
-
-    return static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess);
-}
-
-template<typename T>
-SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::StartedEnteringHighPowerEntry(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    NxDeviceStateMachine<T>::Event returnEvent = derived->RestartSelfManagedIo();
-
-    return static_cast<SmFx::EventIndex>(returnEvent);
-}
-
-template<typename T>
-SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::StartedEnteringLowPowerEntry(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    NxDeviceStateMachine<T>::Event returnEvent = derived->SuspendSelfManagedIo();
-
-    return static_cast<SmFx::EventIndex>(returnEvent);
-}
-
-template<typename T>
-SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::StartingCheckPowerPolicyOwnershipEntry(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    NxDeviceStateMachine<T>::Event returnEvent = derived->CheckPowerPolicyOwnership();
-
-    return static_cast<SmFx::EventIndex>(returnEvent);
-}
-
-template<typename T>
-SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::StartingCompleteStartEntry(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-#ifdef _KERNEL_MODE
-    _Analysis_assume_(KeGetCurrentIrql() == PASSIVE_LEVEL);
-#endif // #ifdef _KERNEL_MODE
-
-    NxDeviceStateMachine<T>::Event returnEvent = derived->Started();
-
-    return static_cast<SmFx::EventIndex>(returnEvent);
-}
-
-template<typename T>
-SmFx::EventIndex
-NxDeviceStateMachine<T>::EntryFuncs::StartingInitializeSelfManagedIoEntry(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    NxDeviceStateMachine<T>::Event returnEvent = derived->InitializeSelfManagedIo();
-
-    return static_cast<SmFx::EventIndex>(returnEvent);
+    return static_cast<SmFx::EventIndex>(0);
 }
 
 // Definitions for each of the internal transition actions.
 
-template<typename T>
-void
-NxDeviceStateMachine<T>::Actions::DeviceReleasingWaitForNdisHaltActionOnRefreshAdapterList(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    derived->RefreshAdapterList();
-}
-
-template<typename T>
-void
-NxDeviceStateMachine<T>::Actions::InitializedActionOnRefreshAdapterList(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    derived->RefreshAdapterList();
-}
-
-template<typename T>
-void
-NxDeviceStateMachine<T>::Actions::InitializedWaitForStartActionOnRefreshAdapterList(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    derived->RefreshAdapterList();
-}
-
-template<typename T>
-void
-NxDeviceStateMachine<T>::Actions::RebalancingPrepareForStartActionOnRefreshAdapterList(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    derived->RefreshAdapterList();
-}
-
-template<typename T>
-void
-NxDeviceStateMachine<T>::Actions::ReleasingSurpriseRemovedWaitForNdisHaltActionOnRefreshAdapterList(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    derived->RefreshAdapterList();
-}
-
-template<typename T>
-void
-NxDeviceStateMachine<T>::Actions::ReleasingWaitClientReleaseActionOnRefreshAdapterList(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    derived->RefreshAdapterList();
-}
-
-template<typename T>
-void
-NxDeviceStateMachine<T>::Actions::StartedD0ActionOnRefreshAdapterList(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    derived->RefreshAdapterList();
-}
-
-template<typename T>
-void
-NxDeviceStateMachine<T>::Actions::StartedDxActionOnRefreshAdapterList(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    derived->RefreshAdapterList();
-}
-
-template<typename T>
-void
-NxDeviceStateMachine<T>::Actions::StartingD0ActionOnRefreshAdapterList(
-    void* context)
-{
-    auto derived = static_cast<T*>(reinterpret_cast<NxDeviceStateMachine<T>*>(context));
-
-    derived->RefreshAdapterList();
-}
-
 // Pop transitions.
 
 template <typename T>
-const SmFx::POP_TRANSITION NxDeviceStateMachine<T>::PopTransitions::c_removed[] =
+const SmFx::POP_TRANSITION NxDeviceStateMachine<T>::PopTransitions::c_d0[] =
 {
     {
         // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess),
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::D0ExitPreHardwareDisabledD3Final),
         // Return event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess)
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::D0ExitPreHardwareDisabledD3Final)
+    },
+    {
+        // Sentinel.
+        static_cast<SmFx::EventIndex>(0),
+        static_cast<SmFx::EventIndex>(0)
+    }
+};
+
+template <typename T>
+const SmFx::POP_TRANSITION NxDeviceStateMachine<T>::PopTransitions::c_d3Final[] =
+{
+    {
+        // Triggering event.
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::WdfDeviceObjectCleanup),
+        // Return event.
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::WdfDeviceObjectCleanup)
+    },
+    {
+        // Sentinel.
+        static_cast<SmFx::EventIndex>(0),
+        static_cast<SmFx::EventIndex>(0)
+    }
+};
+
+template <typename T>
+const SmFx::POP_TRANSITION NxDeviceStateMachine<T>::PopTransitions::c_initialized[] =
+{
+    {
+        // Triggering event.
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::WdfDeviceObjectCleanup),
+        // Return event.
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::WdfDeviceObjectCleanup)
+    },
+    {
+        // Sentinel.
+        static_cast<SmFx::EventIndex>(0),
+        static_cast<SmFx::EventIndex>(0)
+    }
+};
+
+template <typename T>
+const SmFx::POP_TRANSITION NxDeviceStateMachine<T>::PopTransitions::c_pnPStarted[] =
+{
+    {
+        // Triggering event.
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::WdfDeviceObjectCleanup),
+        // Return event.
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::WdfDeviceObjectCleanup)
+    },
+    {
+        // Sentinel.
+        static_cast<SmFx::EventIndex>(0),
+        static_cast<SmFx::EventIndex>(0)
+    }
+};
+
+template <typename T>
+const SmFx::POP_TRANSITION NxDeviceStateMachine<T>::PopTransitions::c_triggeringPlatformLevelDeviceReset[] =
+{
+    {
+        // Triggering event.
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::WdfDeviceObjectCleanup),
+        // Return event.
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::WdfDeviceObjectCleanup)
     },
     {
         // Sentinel.
@@ -1087,19 +694,11 @@ const SmFx::POP_TRANSITION NxDeviceStateMachine<T>::PopTransitions::c_removed[] 
 // Internal transitions.
 
 template <typename T>
-const SmFx::INTERNAL_TRANSITION NxDeviceStateMachine<T>::InternalTransitions::c_deviceReleasingWaitForNdisHalt[] =
+const SmFx::INTERNAL_TRANSITION NxDeviceStateMachine<T>::InternalTransitions::c_d3Final[] =
 {
     {
         // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::RefreshAdapterList),
-        // Flags.
-        SmFx::InternalTransitionFlags::None,
-        // Action.
-        &NxDeviceStateMachine<T>::Actions::DeviceReleasingWaitForNdisHaltActionOnRefreshAdapterList
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::StartComplete),
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::RequestPlatformLevelDeviceReset),
         // Flags.
         SmFx::InternalTransitionFlags::None,
         // Ignored.
@@ -1114,227 +713,11 @@ const SmFx::INTERNAL_TRANSITION NxDeviceStateMachine<T>::InternalTransitions::c_
 };
 
 template <typename T>
-const SmFx::INTERNAL_TRANSITION NxDeviceStateMachine<T>::InternalTransitions::c_initialized[] =
+const SmFx::INTERNAL_TRANSITION NxDeviceStateMachine<T>::InternalTransitions::c_triggeringPlatformLevelDeviceReset[] =
 {
     {
         // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::RefreshAdapterList),
-        // Flags.
-        SmFx::InternalTransitionFlags::None,
-        // Action.
-        &NxDeviceStateMachine<T>::Actions::InitializedActionOnRefreshAdapterList
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::AdapterHalted),
-        // Flags.
-        SmFx::InternalTransitionFlags::None,
-        // Ignored.
-        nullptr
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        SmFx::InternalTransitionFlags::None,
-        nullptr
-    }
-};
-
-template <typename T>
-const SmFx::INTERNAL_TRANSITION NxDeviceStateMachine<T>::InternalTransitions::c_initializedWaitForStart[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::RefreshAdapterList),
-        // Flags.
-        SmFx::InternalTransitionFlags::None,
-        // Action.
-        &NxDeviceStateMachine<T>::Actions::InitializedWaitForStartActionOnRefreshAdapterList
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::AdapterHalted),
-        // Flags.
-        SmFx::InternalTransitionFlags::None,
-        // Ignored.
-        nullptr
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        SmFx::InternalTransitionFlags::None,
-        nullptr
-    }
-};
-
-template <typename T>
-const SmFx::INTERNAL_TRANSITION NxDeviceStateMachine<T>::InternalTransitions::c_rebalancingPrepareForStart[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::RefreshAdapterList),
-        // Flags.
-        SmFx::InternalTransitionFlags::None,
-        // Action.
-        &NxDeviceStateMachine<T>::Actions::RebalancingPrepareForStartActionOnRefreshAdapterList
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::AdapterHalted),
-        // Flags.
-        SmFx::InternalTransitionFlags::None,
-        // Ignored.
-        nullptr
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        SmFx::InternalTransitionFlags::None,
-        nullptr
-    }
-};
-
-template <typename T>
-const SmFx::INTERNAL_TRANSITION NxDeviceStateMachine<T>::InternalTransitions::c_released[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::StartComplete),
-        // Flags.
-        SmFx::InternalTransitionFlags::None,
-        // Ignored.
-        nullptr
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        SmFx::InternalTransitionFlags::None,
-        nullptr
-    }
-};
-
-template <typename T>
-const SmFx::INTERNAL_TRANSITION NxDeviceStateMachine<T>::InternalTransitions::c_releasingSurpriseRemovedWaitForNdisHalt[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::RefreshAdapterList),
-        // Flags.
-        SmFx::InternalTransitionFlags::None,
-        // Action.
-        &NxDeviceStateMachine<T>::Actions::ReleasingSurpriseRemovedWaitForNdisHaltActionOnRefreshAdapterList
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::StartComplete),
-        // Flags.
-        SmFx::InternalTransitionFlags::None,
-        // Ignored.
-        nullptr
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        SmFx::InternalTransitionFlags::None,
-        nullptr
-    }
-};
-
-template <typename T>
-const SmFx::INTERNAL_TRANSITION NxDeviceStateMachine<T>::InternalTransitions::c_releasingWaitClientRelease[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::RefreshAdapterList),
-        // Flags.
-        SmFx::InternalTransitionFlags::None,
-        // Action.
-        &NxDeviceStateMachine<T>::Actions::ReleasingWaitClientReleaseActionOnRefreshAdapterList
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::StartComplete),
-        // Flags.
-        SmFx::InternalTransitionFlags::None,
-        // Ignored.
-        nullptr
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        SmFx::InternalTransitionFlags::None,
-        nullptr
-    }
-};
-
-template <typename T>
-const SmFx::INTERNAL_TRANSITION NxDeviceStateMachine<T>::InternalTransitions::c_startedD0[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::RefreshAdapterList),
-        // Flags.
-        SmFx::InternalTransitionFlags::None,
-        // Action.
-        &NxDeviceStateMachine<T>::Actions::StartedD0ActionOnRefreshAdapterList
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::AdapterHalted),
-        // Flags.
-        SmFx::InternalTransitionFlags::None,
-        // Ignored.
-        nullptr
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        SmFx::InternalTransitionFlags::None,
-        nullptr
-    }
-};
-
-template <typename T>
-const SmFx::INTERNAL_TRANSITION NxDeviceStateMachine<T>::InternalTransitions::c_startedDx[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::RefreshAdapterList),
-        // Flags.
-        SmFx::InternalTransitionFlags::None,
-        // Action.
-        &NxDeviceStateMachine<T>::Actions::StartedDxActionOnRefreshAdapterList
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::AdapterHalted),
-        // Flags.
-        SmFx::InternalTransitionFlags::None,
-        // Ignored.
-        nullptr
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        SmFx::InternalTransitionFlags::None,
-        nullptr
-    }
-};
-
-template <typename T>
-const SmFx::INTERNAL_TRANSITION NxDeviceStateMachine<T>::InternalTransitions::c_startingD0[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::RefreshAdapterList),
-        // Flags.
-        SmFx::InternalTransitionFlags::None,
-        // Action.
-        &NxDeviceStateMachine<T>::Actions::StartingD0ActionOnRefreshAdapterList
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::AdapterHalted),
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::D0EntryPostHardwareEnabled),
         // Flags.
         SmFx::InternalTransitionFlags::None,
         // Ignored.
@@ -1351,13 +734,13 @@ const SmFx::INTERNAL_TRANSITION NxDeviceStateMachine<T>::InternalTransitions::c_
 // External transitions.
 
 template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_cxPrepareHardwareFailed[] =
+const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_collectingDiagnostics[] =
 {
     {
         // Triggering event.
         static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess),
         // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::Released)
+        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::TriggeringPlatformLevelDeviceReset)
     },
     {
         // Sentinel.
@@ -1367,13 +750,13 @@ const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_
 };
 
 template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_deviceAddFailedReportToNdis[] =
+const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_d0[] =
 {
     {
         // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess),
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::D0ExitPreHardwareDisabledDx),
         // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::Removed)
+        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::Dx)
     },
     {
         // Sentinel.
@@ -1383,13 +766,29 @@ const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_
 };
 
 template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_deviceReleasingWaitForNdisHalt[] =
+const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_d3Final[] =
 {
     {
         // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::AdapterHalted),
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::D0EntryPostHardwareEnabled),
         // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::ReleasingAreAllAdaptersHalted)
+        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::PnPStarted)
+    },
+    {
+        // Sentinel.
+        static_cast<SmFx::EventIndex>(0),
+        static_cast<SmFx::StateIndex>(0)
+    }
+};
+
+template <typename T>
+const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_dx[] =
+{
+    {
+        // Triggering event.
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::D0EntryPostHardwareEnabled),
+        // Target state.
+        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::D0)
     },
     {
         // Sentinel.
@@ -1403,31 +802,15 @@ const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_
 {
     {
         // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::CxPrePrepareHardware),
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::D0EntryPostHardwareEnabled),
         // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::InitializedPrePrepareHardware)
+        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::PnPStarted)
     },
     {
         // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::WdfDeviceObjectCleanup),
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::RequestPlatformLevelDeviceReset),
         // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::Removed)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_initializedPrePrepareHardware[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::InitializedWaitForStart)
+        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::CollectingDiagnostics)
     },
     {
         // Sentinel.
@@ -1437,31 +820,19 @@ const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_
 };
 
 template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_initializedWaitForStart[] =
+const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_pnPStarted[] =
 {
     {
         // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::CxPostSelfManagedIoStart),
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::D0ExitPreHardwareDisabledD3Final),
         // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::StartingCheckPowerPolicyOwnership)
+        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::D3Final)
     },
     {
         // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::CxPrePrepareHardwareFailedCleanup),
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::RequestPlatformLevelDeviceReset),
         // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::CxPrepareHardwareFailed)
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::CxPreReleaseHardware),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::ReleasingSurpriseRemovedReportPreReleaseToNdis)
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::WdfDeviceObjectCleanup),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::DeviceAddFailedReportToNdis)
+        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::CollectingDiagnostics)
     },
     {
         // Sentinel.
@@ -1471,435 +842,13 @@ const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_
 };
 
 template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_rebalancingPrepareForStart[] =
+const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_triggeringPlatformLevelDeviceReset[] =
 {
     {
         // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::CxPostSelfManagedIoStart),
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::D0ExitPreHardwareDisabledD3Final),
         // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::RebalancingReinitializeSelfManagedIo)
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::CxPrePrepareHardwareFailedCleanup),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::CxPrepareHardwareFailed)
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::CxPreReleaseHardware),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::ReleasingSurpriseRemovedReportPreReleaseToNdis)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_rebalancingPrePrepareHardware[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::RebalancingPrepareForStart)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_rebalancingReinitializeSelfManagedIo[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::StartingD0)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_released[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::CxPrePrepareHardware),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::ReleasedPrepareRebalance)
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::WdfDeviceObjectCleanup),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::Removed)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_releasedPrepareRebalance[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::RebalancingPrePrepareHardware)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_releasedReportToNdis[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::Released)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_releasingAreAllAdaptersHalted[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::No),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::DeviceReleasingWaitForNdisHalt)
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::Yes),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::ReleasingWaitClientRelease)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_releasingIsSurpriseRemoved[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::No),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::ReleasingReportPreReleaseToNdis)
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::Yes),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::ReleasingReportSurpriseRemoveToNdis)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_releasingReportPreReleaseToNdis[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::ReleasingAreAllAdaptersHalted)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_releasingReportSurpriseRemoveToNdis[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::ReleasingSurpriseRemovedAreAllAdaptersHalted)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_releasingSurpriseRemovedAreAllAdaptersHalted[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::No),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::ReleasingSurpriseRemovedWaitForNdisHalt)
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::Yes),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::ReleasingSurpriseRemovedReportPreReleaseToNdis)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_releasingSurpriseRemovedReportPreReleaseToNdis[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::ReleasingWaitClientRelease)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_releasingSurpriseRemovedWaitForNdisHalt[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::AdapterHalted),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::ReleasingSurpriseRemovedAreAllAdaptersHalted)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_releasingSuspendIo[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::ReleasingWaitForReleaseHardware)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_releasingWaitClientRelease[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::CxPostReleaseHardware),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::ReleasedReportToNdis)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_releasingWaitForReleaseHardware[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::CxPreReleaseHardware),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::ReleasingIsSurpriseRemoved)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_startedD0[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::CxPreSelfManagedIoSuspend),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::StartedEnteringLowPower)
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::StartComplete),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::StartingCompleteStart)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_startedDx[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::CxPostSelfManagedIoRestart),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::StartedEnteringHighPower)
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::CxPreReleaseHardware),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::ReleasingIsSurpriseRemoved)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_startedEnteringHighPower[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::StartedD0)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_startedEnteringLowPower[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::StartedDx)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_startingCheckPowerPolicyOwnership[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::StartingInitializeSelfManagedIo)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_startingCompleteStart[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::StartedD0)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_startingD0[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::CxPreSelfManagedIoSuspend),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::StartedEnteringLowPower)
-    },
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::StartComplete),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::StartingCompleteStart)
-    },
-    {
-        // Sentinel.
-        static_cast<SmFx::EventIndex>(0),
-        static_cast<SmFx::StateIndex>(0)
-    }
-};
-
-template <typename T>
-const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_startingInitializeSelfManagedIo[] =
-{
-    {
-        // Triggering event.
-        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::SyncSuccess),
-        // Target state.
-        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::StartingD0)
+        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::D3Final)
     },
     {
         // Sentinel.
@@ -1910,35 +859,7 @@ const SmFx::EXTERNAL_TRANSITION NxDeviceStateMachine<T>::ExternalTransitions::c_
 
 // Deferred events.
 
-template <typename T>
-const SmFx::EventIndex NxDeviceStateMachine<T>::DeferredEvents::c_rebalancingPrepareForStart[] =
-{
-    static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::StartComplete),
-    static_cast<SmFx::EventIndex>(0)
-};
-
-template <typename T>
-const SmFx::EventIndex NxDeviceStateMachine<T>::DeferredEvents::c_startedDx[] =
-{
-    static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::StartComplete),
-    static_cast<SmFx::EventIndex>(0)
-};
-
 // Purged events.
-
-template <typename T>
-const SmFx::EventIndex NxDeviceStateMachine<T>::PurgeEvents::c_releasedPrepareRebalance[] =
-{
-    static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::StartComplete),
-    static_cast<SmFx::EventIndex>(0)
-};
-
-template <typename T>
-const SmFx::EventIndex NxDeviceStateMachine<T>::PurgeEvents::c_releasingWaitClientRelease[] =
-{
-    static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::AdapterHalted),
-    static_cast<SmFx::EventIndex>(0)
-};
 
 // Stop-timer-on-exit details.
 
@@ -1952,35 +873,15 @@ const SmFx::EVENT_SPECIFICATION NxDeviceStateMachine<T>::c_eventTable[] =
         SmFx::EventQueueingDisposition::Invalid
     },
     {
-        static_cast<SmFx::EventId>(NxDeviceStateMachine<T>::EventId::AdapterHalted),
+        static_cast<SmFx::EventId>(NxDeviceStateMachine<T>::EventId::D0EntryPostHardwareEnabled),
         SmFx::EventQueueingDisposition::Unlimited
     },
     {
-        static_cast<SmFx::EventId>(NxDeviceStateMachine<T>::EventId::CxPostReleaseHardware),
+        static_cast<SmFx::EventId>(NxDeviceStateMachine<T>::EventId::D0ExitPreHardwareDisabledD3Final),
         SmFx::EventQueueingDisposition::Unlimited
     },
     {
-        static_cast<SmFx::EventId>(NxDeviceStateMachine<T>::EventId::CxPostSelfManagedIoRestart),
-        SmFx::EventQueueingDisposition::Unlimited
-    },
-    {
-        static_cast<SmFx::EventId>(NxDeviceStateMachine<T>::EventId::CxPostSelfManagedIoStart),
-        SmFx::EventQueueingDisposition::Unlimited
-    },
-    {
-        static_cast<SmFx::EventId>(NxDeviceStateMachine<T>::EventId::CxPrePrepareHardware),
-        SmFx::EventQueueingDisposition::Unlimited
-    },
-    {
-        static_cast<SmFx::EventId>(NxDeviceStateMachine<T>::EventId::CxPrePrepareHardwareFailedCleanup),
-        SmFx::EventQueueingDisposition::Unlimited
-    },
-    {
-        static_cast<SmFx::EventId>(NxDeviceStateMachine<T>::EventId::CxPreReleaseHardware),
-        SmFx::EventQueueingDisposition::Unlimited
-    },
-    {
-        static_cast<SmFx::EventId>(NxDeviceStateMachine<T>::EventId::CxPreSelfManagedIoSuspend),
+        static_cast<SmFx::EventId>(NxDeviceStateMachine<T>::EventId::D0ExitPreHardwareDisabledDx),
         SmFx::EventQueueingDisposition::Unlimited
     },
     {
@@ -1988,11 +889,7 @@ const SmFx::EVENT_SPECIFICATION NxDeviceStateMachine<T>::c_eventTable[] =
         SmFx::EventQueueingDisposition::Unlimited
     },
     {
-        static_cast<SmFx::EventId>(NxDeviceStateMachine<T>::EventId::RefreshAdapterList),
-        SmFx::EventQueueingDisposition::Unlimited
-    },
-    {
-        static_cast<SmFx::EventId>(NxDeviceStateMachine<T>::EventId::StartComplete),
+        static_cast<SmFx::EventId>(NxDeviceStateMachine<T>::EventId::RequestPlatformLevelDeviceReset),
         SmFx::EventQueueingDisposition::Unlimited
     },
     {
@@ -2018,6 +915,11 @@ template<typename T>
 const SmFx::SUBMACHINE_SPECIFICATION NxDeviceStateMachine<T>::c_machineTable[] =
 {
     {},
+    // Submachine: PowerStateMachine
+    {
+        // Initial state.
+        static_cast<SmFx::StateIndex>(NxDeviceStateMachine<T>::StateIndex::D0)
+    },
     // Submachine: StateMachine
     {
         // Initial state.
@@ -2028,223 +930,54 @@ const SmFx::SUBMACHINE_SPECIFICATION NxDeviceStateMachine<T>::c_machineTable[] =
 // Slot arrays.
 
 template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_cxPrepareHardwareFailed[] =
+const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_collectingDiagnostics[] =
 {
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::CxPrepareHardwareFailedEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_cxPrepareHardwareFailed,
+    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::CollectingDiagnosticsEntry),
+    NxDeviceStateMachine<T>::ExternalTransitions::c_collectingDiagnostics,
 };
 
 template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_deviceAddFailedReportToNdis[] =
+const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_d0[] =
 {
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::DeviceAddFailedReportToNdisEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_deviceAddFailedReportToNdis,
+    NxDeviceStateMachine<T>::ExternalTransitions::c_d0,
+    NxDeviceStateMachine<T>::PopTransitions::c_d0,
 };
 
 template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_deviceReleasingWaitForNdisHalt[] =
+const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_d3Final[] =
 {
-    NxDeviceStateMachine<T>::ExternalTransitions::c_deviceReleasingWaitForNdisHalt,
-    NxDeviceStateMachine<T>::InternalTransitions::c_deviceReleasingWaitForNdisHalt,
+    NxDeviceStateMachine<T>::ExternalTransitions::c_d3Final,
+    NxDeviceStateMachine<T>::InternalTransitions::c_d3Final,
+    NxDeviceStateMachine<T>::PopTransitions::c_d3Final,
+};
+
+template <typename T>
+const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_dx[] =
+{
+    NxDeviceStateMachine<T>::ExternalTransitions::c_dx,
 };
 
 template <typename T>
 const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_initialized[] =
 {
     NxDeviceStateMachine<T>::ExternalTransitions::c_initialized,
-    NxDeviceStateMachine<T>::InternalTransitions::c_initialized,
+    NxDeviceStateMachine<T>::PopTransitions::c_initialized,
 };
 
 template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_initializedPrePrepareHardware[] =
+const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_pnPStarted[] =
 {
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::InitializedPrePrepareHardwareEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_initializedPrePrepareHardware,
+    NxDeviceStateMachine<T>::ExternalTransitions::c_pnPStarted,
+    NxDeviceStateMachine<T>::PopTransitions::c_pnPStarted,
 };
 
 template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_initializedWaitForStart[] =
+const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_triggeringPlatformLevelDeviceReset[] =
 {
-    NxDeviceStateMachine<T>::ExternalTransitions::c_initializedWaitForStart,
-    NxDeviceStateMachine<T>::InternalTransitions::c_initializedWaitForStart,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_rebalancingPrepareForStart[] =
-{
-    NxDeviceStateMachine<T>::ExternalTransitions::c_rebalancingPrepareForStart,
-    NxDeviceStateMachine<T>::InternalTransitions::c_rebalancingPrepareForStart,
-    NxDeviceStateMachine<T>::DeferredEvents::c_rebalancingPrepareForStart,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_rebalancingPrePrepareHardware[] =
-{
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::RebalancingPrePrepareHardwareEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_rebalancingPrePrepareHardware,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_rebalancingReinitializeSelfManagedIo[] =
-{
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::RebalancingReinitializeSelfManagedIoEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_rebalancingReinitializeSelfManagedIo,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_released[] =
-{
-    NxDeviceStateMachine<T>::ExternalTransitions::c_released,
-    NxDeviceStateMachine<T>::InternalTransitions::c_released,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_releasedPrepareRebalance[] =
-{
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::ReleasedPrepareRebalanceEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_releasedPrepareRebalance,
-    NxDeviceStateMachine<T>::PurgeEvents::c_releasedPrepareRebalance,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_releasedReportToNdis[] =
-{
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::ReleasedReportToNdisEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_releasedReportToNdis,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_releasingAreAllAdaptersHalted[] =
-{
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::ReleasingAreAllAdaptersHaltedEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_releasingAreAllAdaptersHalted,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_releasingIsSurpriseRemoved[] =
-{
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::ReleasingIsSurpriseRemovedEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_releasingIsSurpriseRemoved,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_releasingReportPreReleaseToNdis[] =
-{
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::ReleasingReportPreReleaseToNdisEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_releasingReportPreReleaseToNdis,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_releasingReportSurpriseRemoveToNdis[] =
-{
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::ReleasingReportSurpriseRemoveToNdisEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_releasingReportSurpriseRemoveToNdis,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_releasingSurpriseRemovedAreAllAdaptersHalted[] =
-{
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::ReleasingSurpriseRemovedAreAllAdaptersHaltedEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_releasingSurpriseRemovedAreAllAdaptersHalted,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_releasingSurpriseRemovedReportPreReleaseToNdis[] =
-{
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::ReleasingSurpriseRemovedReportPreReleaseToNdisEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_releasingSurpriseRemovedReportPreReleaseToNdis,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_releasingSurpriseRemovedWaitForNdisHalt[] =
-{
-    NxDeviceStateMachine<T>::ExternalTransitions::c_releasingSurpriseRemovedWaitForNdisHalt,
-    NxDeviceStateMachine<T>::InternalTransitions::c_releasingSurpriseRemovedWaitForNdisHalt,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_releasingSuspendIo[] =
-{
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::ReleasingSuspendIoEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_releasingSuspendIo,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_releasingWaitClientRelease[] =
-{
-    NxDeviceStateMachine<T>::ExternalTransitions::c_releasingWaitClientRelease,
-    NxDeviceStateMachine<T>::InternalTransitions::c_releasingWaitClientRelease,
-    NxDeviceStateMachine<T>::PurgeEvents::c_releasingWaitClientRelease,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_releasingWaitForReleaseHardware[] =
-{
-    NxDeviceStateMachine<T>::ExternalTransitions::c_releasingWaitForReleaseHardware,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_removed[] =
-{
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::RemovedEntry),
-    NxDeviceStateMachine<T>::PopTransitions::c_removed,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_startedD0[] =
-{
-    NxDeviceStateMachine<T>::ExternalTransitions::c_startedD0,
-    NxDeviceStateMachine<T>::InternalTransitions::c_startedD0,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_startedDx[] =
-{
-    NxDeviceStateMachine<T>::ExternalTransitions::c_startedDx,
-    NxDeviceStateMachine<T>::InternalTransitions::c_startedDx,
-    NxDeviceStateMachine<T>::DeferredEvents::c_startedDx,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_startedEnteringHighPower[] =
-{
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::StartedEnteringHighPowerEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_startedEnteringHighPower,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_startedEnteringLowPower[] =
-{
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::StartedEnteringLowPowerEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_startedEnteringLowPower,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_startingCheckPowerPolicyOwnership[] =
-{
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::StartingCheckPowerPolicyOwnershipEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_startingCheckPowerPolicyOwnership,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_startingCompleteStart[] =
-{
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::StartingCompleteStartEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_startingCompleteStart,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_startingD0[] =
-{
-    NxDeviceStateMachine<T>::ExternalTransitions::c_startingD0,
-    NxDeviceStateMachine<T>::InternalTransitions::c_startingD0,
-};
-
-template <typename T>
-const SmFx::StateSlot NxDeviceStateMachine<T>::SlotArrays::c_startingInitializeSelfManagedIo[] =
-{
-    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::StartingInitializeSelfManagedIoEntry),
-    NxDeviceStateMachine<T>::ExternalTransitions::c_startingInitializeSelfManagedIo,
+    reinterpret_cast<SmFx::StateSlot>(&NxDeviceStateMachine<T>::EntryFuncs::TriggeringPlatformLevelDeviceResetEntry),
+    NxDeviceStateMachine<T>::ExternalTransitions::c_triggeringPlatformLevelDeviceReset,
+    NxDeviceStateMachine<T>::InternalTransitions::c_triggeringPlatformLevelDeviceReset,
+    NxDeviceStateMachine<T>::PopTransitions::c_triggeringPlatformLevelDeviceReset,
 };
 
 // State table.
@@ -2252,12 +985,12 @@ template<typename T>
 const SmFx::STATE_SPECIFICATION NxDeviceStateMachine<T>::c_stateTable[] =
 {
     {},
-    // State: CxPrepareHardwareFailed
+    // State: CollectingDiagnostics
     {
         // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::CxPrepareHardwareFailed),
+        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::CollectingDiagnostics),
         // State flags.
-        SmFx::StateFlags::None,
+        SmFx::StateFlags::RequiresDedicatedThread,
         // State type.
         SmFx::StateType::Sync,
         // State slots.
@@ -2265,37 +998,52 @@ const SmFx::STATE_SPECIFICATION NxDeviceStateMachine<T>::c_stateTable[] =
         // Submachine.
         static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
         // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_cxPrepareHardwareFailed,
+        NxDeviceStateMachine<T>::SlotArrays::c_collectingDiagnostics,
     },
-    // State: DeviceAddFailedReportToNdis
+    // State: D0
     {
         // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::DeviceAddFailedReportToNdis),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Sync,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_deviceAddFailedReportToNdis,
-    },
-    // State: DeviceReleasingWaitForNdisHalt
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::DeviceReleasingWaitForNdisHalt),
+        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::D0),
         // State flags.
         SmFx::StateFlags::None,
         // State type.
         SmFx::StateType::Async,
         // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::InternalTransitions)),
+        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::PopTransitions)),
         // Submachine.
         static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
         // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_deviceReleasingWaitForNdisHalt,
+        NxDeviceStateMachine<T>::SlotArrays::c_d0,
+    },
+    // State: D3Final
+    {
+        // State ID.
+        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::D3Final),
+        // State flags.
+        SmFx::StateFlags::None,
+        // State type.
+        SmFx::StateType::Async,
+        // State slots.
+        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::InternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::PopTransitions)),
+        // Submachine.
+        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
+        // Slot array.
+        NxDeviceStateMachine<T>::SlotArrays::c_d3Final,
+    },
+    // State: Dx
+    {
+        // State ID.
+        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::Dx),
+        // State flags.
+        SmFx::StateFlags::None,
+        // State type.
+        SmFx::StateType::Async,
+        // State slots.
+        SmFx::StateSlotType::ExternalTransitions,
+        // Submachine.
+        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
+        // Slot array.
+        NxDeviceStateMachine<T>::SlotArrays::c_dx,
     },
     // State: Initialized
     {
@@ -2306,431 +1054,41 @@ const SmFx::STATE_SPECIFICATION NxDeviceStateMachine<T>::c_stateTable[] =
         // State type.
         SmFx::StateType::Async,
         // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::InternalTransitions)),
+        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::PopTransitions)),
         // Submachine.
         static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
         // Slot array.
         NxDeviceStateMachine<T>::SlotArrays::c_initialized,
     },
-    // State: InitializedPrePrepareHardware
+    // State: PnPStarted
     {
         // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::InitializedPrePrepareHardware),
+        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::PnPStarted),
         // State flags.
         SmFx::StateFlags::None,
         // State type.
-        SmFx::StateType::Sync,
+        SmFx::StateType::Call,
         // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions)),
+        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::PopTransitions)),
         // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
+        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::PowerStateMachine),
         // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_initializedPrePrepareHardware,
+        NxDeviceStateMachine<T>::SlotArrays::c_pnPStarted,
     },
-    // State: InitializedWaitForStart
+    // State: TriggeringPlatformLevelDeviceReset
     {
         // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::InitializedWaitForStart),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Async,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::InternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_initializedWaitForStart,
-    },
-    // State: RebalancingPrepareForStart
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::RebalancingPrepareForStart),
+        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::TriggeringPlatformLevelDeviceReset),
         // State flags.
         SmFx::StateFlags::None,
         // State type.
         SmFx::StateType::Async,
         // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::InternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::DeferredEvents)),
+        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::InternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::PopTransitions)),
         // Submachine.
         static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
         // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_rebalancingPrepareForStart,
-    },
-    // State: RebalancingPrePrepareHardware
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::RebalancingPrePrepareHardware),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Sync,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_rebalancingPrePrepareHardware,
-    },
-    // State: RebalancingReinitializeSelfManagedIo
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::RebalancingReinitializeSelfManagedIo),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Sync,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_rebalancingReinitializeSelfManagedIo,
-    },
-    // State: Released
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::Released),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Async,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::InternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_released,
-    },
-    // State: ReleasedPrepareRebalance
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::ReleasedPrepareRebalance),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Sync,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::PurgeEvents)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_releasedPrepareRebalance,
-    },
-    // State: ReleasedReportToNdis
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::ReleasedReportToNdis),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Sync,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_releasedReportToNdis,
-    },
-    // State: ReleasingAreAllAdaptersHalted
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::ReleasingAreAllAdaptersHalted),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Sync,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_releasingAreAllAdaptersHalted,
-    },
-    // State: ReleasingIsSurpriseRemoved
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::ReleasingIsSurpriseRemoved),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Sync,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_releasingIsSurpriseRemoved,
-    },
-    // State: ReleasingReportPreReleaseToNdis
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::ReleasingReportPreReleaseToNdis),
-        // State flags.
-        SmFx::StateFlags::RequiresPassiveLevel,
-        // State type.
-        SmFx::StateType::Sync,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_releasingReportPreReleaseToNdis,
-    },
-    // State: ReleasingReportSurpriseRemoveToNdis
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::ReleasingReportSurpriseRemoveToNdis),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Sync,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_releasingReportSurpriseRemoveToNdis,
-    },
-    // State: ReleasingSurpriseRemovedAreAllAdaptersHalted
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::ReleasingSurpriseRemovedAreAllAdaptersHalted),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Sync,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_releasingSurpriseRemovedAreAllAdaptersHalted,
-    },
-    // State: ReleasingSurpriseRemovedReportPreReleaseToNdis
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::ReleasingSurpriseRemovedReportPreReleaseToNdis),
-        // State flags.
-        SmFx::StateFlags::RequiresPassiveLevel,
-        // State type.
-        SmFx::StateType::Sync,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_releasingSurpriseRemovedReportPreReleaseToNdis,
-    },
-    // State: ReleasingSurpriseRemovedWaitForNdisHalt
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::ReleasingSurpriseRemovedWaitForNdisHalt),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Async,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::InternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_releasingSurpriseRemovedWaitForNdisHalt,
-    },
-    // State: ReleasingSuspendIo
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::ReleasingSuspendIo),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Sync,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_releasingSuspendIo,
-    },
-    // State: ReleasingWaitClientRelease
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::ReleasingWaitClientRelease),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Async,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::InternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::PurgeEvents)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_releasingWaitClientRelease,
-    },
-    // State: ReleasingWaitForReleaseHardware
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::ReleasingWaitForReleaseHardware),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Async,
-        // State slots.
-        SmFx::StateSlotType::ExternalTransitions,
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_releasingWaitForReleaseHardware,
-    },
-    // State: Removed
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::Removed),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Sync,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::PopTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_removed,
-    },
-    // State: StartedD0
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::StartedD0),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Async,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::InternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_startedD0,
-    },
-    // State: StartedDx
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::StartedDx),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Async,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::InternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::DeferredEvents)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_startedDx,
-    },
-    // State: StartedEnteringHighPower
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::StartedEnteringHighPower),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Sync,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_startedEnteringHighPower,
-    },
-    // State: StartedEnteringLowPower
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::StartedEnteringLowPower),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Sync,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_startedEnteringLowPower,
-    },
-    // State: StartingCheckPowerPolicyOwnership
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::StartingCheckPowerPolicyOwnership),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Sync,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_startingCheckPowerPolicyOwnership,
-    },
-    // State: StartingCompleteStart
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::StartingCompleteStart),
-        // State flags.
-        static_cast<SmFx::StateFlags>(static_cast<uint8_t>(SmFx::StateFlags::RequiresPassiveLevel) | static_cast<uint8_t>(SmFx::StateFlags::RequiresDedicatedThread)),
-        // State type.
-        SmFx::StateType::Sync,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_startingCompleteStart,
-    },
-    // State: StartingD0
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::StartingD0),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Async,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions) | static_cast<uint16_t>(SmFx::StateSlotType::InternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_startingD0,
-    },
-    // State: StartingInitializeSelfManagedIo
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::StartingInitializeSelfManagedIo),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Sync,
-        // State slots.
-        static_cast<SmFx::StateSlotType>(static_cast<uint16_t>(SmFx::StateSlotType::EntryFunction) | static_cast<uint16_t>(SmFx::StateSlotType::ExternalTransitions)),
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        NxDeviceStateMachine<T>::SlotArrays::c_startingInitializeSelfManagedIo,
-    },
-    // State: WaitForCleanup
-    {
-        // State ID.
-        static_cast<SmFx::StateId>(NxDeviceStateMachine<T>::StateId::WaitForCleanup),
-        // State flags.
-        SmFx::StateFlags::None,
-        // State type.
-        SmFx::StateType::Async,
-        // State slots.
-        SmFx::StateSlotType::None,
-        // Submachine.
-        static_cast<SmFx::SubmachineIndex>(NxDeviceStateMachine<T>::SubmachineName::_nosubmachine_),
-        // Slot array.
-        nullptr,
+        NxDeviceStateMachine<T>::SlotArrays::c_triggeringPlatformLevelDeviceReset,
     },
 };
 
