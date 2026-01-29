@@ -13,12 +13,13 @@
 #include <net/packet.h>
 #include <net/fragment.h>
 #include <net/virtualaddress_p.h>
-#include <net/databuffer_p.h>
 #include <net/logicaladdress_p.h>
+#include <net/returncontexttypes.h>
 #include <KPtr.h>
 #include "adapter/extension/NxExtensionLayout.hpp"
 #include "NetClientBuffer.h"
 #include "bm/BufferPool.hpp"
+
 
 #include <NxTrace.hpp>
 
@@ -33,7 +34,7 @@ Queue::Queue(
 )
     : m_packetLayout(sizeof(NET_PACKET), alignof(NET_PACKET))
     , m_fragmentLayout(sizeof(NET_FRAGMENT), alignof(NET_FRAGMENT))
-    , m_bufferLayout(sizeof(size_t), alignof(size_t))
+    , m_netFragmentReturnContextLayout(sizeof(NET_FRAGMENT_RETURN_CONTEXT), alignof(NET_FRAGMENT_RETURN_CONTEXT))
 {
 }
 
@@ -56,11 +57,10 @@ Queue::CreateRing(
         ! ring);
 
     ring->OSReserved2[1] = this;
+    ring->OSReserved2[2] = (PVOID) size;
     ring->ElementStride = static_cast<USHORT>(ElementSize);
     ring->NumberOfElements = ElementCount;
     ring->ElementIndexMask = ElementCount - 1;
-
-    RtlCopyMemory(&m_shadowRings[RingType], ring, FIELD_OFFSET(NET_RING, Buffer[0]));
 
     m_rings[RingType].reset(ring);
     m_ringCollection.Rings[RingType] = m_rings[RingType].get();
@@ -68,33 +68,15 @@ Queue::CreateRing(
     return STATUS_SUCCESS;
 }
 
-void
-Queue::EnumerateCallback(
-    _In_ PVOID Context,
-    _In_ SIZE_T Index,
-    _In_ UINT64 LogicalAddress,
-    _In_ PVOID VirtualAddress
-)
-{
-    Queue* queue = reinterpret_cast<Queue *>(Context);
-
-    auto laLookupTable = reinterpret_cast<UINT64 *>(queue->m_rings[NetRingTypeDataBuffer]->OSReserved2[2]);
-    auto vaLookupTable = reinterpret_cast<void **>(queue->m_rings[NetRingTypeDataBuffer]->OSReserved2[3]);
-
-    laLookupTable[Index] = LogicalAddress;
-    vaLookupTable[Index] = VirtualAddress;
-}
-
 NTSTATUS
 Queue::Initialize(
     _In_ Rtl::KArray<NET_EXTENSION_PRIVATE> & Extensions,
     _In_ UINT32 NumberOfPackets,
     _In_ UINT32 NumberOfFragments,
-    _In_ UINT32 NumberOfDataBuffers,
-    _In_ BufferPool * Pool
+    _In_ BOOLEAN CreateReturnContextRing
 )
 {
-    for (auto const & extension : Extensions)
+    for (auto const& extension : Extensions)
     {
         switch (extension.Type)
         {
@@ -112,6 +94,16 @@ Queue::Initialize(
         case NetExtensionTypeFragment:
             CX_RETURN_IF_NOT_NT_SUCCESS(
                 m_fragmentLayout.PutExtension(
+                    extension.Name,
+                    extension.Version,
+                    extension.Type,
+                    extension.Size,
+                    extension.NonWdfStyleAlignment));
+            break;
+
+        case NetExtensionTypeBuffer:
+            CX_RETURN_IF_NOT_NT_SUCCESS(
+                m_netFragmentReturnContextLayout.PutExtension(
                     extension.Name,
                     extension.Version,
                     extension.Type,
@@ -142,86 +134,16 @@ Queue::Initialize(
             NumberOfPackets,
             NetRingTypePacket));
 
-    if (Pool)
+    m_rings[NetRingTypeDataBuffer].reset(nullptr);
+    m_ringCollection.Rings[NetRingTypeDataBuffer] = nullptr;
+
+    if (CreateReturnContextRing)
     {
-        m_bufferPool = Pool;
-
-        m_bufferLayout.PutExtension(
-            NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_NAME,
-            NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_VERSION_1,
-            NetExtensionTypeBuffer,
-            NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_VERSION_1_SIZE,
-            alignof(NET_FRAGMENT_LOGICAL_ADDRESS));
-
-        m_bufferLayout.PutExtension(
-            NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_NAME,
-            NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_VERSION_1,
-            NetExtensionTypeBuffer,
-            NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_VERSION_1_SIZE,
-            alignof(NET_FRAGMENT_VIRTUAL_ADDRESS));
-
         CX_RETURN_IF_NOT_NT_SUCCESS(
             CreateRing(
-                m_bufferLayout.Generate(),
-                NumberOfDataBuffers,
+                m_netFragmentReturnContextLayout.Generate(),
+                NumberOfPackets,
                 NetRingTypeDataBuffer));
-
-        m_laLookupTable = MakeSizedPoolPtrNP<BYTE>('nxbp', sizeof(UINT64) * NumberOfDataBuffers);
-        CX_RETURN_NTSTATUS_IF(
-            STATUS_INSUFFICIENT_RESOURCES,
-            ! m_laLookupTable);
-
-        m_vaLookupTable =
-            MakeSizedPoolPtrNP<BYTE>('nxbp', sizeof(void *) * NumberOfDataBuffers);
-        CX_RETURN_NTSTATUS_IF(
-            STATUS_INSUFFICIENT_RESOURCES,
-            ! m_vaLookupTable);
-
-        m_rings[NetRingTypeDataBuffer]->OSReserved2[2] = m_laLookupTable.get();
-        m_rings[NetRingTypeDataBuffer]->OSReserved2[3] = m_vaLookupTable.get();
-
-        m_bufferPool->Enumerate(EnumerateCallback, this);
-
-        NET_EXTENSION_PRIVATE extensionToQuery = {
-            NET_FRAGMENT_EXTENSION_DATA_BUFFER_NAME,
-            NET_FRAGMENT_EXTENSION_DATA_BUFFER_VERSION_1_SIZE,
-            NET_FRAGMENT_EXTENSION_DATA_BUFFER_VERSION_1,
-            0,
-            NetExtensionTypeFragment };
-
-        GetExtension(&extensionToQuery, &m_fragmentDataBufferExt);
-
-        NET_EXTENSION_PRIVATE extensionToQuery2 = {
-            NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_NAME,
-            NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_VERSION_1_SIZE,
-            NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_VERSION_1,
-            0,
-            NetExtensionTypeFragment };
-
-        GetExtension(&extensionToQuery2, &m_fragmentVaExt);
-
-        NET_EXTENSION_PRIVATE extensionToQuery3 = {
-            NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_NAME,
-            NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_VERSION_1_SIZE,
-            NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_VERSION_1,
-            0,
-            NetExtensionTypeBuffer };
-
-        GetExtension(&extensionToQuery3, &m_bufferVaExt);
-
-        NET_EXTENSION_PRIVATE extensionToQuery4 = {
-            NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_NAME,
-            NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_VERSION_1_SIZE,
-            NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_VERSION_1,
-            0,
-            NetExtensionTypeBuffer };
-
-        GetExtension(&extensionToQuery4, &m_bufferLaExt);
-    }
-    else
-    {
-        m_rings[NetRingTypeDataBuffer].reset(nullptr);
-        m_ringCollection.Rings[NetRingTypeDataBuffer] = nullptr;
     }
 
     return STATUS_SUCCESS;
@@ -258,13 +180,12 @@ Queue::GetExtension(
 
     case NetExtensionTypeBuffer:
         type = NetRingTypeDataBuffer;
-        extension = m_bufferLayout.GetExtension(
+        extension = m_netFragmentReturnContextLayout.GetExtension(
             ExtensionToQuery->Name,
             ExtensionToQuery->Version,
             ExtensionToQuery->Type);
 
         break;
-
     }
 
     Extension->Enabled = extension != nullptr;
@@ -276,116 +197,30 @@ Queue::GetExtension(
     }
 }
 
+#ifdef NETCX_UMDF
+void
+Queue::GetAllExtensions(
+    _Out_ NET_EXTENSION_PRIVATE ** PacketExtensions,
+    _Out_ size_t * PacketExtensionsCount,
+    _Out_ NET_EXTENSION_PRIVATE ** FragmentExtensions,
+    _Out_ size_t * FragmentExtensionsCount
+)
+{
+    auto& packetExtensions = m_packetLayout.GetAllExtensions();
+    auto& fragmentExtensions = m_fragmentLayout.GetAllExtensions();
+
+    *PacketExtensions = &packetExtensions[0];
+    *PacketExtensionsCount = packetExtensions.count();
+
+    *FragmentExtensions = &fragmentExtensions[0];
+    *FragmentExtensionsCount = fragmentExtensions.count();
+}
+#endif
+
 NET_RING_COLLECTION const *
 Queue::GetRingCollection(
     void
 ) const
 {
     return &m_ringCollection;
-}
-
-void
-Queue::PreAdvancePostDataBuffer(
-    void
-)
-{
-    if (m_bufferPool)
-    {
-        auto br = m_rings[NetRingTypeDataBuffer].get();
-        auto const brLastIndex = NetRingAdvanceIndex(br, br->OSReserved0, -1);
-
-        for (; br->EndIndex != brLastIndex;
-            br->EndIndex = NetRingIncrementIndex(br, br->EndIndex))
-        {
-            auto dataBuffer = NetRingGetDataBufferAtIndex(br, br->EndIndex);
-
-            if (! NT_SUCCESS(m_bufferPool->Allocate(dataBuffer)))
-            {
-                break;
-            }
-
-            auto vaLookup = reinterpret_cast<void **>(m_vaLookupTable.get());
-            auto bufferVirtualAddress = NetExtensionGetFragmentVirtualAddress(&m_bufferVaExt, br->EndIndex);
-            bufferVirtualAddress->VirtualAddress = vaLookup[*dataBuffer];
-
-            auto laLookup = reinterpret_cast<UINT64 *>(m_laLookupTable.get());
-            auto bufferLogicalAddress = NetExtensionGetFragmentLogicalAddress(&m_bufferLaExt, br->EndIndex);
-            bufferLogicalAddress->LogicalAddress = laLookup[*dataBuffer];
-        }
-    }
-}
-
-void
-Queue::PostAdvanceRefCounting(
-    void
-)
-{
-    if (m_bufferPool)
-    {
-        //step 1
-        //scan fragment ring to calculate data buffer refcount.
-        //this scan doesn't alter the indexes fragment ring
-        auto fr = m_rings[NetRingTypeFragment].get();
-        auto br = m_rings[NetRingTypeDataBuffer].get();
-        auto vaLookupTable = reinterpret_cast<void**>(br->OSReserved2[3]);
-
-        for (auto osNext = fr->OSReserved0; osNext != fr->BeginIndex;
-            osNext = NetRingIncrementIndex(fr, osNext))
-        {
-            auto dataBuffer =
-                NetExtensionGetFragmentDataBuffer(
-                    &m_fragmentDataBufferExt,
-                    osNext);
-
-            size_t dataBufferIndex = reinterpret_cast<size_t>(dataBuffer->Handle);
-            m_bufferPool->AddRef(dataBufferIndex);
-
-            auto va =
-                NetExtensionGetFragmentVirtualAddress(
-                    &m_fragmentVaExt,
-                    osNext);
-
-            va->VirtualAddress = vaLookupTable[dataBufferIndex];
-        }
-
-        //step 2
-        //drain the buffer ring to mark which data buffers being
-        //returned by the client driver
-
-        for (; br->OSReserved0 != br->BeginIndex;
-            br->OSReserved0 = NetRingIncrementIndex(br, br->OSReserved0))
-        {
-            auto bufferVirtualAddress = NetExtensionGetFragmentVirtualAddress(&m_bufferVaExt, br->OSReserved0);
-            bufferVirtualAddress->VirtualAddress = nullptr;
-
-            auto bufferLogicalAddress = NetExtensionGetFragmentLogicalAddress(&m_bufferLaExt, br->OSReserved0);
-            bufferLogicalAddress->LogicalAddress = 0;
-
-            size_t * dataBufferHandle =
-                reinterpret_cast<size_t *>(NetRingGetElementAtIndex(br, br->OSReserved0));
-
-            m_bufferPool->OwnedByOs(*dataBufferHandle);
-        }
-    }
-}
-
-void
-Queue::PostStopReclaimDataBuffers(
-    void
-)
-{
-    if (m_bufferPool)
-    {
-        auto br = m_rings[NetRingTypeDataBuffer].get();
-        NT_FRE_ASSERT(br->BeginIndex == br->OSReserved0);
-
-        for (; br->BeginIndex != br->EndIndex;
-             br->OSReserved0 = br->BeginIndex = NetRingIncrementIndex(br, br->BeginIndex))
-        {
-            auto const index = NetRingGetDataBufferAtIndex(br, br->BeginIndex);
-
-            m_bufferPool->OwnedByOs(*index);
-            m_bufferPool->Free(*index);
-        }
-    }
 }

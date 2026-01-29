@@ -6,6 +6,8 @@
 #include "NxPowerOffload.hpp"
 #include "NxPowerList.hpp"
 #include "NxIdleRestrictions.hpp"
+#include "NxWakeReason.hpp"
+#include "NxPowerReference.hpp"
 #include <ntddndis_p.h>
 
 #define NETCX_POWER_TAG 'wPxN'
@@ -13,6 +15,7 @@
 class NxPowerList;
 
 class NxPowerPolicy
+    : public NxNonpagedAllocation<NETCX_POWER_TAG>
 {
 private:
 
@@ -86,11 +89,20 @@ private:
     // device on behalf of this adapter
     bool m_shouldAcquirePowerReferencesForAdapter = true;
 
+    const bool
+        m_allowS0Idle;
+
     NxIdleRestrictions
         m_idleRestrictions;
 
     NxIdleRestrictions::IdleRestrictionSettings
         m_driverSpecifiedRestrictionSettings = NxIdleRestrictions::IdleRestrictionSettings::None;
+
+    NxWakeReason
+        m_wakeReason;
+
+    NxPowerReference
+        m_powerReference;
 
     NxWakePattern *
     RemoveWakePatternByID(
@@ -124,14 +136,19 @@ public:
         _In_ WDFDEVICE Device,
         _In_ NET_DEVICE_POWER_POLICY_EVENT_CALLBACKS const & PowerPolicyCallbacks,
         _In_ NETADAPTER Adapter,
-        bool shouldAcquirePowerReferencesForAdapter
+        _In_ bool shouldAcquirePowerReferencesForAdapter,
+        _In_ bool AllowS0Idle,
+        _In_ NxNdisPnpPower & NdisPnpPower
     );
 
     ~NxPowerPolicy(
         void
     );
 
-    void Initialize();
+    NTSTATUS
+    Initialize(
+        void
+    );
 
     bool
     IsPowerCapable(
@@ -230,4 +247,44 @@ public:
 
     bool
     ShouldAcquirePowerReferencesForAdapter() const;
+
+    NTSTATUS
+    MakeWakeReasonPacket(
+        _In_ NET_ADAPTER_WAKE_REASON_PACKET const * Reason,
+        _Outptr_ NDIS_PM_WAKE_REASON ** WakeReason,
+        _Out_ ULONG * WakeReasonSize
+    ) const;
+
+    NTSTATUS
+    MakeWakeReasonMediaChange(
+        _In_ NET_IF_MEDIA_CONNECT_STATE MediaEvent,
+        _Out_ NDIS_PM_WAKE_REASON * WakeReason
+    ) const;
+
+    NTSTATUS
+    PowerReference(
+        _In_ bool WaitForD0
+    );
+
+    void
+    PowerDereference(
+        void
+    );
+
+    void
+    ReleaseOutstandingPowerReferences(
+        void
+    );
+
+#ifdef NETCX_KMDF
+    bool
+    IsPowerRequiredWorkItemPending(
+        void
+    ) const;
+
+    void
+    QueuePowerReferenceWorkItem(
+        void
+    );
+#endif
 };

@@ -18,6 +18,7 @@ Abstract:
 #include <ndis/nblchain.h>
 #include <ndis/oidrequest.h>
 
+
 #ifndef _KERNEL_MODE
 
 extern "C"
@@ -99,9 +100,10 @@ NxNblDatapath::SendNetBufferLists(
 {
     auto numberOfNbls = NdisNumNblsInNblChain(nblChain);
 
-    if (! ReadAcquire(&m_txClosed) && m_txRundown.TryAcquire(numberOfNbls))
+    if (! ReadAcquire(&m_txClosed) && m_txRundown.TryAcquire(numberOfNbls + 1))
     {
         m_tx->SendNetBufferLists(nblChain, portNumber, numberOfNbls, sendFlags);
+        m_txRundown.Release(1);
     }
     else
     {

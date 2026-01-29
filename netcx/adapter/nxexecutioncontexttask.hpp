@@ -7,7 +7,7 @@
 #include <kspinlock.h>
 #include <kwaitevent.h>
 
-#include "ExecutionContextTask.hpp"
+#include "KWaitTask.hpp"
 
 
 // Wraps what the client driver want to run as task, so that we can
@@ -15,7 +15,6 @@
 //     1) increment/decrement when the task is queued/finished.
 //     2) increment/decrement when waiting task completion.
 class NxExecutionContextTask
-    : public ExecutionContextTask
 {
 
 public:
@@ -53,7 +52,7 @@ public:
     void
     WaitForCompletion(
         void
-    ) override;
+    );
 
     _IRQL_requires_max_(PASSIVE_LEVEL)
     bool
@@ -65,6 +64,9 @@ private:
 
     NETEXECUTIONCONTEXTTASK const
         m_handle;
+
+    EXECUTION_CONTEXT_TASK
+        m_task{};
 
     wil::unique_wdf_work_item
         m_deferredDelete;

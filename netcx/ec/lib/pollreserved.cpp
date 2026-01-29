@@ -10,6 +10,5 @@ ContextFromPoll(
     EXECUTION_CONTEXT_POLL * Poll
 )
 {
-    static_assert(sizeof(PollReserved) <= FIELD_SIZE(EXECUTION_CONTEXT_POLL, Reserved[0]));
     return reinterpret_cast<PollReserved&>(Poll->Reserved[0]);
 }

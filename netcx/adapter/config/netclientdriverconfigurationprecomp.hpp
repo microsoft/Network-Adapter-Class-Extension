@@ -2,11 +2,11 @@
 
 #pragma once
 
+#ifdef _KERNEL_MODE
 #include <ntddk.h>
-#define NTSTRSAFE_LIB
-#include <ntstrsafe.h>
-#include <ntintsafe.h>
-#include <ntassert.h>
+#else
+#include <windows.h>
+#endif
 #include <wdf.h>
 
 #include <wil\common.h>

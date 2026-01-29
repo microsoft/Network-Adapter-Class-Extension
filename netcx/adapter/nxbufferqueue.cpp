@@ -177,7 +177,7 @@ NxBufferQueue::InitializeBufferPool(
     void
 )
 {
-    m_bufferPool = wil::make_unique_nothrow<BufferPool>();
+    m_bufferPool = wil::make_unique_nothrow<BufferPool>(nullptr);
 
     CX_RETURN_NTSTATUS_IF(
         STATUS_INSUFFICIENT_RESOURCES,
@@ -303,7 +303,7 @@ NxBufferQueue::IoFlush(
         &m_reclaimBuffersPoll,
         EvtExecutionContextReclaimBuffersFlushing);
 
-    m_executionContext->QueueTask(m_cancelTask);
+    m_executionContext->QueueTask(m_cancelTask.GetTask());
     m_cancelTask.WaitForCompletion();
 
     m_flushed.Wait();

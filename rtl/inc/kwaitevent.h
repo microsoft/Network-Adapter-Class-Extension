@@ -81,6 +81,17 @@ public:
 #endif
     }
 
+    NONPAGED bool TestNP()
+    {
+#if _KERNEL_MODE
+        return !!KeReadStateEvent(&m_event);
+#else
+        ULONG r = WaitForSingleObject(m_event, 0);
+        WIN_VERIFY(r == WAIT_TIMEOUT || r == WAIT_OBJECT_0);
+        return (r == WAIT_OBJECT_0);
+#endif
+    }
+
 protected:
 
     PAGED void InitializeBase()

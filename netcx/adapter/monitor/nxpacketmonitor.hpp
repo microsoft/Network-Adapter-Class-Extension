@@ -3,7 +3,11 @@
 #pragma once 
 
 #include <netiodef.h>
+#ifdef _KERNEL_MODE
 #include <pktmonclnt.h>
+#else
+#include <WudfPktmon.h>
+#endif
 #include <kpushlock.h>
 
 class NxAdapter;

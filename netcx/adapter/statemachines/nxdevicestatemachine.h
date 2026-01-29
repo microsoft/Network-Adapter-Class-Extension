@@ -724,6 +724,22 @@ const SmFx::INTERNAL_TRANSITION NxDeviceStateMachine<T>::InternalTransitions::c_
         nullptr
     },
     {
+        // Triggering event.
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::D0ExitPreHardwareDisabledDx),
+        // Flags.
+        SmFx::InternalTransitionFlags::None,
+        // Ignored.
+        nullptr
+    },
+    {
+        // Triggering event.
+        static_cast<SmFx::EventIndex>(NxDeviceStateMachine<T>::Event::RequestPlatformLevelDeviceReset),
+        // Flags.
+        SmFx::InternalTransitionFlags::None,
+        // Ignored.
+        nullptr
+    },
+    {
         // Sentinel.
         static_cast<SmFx::EventIndex>(0),
         SmFx::InternalTransitionFlags::None,

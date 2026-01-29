@@ -7,7 +7,9 @@
 
 #include "DevicePnpPowerStateMachine.h"
 #include "AdapterPnpPower.hpp"
+#ifdef _KERNEL_MODE
 #include "NxBufferQueue.hpp"
+#endif
 #include "NxCollection.hpp"
 
 class NxDevice;
@@ -15,7 +17,9 @@ class NxAdapter;
 class NxAdapterCollection;
 
 typedef void (AdapterPnpPower::*AdapterOperation)();
+#ifdef _KERNEL_MODE
 typedef void (NxBufferQueue::*BufferQueueOperation)();
+#endif
 
 class DevicePnpPower : private DevicePnpPowerStateMachine<DevicePnpPower>
 {
@@ -53,6 +57,7 @@ public:
         _In_ NxAdapter * Adapter
     );
 
+#ifdef _KERNEL_MODE
     _IRQL_requires_max_(PASSIVE_LEVEL)
     void
     BufferQueueCreated(
@@ -64,6 +69,7 @@ public:
     BufferQueueDestroyed(
         _In_ NxBufferQueue * BufferQueue
     );
+#endif
 
     _IRQL_requires_max_(PASSIVE_LEVEL)
     void
@@ -103,19 +109,23 @@ private:
         _In_ AdapterOperation Operation = nullptr
     );
 
+#ifdef _KERNEL_MODE
     _IRQL_requires_max_(PASSIVE_LEVEL)
     void
     ProcessNewBufferQueues(
         _In_ BufferQueueOperation Operation = nullptr
     );
+#endif
 
 private:
 
     NxAdapterCollection &
         m_adapterCollection;
 
+#ifdef _KERNEL_MODE
     NxCollection<NxBufferQueue>
         m_bufferQueueCollection;
+#endif
 
     KAutoEvent
         m_wdfEventProcessed;

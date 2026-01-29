@@ -31,7 +31,7 @@ NETEXPORT(NetDeviceInitConfig)(
     // Register the client driver with NDIS if needed
     //
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        NxDriver::_CreateAndRegisterIfNeeded(nxPrivateGlobals),
+        NxDriver::_CreateAndRegisterIfNeeded(nxPrivateGlobals, NetCxDriverType::PnpDeviceDriver),
         "Failed to register as NDIS driver");
 
     auto cxDeviceInit = WdfCxDeviceInitAllocate(DeviceInit);
@@ -48,7 +48,9 @@ NETEXPORT(NetDeviceInitConfig)(
         "Failed to allocate NxDevice context");
 
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        WdfCxDeviceInitAssignPreprocessorRoutines(cxDeviceInit),
+        AssignCxPreprocessorRoutines(
+            DeviceInit,
+            cxDeviceInit),
         "Failed to set IRP preprocessor routines");
 
     //
@@ -64,6 +66,7 @@ NETEXPORT(NetDeviceInitConfig)(
         DeviceInit,
         WdfReleaseHardwareOrderOnFailureAfterDescendants);
 
+#ifdef _KERNEL_MODE
     //
     // Set the DeviceObject features as done by Ndis.sys for its miniports
     //
@@ -78,6 +81,7 @@ NETEXPORT(NetDeviceInitConfig)(
     WDF_REMOVE_LOCK_OPTIONS  removeLockOptions;
     WDF_REMOVE_LOCK_OPTIONS_INIT(&removeLockOptions, WDF_REMOVE_LOCK_OPTION_ACQUIRE_FOR_IO);
     WdfDeviceInitSetRemoveLockOptions(DeviceInit, &removeLockOptions);
+#endif
 
     //
     // Set WDF Cx PnP and Power callbacks
@@ -169,7 +173,7 @@ NTSTATUS
 NETEXPORT(NetDeviceAssignSupportedOidList)(
     _In_ NET_DRIVER_GLOBALS * Globals,
     _In_ WDFDEVICE Device,
-    _In_ NDIS_OID const * SupportedOids,
+    _In_reads_(SupportedOidsCount) NDIS_OID const * SupportedOids,
     _In_ SIZE_T SupportedOidsCount
 )
 /*++

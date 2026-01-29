@@ -34,7 +34,6 @@ using unique_nbl = wistd::unique_ptr<NET_BUFFER_LIST, wil::function_deleter<decl
 using unique_nbl_pool = wil::unique_any<NDIS_HANDLE, decltype(&::NdisFreeNetBufferListPool), &::NdisFreeNetBufferListPool>;
 
 struct MDL_EX;
-class NxNblSequence;
 typedef struct _PKTMON_EDGE_CONTEXT PKTMON_EDGE_CONTEXT;
 
 class MdlPool 
@@ -115,15 +114,15 @@ public:
         _In_ NET_CLIENT_ADAPTER Adapter,
         _In_ NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch
     ) noexcept;
-
-    ~NxRxXlat(
+    
+    virtual ~NxRxXlat(
         void
     );
 
     _IRQL_requires_(PASSIVE_LEVEL)
+    virtual
     NTSTATUS
     Initialize(
-        void
     );
 
     // the EC thread function
@@ -137,18 +136,6 @@ public:
         void
     ) const;
 
-    _IRQL_requires_max_(DISPATCH_LEVEL)
-    bool
-    IsAffinitized(
-        void
-    ) const;
-
-    _IRQL_requires_max_(DISPATCH_LEVEL)
-    void
-    SetAffinity(
-        PROCESSOR_NUMBER const & Affinity
-    );
-
     void
     Notify(
         void
@@ -156,18 +143,14 @@ public:
 
     void
     QueueReturnedNetBufferLists(
-        _In_ NBL_QUEUE* NblChain
+        _In_ NBL_QUEUE* NblChain,
+        _In_ ULONG NblCount
     );
 
     PMDL
     GetCorrespondingMdl(
         _In_ UINT32 fragmentIndex
     );
-
-    const NxRxCounters &
-    GetStatistics(
-        void
-    ) const;
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
     void
@@ -182,9 +165,6 @@ public:
     );
 
 private:
-
-    bool
-        m_affinitySet = false;
 
     struct PacketContext
     {
@@ -239,14 +219,14 @@ private:
     UINT32
         m_rxNumFragments = 0;
 
-    UINT32
-        m_rxNumDataBuffers = 0;
-
     size_t
         m_backfillSize = 0;
 
-    NBL_QUEUE
-        m_discardedNbl;
+	NxRxNblQueue 
+        m_nblsToIndicate;
+
+    ndis::nbl_queue
+        m_nblsToDiscard;
 
     NxNblQueue
         m_returnedNblQueue;
@@ -276,21 +256,27 @@ private:
     ULONG
         m_completedPackets = 0;
 
+    ULONG
+        m_postedPackets = 0;
+
     // notification signals
     NxInterlockedFlag
         m_returnedNblNotification;
 
-    NxRxCounters
-        m_statistics = {};
-
     bool
         m_memoryPreallocated = false;
 
-    ReceiveSegmentCoalescing
+    ReceiveSegmentCoalescingContext
         m_rscContext;
 
     NET_CLIENT_OFFLOAD_RSC_CAPABILITIES
         m_rscHardwareCapabilities = {};
+
+    PMDL
+        m_chainOfMdlsToReturn = nullptr;
+
+    PMDL
+        m_lastMdlToReturn = nullptr;
 
     bool
     TransferDataBufferFromNetPacketToNbl(
@@ -300,12 +286,12 @@ private:
         _In_ UINT32 PacketIndex
     );
 
+
     bool
-    ReInitializeMdlForDataBuffer(
-        _In_ NET_FRAGMENT const * fragment,
-        _In_ NET_FRAGMENT_VIRTUAL_ADDRESS const * VirtualAddress,
-        _In_ NET_FRAGMENT_RETURN_CONTEXT const * ReturnContext,
-        _In_ PMDL fragmentMdl,
+    ValidateFragmentAndInitializeMdl(
+        _In_ UINT32 FragmentIndex,
+        _In_ const NET_FRAGMENT *Fragment,
+        _In_ MDL *Mdl,
         _In_ bool isFirstFragment
     );
 
@@ -317,6 +303,11 @@ private:
     // functions called within the EC thread
     void
     EcReturnBuffers(
+        void
+    );
+
+    ULONG
+    EcReturnDriverAllocatedBuffers(
         void
     );
 
@@ -340,24 +331,19 @@ private:
         void
     );
 
-    void
-    EcUpdatePerfCounter(
-        void
-    );
 
     static
     void
     EnumerateBufferPoolCallback(
         _In_ PVOID Context,
-        _In_ SIZE_T Index,
-        _In_ UINT64 LogicalAddress,
-        _In_ PVOID VirtualAddress
+        _In_ NET_DATA_HEADER* const DataHeader
     );
 
     void ReclaimSkippedFragments(
         _In_ UINT32 CurrentIndex
     );
 
+    virtual
     NTSTATUS
     CreateVariousPools(
         void
@@ -371,14 +357,9 @@ private:
     );
 
     void
-    UpdateRscStatisticsPostSoftwareFallback(
-        _In_ ULONG PreRscFallbackNblCount,
+    UpdateRscStatisticsPostSoftwareFallback(    
+        _In_ ReceiveSegmentCoalescingBatch& rscBatch,
         _Inout_ NblRscStatistics & RscStatistics
-    );
-
-    void
-    CoalesceNblsToIndicate(
-        _Inout_ NxNblSequence & NblSequence
     );
 
     void
@@ -387,5 +368,14 @@ private:
     );
 
     friend class NxNblRx;
-};
 
+private:
+
+    UINT32
+        m_maxPackets{1};
+
+    void
+    UpdateMaxPacketsFromKnobs(
+        KIRQL Irql
+    );
+};

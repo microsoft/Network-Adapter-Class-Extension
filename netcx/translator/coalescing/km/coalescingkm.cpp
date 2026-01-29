@@ -8,8 +8,7 @@
 #include "NxRxNblContext.hpp"
 
 _Use_decl_annotations_
-void
-ReceiveSegmentCoalescing::Initialize(
+ReceiveSegmentCoalescingContext::ReceiveSegmentCoalescingContext(
     void
 )
 {
@@ -27,27 +26,35 @@ GetCoalescingFallbackInfo(
     return &rxNblContext->CoaleascingFallbackInfo;
 }
 
-// Determine if software RSC for a NBL is needed.
-static
+//
+// Determine if a NBL can be coalesced by the software RSC.
+//
 bool
-ShouldCoalesceNetBufferList(
+ReceiveSegmentCoalescingBatch::IsNetBufferListCoalescable(
     _In_ NET_BUFFER_LIST const * NetBufferList,
-    _In_ bool Ipv4HardwareCapabilities,
-    _In_ bool Ipv6HardwareCapabilities,
     _Out_ UCHAR * IpHeaderOffset
 )
 {
     // Don't coalesce if device has hardware capabilities.
-    if (NdisTestNblFlag(NetBufferList, NDIS_NBL_FLAGS_IS_IPV4) &&
-        Ipv4HardwareCapabilities)
+    if (NdisTestNblFlag(NetBufferList, NDIS_NBL_FLAGS_IS_UDP) &&
+        m_isHardwareUdpRscSupported)
     {
         return false;
     }
 
-    if (NdisTestNblFlag(NetBufferList, NDIS_NBL_FLAGS_IS_IPV6) &&
-        Ipv6HardwareCapabilities)
+    if (NdisTestNblFlag(NetBufferList, NDIS_NBL_FLAGS_IS_TCP))
     {
-        return false;
+        if (NdisTestNblFlag(NetBufferList, NDIS_NBL_FLAGS_IS_IPV4) &&
+            m_isIpv4HardwareRscSupported)
+        {
+            return false;
+        }
+
+        if (NdisTestNblFlag(NetBufferList, NDIS_NBL_FLAGS_IS_IPV6) &&
+            m_isIpv6HardwareRscSupported)
+        {
+            return false;
+        }
     }
 
     // Don't coalesce vlan frames.
@@ -59,9 +66,12 @@ ShouldCoalesceNetBufferList(
     auto const & fallbackInfo = GetCoalescingFallbackInfo(NetBufferList);
     ULONG const layer2Type = fallbackInfo->Info.Layer2Type;
 
-    // Only try to coalesce Ethernet || Ieee80211 frames.
-    if (layer2Type != NetPacketLayer2TypeEthernet &&
-        layer2Type != NetPacketLayer2TypeIeee80211)
+    // Only try to coalesce Ethernet || Ieee80211 || raw IP (for MBB) frames.
+    auto const isEthernet = layer2Type == NetPacketLayer2TypeEthernet;
+    auto const isWiFi = layer2Type == NetPacketLayer2TypeIeee80211;
+    auto const isWwan = (layer2Type == NetPacketLayer2TypeNull) && (m_mediaType == NdisMediumWirelessWan);
+    auto const isCoalescablePacket = isEthernet || isWiFi || isWwan;
+    if (!isCoalescablePacket)
     {
         return false;
     }
@@ -73,7 +83,7 @@ ShouldCoalesceNetBufferList(
         return false;
     }
 
-    // Only try to coalesce TCP || UDP segments.
+    // Only try to coalesce TCP or UDP segments.
     if (! NdisTestNblFlag(NetBufferList, NDIS_NBL_FLAGS_IS_TCP) &&
         ! NdisTestNblFlag(NetBufferList, NDIS_NBL_FLAGS_IS_UDP))
     {
@@ -86,70 +96,110 @@ ShouldCoalesceNetBufferList(
 }
 
 _Use_decl_annotations_
-void
-ReceiveSegmentCoalescing::PerformReceiveSegmentCoalescing(
-    NET_BUFFER_LIST * & NblChain,
-    bool Ipv4HardwareCapabilities,
-    bool Ipv6HardwareCapabilities,
-    NET_BUFFER_LIST * & OutputNblChainTail,
-    ULONG & NumberOfNbls
-)
+ReceiveSegmentCoalescingBatch::ReceiveSegmentCoalescingBatch(
+    ReceiveSegmentCoalescingContext & RsclibContext,
+    bool IsRscEnabled,
+    bool IsIpv4HardwareRscSupported,
+    bool IsIpv6HardwareRscSupported,
+    bool IsUdpRscEnabled,
+    bool IsHardwareUdpRscSupported,
+    NDIS_MEDIUM MediaType
+) : m_pRsclibContext(&RsclibContext.m_rsclibContext)
+  , m_isIpv4HardwareRscSupported(IsIpv4HardwareRscSupported)
+  , m_isIpv6HardwareRscSupported(IsIpv6HardwareRscSupported)
+  , m_isHardwareUdpRscSupported(IsHardwareUdpRscSupported)
+  , m_coalesceFlags(RSCLIB_FLAG_ALLOW_DEFERRED_CHECKSUM)
+  , m_mediaType(MediaType)
 {
-    NET_BUFFER_LIST * currentNbl = NblChain;
-    NET_BUFFER_LIST * nextNbl = NblChain;
-
-    NET_BUFFER_LIST * OutputNblChainHead = nullptr;
-    NET_BUFFER_LIST ** tailNbl = &OutputNblChainHead;
-    NumberOfNbls = 0U;
-
-    // Just for reset RSCLIB_STATS
-    RSCLIBReadAndResetStats(&m_rsclibContext, &m_rscStats);
-
-    while (currentNbl)
+    //
+    // If the hardware supports coalescing for both IPv4 and IPv6 TCP packets
+    // and UDP packets, that means hardware has attempted coalescing already,
+    // don't bother to do it again in software
+    //
+    if (m_isIpv4HardwareRscSupported && m_isIpv6HardwareRscSupported && m_isHardwareUdpRscSupported)
     {
-        nextNbl = currentNbl->Next;
-        UCHAR ipHeaderOffset = 0U;
-
-        if (ShouldCoalesceNetBufferList(
-            currentNbl,
-            Ipv4HardwareCapabilities,
-            Ipv6HardwareCapabilities,
-            &ipHeaderOffset))
+        m_shouldCoalesce = false;
+    }
+    else
+    {
+        if (m_isIpv4HardwareRscSupported && m_isIpv6HardwareRscSupported)
         {
-            NT_FRE_ASSERT(ipHeaderOffset > 0U);
-
-            RSCLIBCoalesceNBL(
-                &m_rsclibContext,
-                ipHeaderOffset,
-                RSCLIB_FLAG_ALLOW_DEFERRED_CHECKSUM,
-                0,
-                currentNbl,
-                &tailNbl,
-                &NumberOfNbls);
+            m_coalesceFlags |= RSCLIB_FLAG_SKIP_TCP;
         }
-        else
+        if (m_isHardwareUdpRscSupported)
         {
-            RSCLIBFlushContext(&m_rsclibContext, &tailNbl, &NumberOfNbls);
-
-            *tailNbl = currentNbl;
-            tailNbl = &currentNbl->Next;
-            currentNbl->Next = nullptr;
-            ++NumberOfNbls;
+            m_coalesceFlags |= RSCLIB_FLAG_SKIP_UDP;
         }
-        currentNbl = nextNbl;
+        //
+        // we only attempt coalescing in software if the stack has activated the RSC offload
+        //
+        m_shouldCoalesce = IsRscEnabled || IsUdpRscEnabled;
     }
 
-    RSCLIBFlushContext(&m_rsclibContext, &tailNbl, &NumberOfNbls);
-
-    RSCLIBReadAndResetStats(&m_rsclibContext, &m_rscStats);
-
-    NblChain = OutputNblChainHead;
-    OutputNblChainTail = NdisLastNblInNblChain(NblChain);
+    //
+    // Just for reset RSCLIB_STATS
+    //
+    RSCLIBReadAndResetStats(m_pRsclibContext, &m_rscStats);
 }
 
 _Use_decl_annotations_
 void
-ReceiveSegmentCoalescing::PerformReceiveSegmentUncoalescing(
+ReceiveSegmentCoalescingBatch::TryCoalesceOneReceiveSegment(
+    NET_BUFFER_LIST * NetBufferList,
+    NET_BUFFER_LIST ** & TailOfNblChain,
+    ULONG & NumberOfNbls
+)
+{
+    UCHAR ipHeaderOffset = 0U;
+
+    m_nblsAttemptedCount++;
+
+    if (m_shouldCoalesce)
+    {
+        if (IsNetBufferListCoalescable(
+                NetBufferList,
+                &ipHeaderOffset))
+        {
+            RSCLIBCoalesceNBL(
+                m_pRsclibContext,
+                ipHeaderOffset,
+                m_coalesceFlags,
+                0,
+                NetBufferList,
+                &TailOfNblChain,
+                &NumberOfNbls);
+
+            return;
+        }
+        else
+        {
+            RSCLIBFlushContext(m_pRsclibContext, &TailOfNblChain, &NumberOfNbls);
+        }
+    }
+
+    *TailOfNblChain = NetBufferList;
+    TailOfNblChain = &NetBufferList->Next;
+    NetBufferList->Next = nullptr;
+    ++NumberOfNbls;
+}
+
+_Use_decl_annotations_
+void
+ReceiveSegmentCoalescingBatch::FinalizeCoalescing(
+    NET_BUFFER_LIST ** & TailOfNblChain,
+    ULONG & NumberOfNbls
+)
+{
+    if (m_shouldCoalesce)
+    {
+        RSCLIBFlushContext(m_pRsclibContext, &TailOfNblChain, &NumberOfNbls);
+        RSCLIBReadAndResetStats(m_pRsclibContext, &m_rscStats);
+    }
+}
+
+_Use_decl_annotations_
+void
+ReceiveSegmentCoalescingContext::PerformReceiveSegmentUncoalescing(
     NET_BUFFER_LIST * & NblChain,
     NET_BUFFER_LIST * & OutputNblChainTail,
     ULONG & NumberOfNbls
@@ -164,8 +214,8 @@ ReceiveSegmentCoalescing::PerformReceiveSegmentUncoalescing(
     while (currentNbl)
     {
         auto const coalescedTcpSegments = NET_BUFFER_LIST_COALESCED_SEG_COUNT(currentNbl);
-        auto const coalescedUdpSegments = NET_BUFFER_LIST_UDP_COALESCED_SEG_COUNT(currentNbl);
-        auto const wasNblCoalesced = coalescedTcpSegments > 1 || coalescedUdpSegments > 1;
+        auto const coalescedUdpPackets = NET_BUFFER_LIST_UDP_COALESCED_SEG_COUNT(currentNbl);
+        auto const wasNblCoalesced = coalescedTcpSegments > 1 || coalescedUdpPackets > 1;
 
         if (wasNblCoalesced &&
             RscLibExUtilMatchCoalescedNBLCookie(currentNbl, static_cast<const void *>(this)))
@@ -189,7 +239,7 @@ ReceiveSegmentCoalescing::PerformReceiveSegmentUncoalescing(
 
 _Use_decl_annotations_
 USHORT
-ReceiveSegmentCoalescing::GetNblsCoalescedCount(
+ReceiveSegmentCoalescingBatch::GetNblsCoalescedCount(
     void
 ) const
 {
@@ -198,7 +248,7 @@ ReceiveSegmentCoalescing::GetNblsCoalescedCount(
 
 _Use_decl_annotations_
 USHORT
-ReceiveSegmentCoalescing::GetScusGeneratedCount(
+ReceiveSegmentCoalescingBatch::GetScusGeneratedCount(
     void
 ) const
 {
@@ -207,9 +257,18 @@ ReceiveSegmentCoalescing::GetScusGeneratedCount(
 
 _Use_decl_annotations_
 ULONG
-ReceiveSegmentCoalescing::GetBytesCoalescedCount(
+ReceiveSegmentCoalescingBatch::GetBytesCoalescedCount(
     void
 ) const
 {
     return m_rscStats.CoalescedTransportPayloadBytes;
+}
+
+_Use_decl_annotations_
+ULONG
+ReceiveSegmentCoalescingBatch::GetNblsAttemptedCount(
+    void
+) const
+{
+    return m_nblsAttemptedCount;
 }

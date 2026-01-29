@@ -4,7 +4,10 @@
 
 #include <new.h>
 
+#if UMDF_DRIVER == 0
 #include <pooltypes.h>
+#endif
+
 #include <KDebug.h>
 #include <KMacros.h>
 
@@ -54,6 +57,7 @@ struct KRTL_CLASS KALLOCATOR : public KALLOCATION_TAG<TAG, ARENA>
     PAGED void *operator new(size_t cb, std::nothrow_t const &)
     {
         PAGED_CODE();
+        #pragma warning( suppress : 4996 28751 )
         return ExAllocatePoolWithTag(static_cast<POOL_TYPE>(ARENA), cb, TAG);
     }
 
@@ -79,6 +83,7 @@ struct KRTL_CLASS KALLOCATOR : public KALLOCATION_TAG<TAG, ARENA>
         if (size < cb)
             return nullptr;
 
+        #pragma warning( suppress : 4996 28751 )
         return ExAllocatePoolWithTag(static_cast<POOL_TYPE>(ARENA), size, TAG);
     }
 
@@ -87,6 +92,7 @@ struct KRTL_CLASS KALLOCATOR : public KALLOCATION_TAG<TAG, ARENA>
     PAGED void *operator new[](size_t cb, std::nothrow_t const &)
     {
         PAGED_CODE();
+        #pragma warning( suppress : 4996 28751 )
         return ExAllocatePoolWithTag(static_cast<POOL_TYPE>(ARENA), cb, TAG);
     }
 
@@ -123,6 +129,7 @@ struct KRTL_CLASS_DPC_ALLOC KALLOCATOR_NONPAGED : public KALLOCATION_TAG_DPC_ALL
 
     NONPAGED void *operator new(size_t cb, std::nothrow_t const &)
     {
+        #pragma warning( suppress : 4996 28751 )
         return ExAllocatePoolWithTag(static_cast<POOL_TYPE>(ARENA), cb, TAG);
     }
 
@@ -144,6 +151,7 @@ struct KRTL_CLASS_DPC_ALLOC KALLOCATOR_NONPAGED : public KALLOCATION_TAG_DPC_ALL
         if (size < cb)
             return nullptr;
 
+        #pragma warning( suppress : 4996 28751 )
         return ExAllocatePoolWithTag(static_cast<POOL_TYPE>(ARENA), size, TAG);
     }
 
@@ -151,6 +159,7 @@ struct KRTL_CLASS_DPC_ALLOC KALLOCATOR_NONPAGED : public KALLOCATION_TAG_DPC_ALL
 
     NONPAGED void *operator new[](size_t cb, std::nothrow_t const &)
     {
+        #pragma warning( suppress : 4996 28751 )
         return ExAllocatePoolWithTag(static_cast<POOL_TYPE>(ARENA), cb, TAG);
     }
 

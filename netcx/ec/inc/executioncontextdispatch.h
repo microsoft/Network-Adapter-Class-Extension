@@ -102,8 +102,24 @@ NET_EXECUTION_CONTEXT_RUN_SYNCHRONOUS_TASK(
 typedef
 _IRQL_requires_max_(DISPATCH_LEVEL)
 void
+NET_EXECUTION_CONTEXT_QUEUE_TASK(
+    _In_ NET_EXECUTION_CONTEXT ExecutionContext,
+    _In_ EXECUTION_CONTEXT_TASK * Task
+);
+
+typedef
+_IRQL_requires_max_(DISPATCH_LEVEL)
+void
 NET_EXECUTION_CONTEXT_NOTIFY(
     _In_ NET_EXECUTION_CONTEXT ExecutionContext
+);
+
+typedef
+_IRQL_requires_max_(DISPATCH_LEVEL)
+void
+NET_EXECUTION_CONTEXT_NOTIFY_EX(
+    _In_ NET_EXECUTION_CONTEXT ExecutionContext,
+    _In_ EXECUTION_CONTEXT_NOTIFY_PARAMETERS * Parameters
 );
 
 typedef
@@ -120,6 +136,36 @@ _IRQL_requires_(PASSIVE_LEVEL)
 void
 NET_EXECUTION_CONTEXT_RESET_HISTOGRAMS(
     void
+);
+
+typedef
+_IRQL_requires_max_(DISPATCH_LEVEL)
+void
+NET_EXECUTION_CONTEXT_QUEUE_TASK(
+    _In_ NET_EXECUTION_CONTEXT ExecutionContext,
+    _In_ EXECUTION_CONTEXT_TASK *Task
+);
+
+typedef
+_IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+NET_EXECUTION_CONTEXT_REFERENCE_BY_HANDLE(
+    _In_ HANDLE Handle,
+    _Out_ NET_EXECUTION_CONTEXT * ExecutionContext
+);
+
+typedef
+_IRQL_requires_(PASSIVE_LEVEL)
+void
+NET_EXECUTION_CONTEXT_DEREFERENCE(
+    _In_ NET_EXECUTION_CONTEXT ExecutionContext
+);
+
+typedef
+_IRQL_requires_(PASSIVE_LEVEL)
+HANDLE
+NET_EXECUTION_CONTEXT_GET_UM_FILE_HANDLE(
+    _In_ NET_EXECUTION_CONTEXT ExecutionContext
 );
 
 typedef struct _NET_EXECUTION_CONTEXT_DISPATCH
@@ -167,7 +213,29 @@ typedef struct _NET_EXECUTION_CONTEXT_DISPATCH
     NET_EXECUTION_CONTEXT_RESET_HISTOGRAMS *
         ResetHistograms;
 
+    NET_EXECUTION_CONTEXT_NOTIFY_EX *
+        NotifyEx;
+
+    NET_EXECUTION_CONTEXT_QUEUE_TASK *
+        QueueTask;
+
+    NET_EXECUTION_CONTEXT_REFERENCE_BY_HANDLE *
+        ReferenceByHandle;
+
+    NET_EXECUTION_CONTEXT_DEREFERENCE *
+        Dereference;
+
+    NET_EXECUTION_CONTEXT_GET_UM_FILE_HANDLE *
+        GetUmFileHandle;
+
 } NET_EXECUTION_CONTEXT_DISPATCH;
+
+#ifndef _KERNEL_MODE
+NET_EXECUTION_CONTEXT_DISPATCH const*
+GetExecutionContextDispatch(
+    void
+);
+#endif
 
 #ifdef __cplusplus
 }

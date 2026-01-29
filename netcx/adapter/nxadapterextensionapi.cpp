@@ -7,10 +7,12 @@
 #include "NxAdapterExtension.hpp"
 #include "NxDriver.hpp"
 #include "NxAdapter.hpp"
+#include "NxDevice.hpp"
 #include "verifier.hpp"
 #include "version.hpp"
 
 #include "NxAdapterExtensionApi.tmh"
+
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
@@ -49,7 +51,7 @@ NETEXPORT(NetDriverExtensionInitialize)(
     if (Config->AllowNetAdapterCreation)
     {
         CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-            NxDriver::_CreateAndRegisterIfNeeded(privateGlobals),
+            NxDriver::_CreateAndRegisterIfNeeded(privateGlobals, NetCxDriverType::PnpDeviceDriver),
             "Failed to register NDIS driver for media extension. WDFDRIVER=%p", Driver);
     }
     else
@@ -538,4 +540,90 @@ NETEXPORT(NetAdapterExtensionInitSetPowerPolicyCallbacks)(
         &adapterExtensionInit->PowerPolicyCallbacks,
         Callbacks,
         Callbacks->Size);
+}
+
+_IRQL_requires_(PASSIVE_LEVEL)
+WDFAPI
+void
+NTAPI
+NETEXPORT(NetAdapterCompleteOidRequest)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER Adapter,
+    _In_ NDIS_OID_REQUEST * Request,
+    _In_ NDIS_STATUS Status
+)
+{
+    // This function can ONLY be used to complete non-direct OIDs
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyExtensionGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyNotNull(nxPrivateGlobals, Adapter);
+    Verifier_VerifyNotNull(nxPrivateGlobals, Request);
+
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+    nxAdapter->CompleteOidRequest(Request, Status);
+}
+
+_IRQL_requires_(PASSIVE_LEVEL)
+WDFAPI
+NTSTATUS
+NTAPI
+NETEXPORT(NetAdapterSetNative80211Attributes)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER Adapter,
+    _In_ NDIS_MINIPORT_ADAPTER_NATIVE_802_11_ATTRIBUTES * Attributes
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyExtensionGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyNotNull(nxPrivateGlobals, Adapter);
+    Verifier_VerifyNotNull(nxPrivateGlobals, Attributes);
+
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+    return nxAdapter->SetNative80211Attributes(Attributes);
+}
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+WDFAPI
+void
+NTAPI
+NETEXPORT(NetAdapterIndicateMiniportStatus)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER Adapter,
+    _In_ NDIS_STATUS_INDICATION * NdisStatusIndication
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyExtensionGlobals(nxPrivateGlobals);
+    Verifier_VerifyNotNull(nxPrivateGlobals, Adapter);
+    Verifier_VerifyNotNull(nxPrivateGlobals, NdisStatusIndication);
+
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+    return nxAdapter->IndicateMiniportStatus(NdisStatusIndication);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+ULONG
+NTAPI
+NETEXPORT(NetDeviceGetSupportedDeviceResetTypes)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ WDFDEVICE Device
+    )
+{
+    NX_PRIVATE_GLOBALS const * nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyExtensionGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyNotNull(nxPrivateGlobals, Device);
+
+    ULONG supportedResetTypes = 0;
+
+    NxDevice * nxDevice = GetNxDeviceFromHandle(Device);
+    const bool resetSupported = nxDevice->GetSupportedDeviceResetType(&supportedResetTypes);
+    return resetSupported ? supportedResetTypes : 0;
 }

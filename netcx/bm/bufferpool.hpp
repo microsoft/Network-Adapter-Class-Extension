@@ -5,7 +5,6 @@
 #include "KPtr.h"
 #include "KBitmap.h"
 #include "kStackstorage.h"
-#include "BufferHeader.hpp"
 #include "IBufferVector.hpp"
 #include "IBufferVectorAllocator.hpp"
 
@@ -20,6 +19,9 @@ class PAGED BufferPool :
 {
 
 public:
+    BufferPool(
+        _In_ PEPROCESS AssociatedProcess
+    );
 
     ~BufferPool(
         void
@@ -73,6 +75,11 @@ public:
         _In_ void* Context
     );
 
+    PEPROCESS
+    GetAssociatedProcess(
+        void
+    );
+
     size_t
     GetOffset();
 
@@ -95,55 +102,9 @@ private:
 
     Rtl::KBitmap
         m_BuffersInUseFlag;
+
+    PEPROCESS
+        m_associatedProcess;
 };
 
-class BufferPool2 : public NONPAGED_OBJECT<'2lPB'>
-{
-#ifdef TEST_HARNESS_CLASS_NAME
-    friend class
-        TEST_HARNESS_CLASS_NAME;
-#endif
 
-public:
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    BufferPool2(
-        _In_ size_t BufferSize,
-        _In_ size_t BufferAlignment
-    );
-
-    _IRQL_requires_max_(DISPATCH_LEVEL)
-    ~BufferPool2(
-        void
-    );
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    NTSTATUS
-    Initialize(
-        _In_ IBufferVectorAllocator * Allocator,
-        _In_ size_t InitialNumberOfBuffers
-    );
-
-    _IRQL_requires_max_(DISPATCH_LEVEL)
-    BufferHeader *
-    Allocate(
-        void
-    );
-
-private:
-
-    wistd::unique_ptr<IBufferVector>
-        m_bufferVector;
-
-    size_t const
-        m_bufferSize;
-
-    size_t const
-        m_bufferAlignment;
-
-    LIST_ENTRY
-        m_freeBufferList;
-
-    LIST_ENTRY
-        m_usedBufferList;
-};

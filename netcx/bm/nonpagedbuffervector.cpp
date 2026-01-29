@@ -7,9 +7,11 @@
 NonPagedBufferVector::NonPagedBufferVector(
     _In_ size_t BufferCount,
     _In_ size_t BufferSize,
-    _In_ size_t BufferOffset
+    _In_ size_t BufferOffset,
+    _In_ Rtl::KArray<KPoolPtrNP<void>, NonPagedPoolBaseCacheAligned> && NonPagedBufferVector
 )
-    : IBufferVector(BufferCount, BufferSize, BufferOffset)
+    : IBufferVector(BufferCount, BufferOffset, BufferSize)
+    , m_NonPagedBufferVectorKmAddresses(wistd::move(NonPagedBufferVector))
 {
 }
 
@@ -17,31 +19,25 @@ NonPagedBufferVector::~NonPagedBufferVector(
     void
 )
 {
-    for (size_t i = 0; i < m_BufferCount; i++)
-    {
-        if (m_NonPagedBufferVector[i].VirtualAddress)
-        {
-            ExFreePool(m_NonPagedBufferVector[i].VirtualAddress);
-            m_NonPagedBufferVector[i].VirtualAddress = nullptr;
-        }
-
-        if (m_NonPagedBufferVector[i].Mdl)
-        {
-            ExFreePool(m_NonPagedBufferVector[i].Mdl);
-            m_NonPagedBufferVector[i].Mdl = nullptr;
-        }
-    }
+    UnmapFromUserModeAddressSpace();
 }
 
-NONPAGED
 _Use_decl_annotations_
-void
-NonPagedBufferVector::GetEntryByIndex(
-    size_t Index,
-    NET_DATA_HEADER * NetDataHeader
+void *
+NonPagedBufferVector::GetKernelModeVirtualAddress(
+    size_t Index
 ) const
 {
-    NetDataHeader->VirtualAddress = m_NonPagedBufferVector[Index].VirtualAddress;
-    NetDataHeader->LogicalAddress = 0ULL;
-    NetDataHeader->Mdl = m_NonPagedBufferVector[Index].Mdl;
+    return m_NonPagedBufferVectorKmAddresses[Index].get();
+}
+
+_Use_decl_annotations_
+ULONG64
+NonPagedBufferVector::GetLogicalAddress(
+    size_t Index
+) const
+{
+    UNREFERENCED_PARAMETER(Index);
+
+    return 0;
 }

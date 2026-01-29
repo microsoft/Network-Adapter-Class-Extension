@@ -147,7 +147,7 @@ public:
         return m_numElements;
     }
 
-    PAGED bool reserve(size_t count)
+    NONPAGED bool reserve(size_t count)
     {
         if (m_bufferSize >= count)
             return true;
@@ -159,6 +159,7 @@ public:
         if (!NT_SUCCESS(RtlSIZETMult(sizeof(T), count, reinterpret_cast<SIZE_T*>(&bytesNeeded))))
             return false;
 
+        #pragma warning( suppress : 4996 28751 )
         T * p = (T*)ExAllocatePoolWithTag(PoolType, bytesNeeded, 'rrAK');
         if (!p)
             return false;
@@ -187,7 +188,7 @@ public:
         return true;
     }
 
-    PAGED bool resize(size_t count)
+    NONPAGED bool resize(size_t count)
     {
         if (!reserve(count))
             return false;

@@ -1,18 +1,18 @@
 # Network Adapter Class Extension to WDF
 The Network Adapter Class Extension to WDF (NetAdapterCx) brings together the productivity of WDF with the networking performance of NDIS.
-The goal of NetAdpaterCx is to make it easy to write a great driver for your NIC.
+The goal of NetAdapterCx is to make it easy to write a great driver for your NIC.
 
-## Lastest Release - Windows 10 April 2020 Update (version 2004)
+## Latest Release - Windows 11 2026 Update (25H2)
 
-**Source Code to NetAdpaterCx.sys**: Right here
+**Source Code for NetAdapterCx.sys and NetAdapterCx.dll**: Right here
 
 **API Documentation**: [Network Adapter WDF Class Extension (Cx)](https://aka.ms/netadapter/doc)
 
-**Visual Studio 2017**: [Visual Studio 2017 Download](https://www.visualstudio.com/downloads/)
+**Visual Studio 2026**: [Visual Studio 2026 Download](https://www.visualstudio.com/downloads/)
 
-**Windows 10 WDK**: [Windows 10 WDK Download](https://docs.microsoft.com/en-us/windows-hardware/drivers/download-the-wdk)
+**Windows 11 WDK**: [Windows 11 WDK Download](https://docs.microsoft.com/en-us/windows-hardware/drivers/download-the-wdk)
 
-**Windows 10 SDK**: [Windows 10 SDK Download](https://developer.microsoft.com/en-US/windows/downloads/windows-10-sdk)
+**Windows 11 SDK**: [Windows 11 SDK Download](https://learn.microsoft.com/en-us/windows/apps/windows-sdk/)
 
 **Driver Samples**: [Microsoft/NetAdapter-Cx-Driver-Samples](https://github.com/Microsoft/NetAdapter-Cx-Driver-Samples "Driver Samples")
 
@@ -20,8 +20,8 @@ The goal of NetAdpaterCx is to make it easy to write a great driver for your NIC
 
 ## What's this code good for?
 
-This repository holds the source code to NetAdpaterCx.sys.  
-NetAdapterCx.sys ships with Windows, so you don't need to compile it yourself.
+This repository holds the source code to both KMDF and UMDF versions of NetAdapterCx.
+NetAdapterCx ships with Windows, so you don't need to compile it yourself.
 However, you can use this reference source code to debug your own NIC driver, and to learn how NetAdapter works.
 
 While we're proud of our API documentation, we know that even the best docs can't always answer every question you might have.
@@ -33,17 +33,17 @@ Our aim is to make the inner workings of NetAdapterCx as transparent as possible
 
 The code has several major pieces:
 
-    rtl\inc     Runtime library utility headers
-    cx\sys      The core NetAdapterCx.sys implementation
-    cx\xlat     The datapath
+    rtl\inc            Runtime library utility headers
+    netcx\adapter      The core of NetAdapterCx.dll and NetAdapterCx.sys implementation
+    netcx\translator   The datapath
 
 ### The runtime library
 
-NetAdapterCx.sys uses a few simple utility headers to wrap low-level kernel calls.
+NetAdapterCx uses a few simple utility headers to wrap low-level kernel calls.
 For example, KSpinLock.h provides a convenient wrapper around the kernel's native spinlock.
 KRegKey.h provides convenient C++ wrappers to access the registry.
 
-### The core NetAdapterCx.sys implementation
+### The core of NetAdapterCx implementation
 
 This code implements all the public API surface of NetAdapterCx.
 There is a naming convention to the files, organized around the objects in the public API.
@@ -54,23 +54,25 @@ For example, consider the NETCONFIGURATION object.  Then:
 
 ### The datapath
 
-The datapath is currently under heavy development, so its implementation is likely to change substantially in future releases.
+The core of the transmit path is in NxTxXlat.cpp centered around the `NxTxXlat::TransmitNbls` function.
+NxTxXlat converts the NBLs to NET_PACKETs and issues them to your NIC driver.
 
-The core of the transmit path is in NxTxXlat.cpp, centered around the `NxTxXlat::TransmitThread` function.
-This function drives the transmit datapath.
-Each time NDIS gives NBLs to the network driver, the NBLs are queued for the TransmitThread.
-The TransmitThread converts the NBLs to NET_PACKETs and issues them to your NIC driver.
-
-The core of the receive path is in NxRxXlat.cpp, centered around the `NxRxXlat::ReceiveThread` function.
+The core of the receive path is in NxRxXlat.cpp, centered around the `NxRxXlat::ReceiveNbls` function.
 This routine polls your NIC for new packets.
-When new packets are available, the ReceiveThread converts them to NBLs and indicates them to NDIS.
+When new packets are available, NxRxXlat converts them to NBLs and indicates them to NDIS.
+
+### User/Kernel mode split
+
+Most of the code is shared between the two modes. Sections that are specific to either KMDF or UMDF are enabled or disabled by NETCX_KMDF or NETCX_UMDF #ifdefs.
+Most of the code under the netcx/adapter directory is compiled into both the netadaptercx.sys and netadaptercx.dll binaries, for kernel-mode and user-mode respectively.
+The code in netcx/translator runs only in kernel mode: in the KMDF case, it is part of NetAdapterCx.sys; in the UMDF case, it runs in a dedicated kernel-mode redirector library.
 
 ## Contributing to NetAdapterCx
 
 We welcome bug reports and feature suggestions.
 You can file them here on our GitHub repository's issue tracker, or email us at NetAdapter@microsoft.com.
 
-NetAdapterCx.sys is under heavy development, so its implementation is changing quite a bit.
+NetAdapterCx is under development, so its implementation is changing quite a bit.
 Currently, we do that development internally at Microsoft, so you won't see the in-progress changes here on GitHub.
 The code here is a snapshot of the last shipping version of NetAdapterCx.
 That means we cannot take pull requests through GitHub.

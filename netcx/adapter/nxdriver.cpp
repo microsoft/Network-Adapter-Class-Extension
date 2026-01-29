@@ -3,19 +3,18 @@
 #include "Nx.hpp"
 
 #include <ntddndis_p.h>
-#include <ndiswdf.h>
+#define _NTDEF_
 #include <ntstrsafe.h>
-#include <wil/resource.h>
+#ifdef _KERNEL_MODE
+#include <ndis/lwminiporttypes.h>
+#endif
 
+#include "ExecutionContext.h"
 #include "NxDriver.hpp"
+#include "ndisminiport/NdisMiniportCharacteristics.hpp"
 #include "NxPrivateGlobals.hpp"
 
 #include "NxDriver.tmh"
-
-void
-NdisMiniportDriverCharacteristicsInitialize(
-    _Inout_ NDIS_MINIPORT_DRIVER_CHARACTERISTICS & Characteristics
-);
 
 extern
 WDFWAITLOCK
@@ -28,6 +27,33 @@ NDIS_WDF_CX_DRIVER
 static
 EVT_WDF_OBJECT_CONTEXT_CLEANUP
     EvtDriverCleanup;
+
+EXECUTION_CONTEXT_RUNTIME_KNOBS NxDriver::DevicelessEcRuntimeKnobs
+{
+    sizeof(EXECUTION_CONTEXT_RUNTIME_KNOBS), // Size
+    ExecutionContextFlagRunDpcForFirstLoop, // Flags
+    0, // MaxTimeAtDispatch
+    0, // DispatchTimeWarning
+    15 * 60 * 1000, // DispatchTimeWarningInterval
+    80, // DpcWatchdogTimerThreshold
+    10, // WorkerThreadPriority
+    {
+        64, // MaxPacketsSend.AtPassive
+        64, // MaxPacketsSend.AtDispatch
+    },
+    {
+        64, // MaxPacketsSendComplete.AtPassive
+        64, // MaxPacketsSendComplete.AtDispatch
+    },
+    {
+        64, // MaxPacketsReceive.AtPassive
+        64, // MaxPacketsReceive.AtDispatch
+    },
+    {
+        64, // MaxPacketsReceiveComplete.AtPassive
+        64, // MaxPacketsReceiveComplete.AtDispatch
+    },
+};
 
 _Use_decl_annotations_
 NxDriver::NxDriver(
@@ -101,7 +127,8 @@ NxDriver::_CreateIfNeeded(
 _Use_decl_annotations_
 NTSTATUS
 NxDriver::_CreateAndRegisterIfNeeded(
-    NX_PRIVATE_GLOBALS * NxPrivateGlobals
+    NX_PRIVATE_GLOBALS * NxPrivateGlobals,
+    NetCxDriverType DriverType
 )
 /*++
 Routine Description:
@@ -125,13 +152,35 @@ Arguments:
 
     auto nxDriver = NxPrivateGlobals->NxDriver;
 
-    if (nxDriver->GetNdisMiniportDriverHandle() != nullptr)
+    switch (DriverType)
     {
-        // Already registered
-        return STATUS_SUCCESS;
-    }
+        case NetCxDriverType::PnpDeviceDriver:
+        {
+            if (nxDriver->GetNdisMiniportDriverHandle() != nullptr)
+            {
+                // Already registered
+                return STATUS_SUCCESS;
+            }
 
-    CX_RETURN_IF_NOT_NT_SUCCESS(nxDriver->Register());
+            CX_RETURN_IF_NOT_NT_SUCCESS(nxDriver->Register());
+        }
+        break;
+
+        case NetCxDriverType::DevicelessDriver:
+        {
+            if (nxDriver->GetNdisLwmDriverHandle() != nullptr)
+            {
+                // Already registered
+                return STATUS_SUCCESS;
+            }
+
+            CX_RETURN_IF_NOT_NT_SUCCESS(nxDriver->RegisterLwmDriver());
+        }
+        break;
+
+        default:
+            CX_RETURN_IF_NOT_NT_SUCCESS_MSG(STATUS_INVALID_PARAMETER, "Unknown driver type");
+    }
 
     return STATUS_SUCCESS;
 }
@@ -157,7 +206,7 @@ Routine Description:
     // miniport driver chars structure, and then call
     // NdisWdfRegisterMiniportDriver
     //
-
+#ifdef NETCX_KMDF
     UNICODE_STRING registryPath = {};
 
     CX_RETURN_IF_NOT_NT_SUCCESS(
@@ -177,6 +226,7 @@ Routine Description:
             &ndisMPChars,
             &m_ndisMiniportDriverHandle),
         "NdisWdfRegisterMiniportDriver failed.");
+#endif
 
     return STATUS_SUCCESS;
 }
@@ -186,11 +236,14 @@ NxDriver::Deregister(
     void
 )
 {
+    // In UMDF version this is done by RdDriver
+#ifdef NETCX_KMDF
     if (m_ndisMiniportDriverHandle != nullptr)
     {
         NdisMDeregisterMiniportDriver(m_ndisMiniportDriverHandle);
         m_ndisMiniportDriverHandle = nullptr;
     }
+#endif
 }
 
 _Use_decl_annotations_
@@ -210,7 +263,7 @@ Routine Description:
 
 --*/
 {
-    auto nxDriver = GetNxDriverFromWdfDriver((WDFDRIVER)Driver);
+    auto nxDriver = GetNxDriverFromWdfDriver(static_cast<WDFDRIVER>(Driver));
     nxDriver->Deregister();
 }
 
@@ -230,3 +283,32 @@ NxDriver::GetPrivateGlobals(
     return m_privateGlobals;
 }
 
+NDIS_HANDLE
+NxDriver::GetNdisLwmDriverHandle(
+    void
+) const
+{
+    return m_ndisLwmDriverHandle.get();
+}
+
+NTSTATUS
+NxDriver::RegisterLwmDriver(
+    void
+)
+{
+#ifdef NETCX_KMDF
+    NDIS_LWM_DRIVER_CHARACTERISTICS ndisLWMChars;
+
+    NdisLWMiniportDriverCharacteristicsInitialize(ndisLWMChars);
+
+    NDIS_STATUS ndisStatus = NdisLWMRegisterMiniportDriver(
+        static_cast<NDIS_HANDLE>(this),
+        &ndisLWMChars,
+        &m_ndisLwmDriverHandle);
+
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        NdisConvertNdisStatusToNtStatus(ndisStatus),
+        "NdisLWMRegisterMiniportDriver failed.");
+#endif
+    return STATUS_SUCCESS;
+}

@@ -8,8 +8,7 @@ NxExecutionContext::NxExecutionContext(
     WDFDEVICE Device,
     NET_EXECUTION_CONTEXT_CONFIG const * Config
 )
-    : ExecutionContext(&g_staticEcClientIdentier, &g_staticEcKnobs)
-    , m_handle(static_cast<NETEXECUTIONCONTEXT>(WdfObjectContextGetObject(this)))
+    : m_handle(static_cast<NETEXECUTIONCONTEXT>(WdfObjectContextGetObject(this)))
     , m_device(Device)
 {
     RtlCopyMemory(
@@ -70,7 +69,7 @@ NxExecutionContext::Initialize(
             L"NETEXECUTIONCONTEXT %p",
             m_handle));
 
-    CX_RETURN_IF_NOT_NT_SUCCESS(ExecutionContext::Initialize(&name));
+    CX_RETURN_IF_NOT_NT_SUCCESS(ExecutionContextWrapper::Initialize(&name));
 
     if (m_config.EvtPreAdvance != nullptr)
     {

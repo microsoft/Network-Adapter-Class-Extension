@@ -2,11 +2,18 @@
 
 #pragma once
 
+#include <wil/resource.h>
+#ifdef _KERNEL_MODE
+#include <ndis/lwminiportapi.h>
+#endif
+
 #include <FxObjectBase.hpp>
 
 //
 // The NxDriver is an object that represents a NetAdapterCx Client Driver
 //
+
+using unique_lwm_driver = wil::unique_any<NDIS_HANDLE, decltype(&::NdisLWMDeregisterMiniportDriver), NdisLWMDeregisterMiniportDriver>;
 
 struct NX_PRIVATE_GLOBALS;
 
@@ -18,6 +25,13 @@ GetNxDriverFromWdfDriver(
     _In_ WDFDRIVER Driver
 );
 
+enum class NetCxDriverType : ULONG
+{
+    PnpDeviceDriver = 0,
+    DevicelessDriver,
+    MaxDriverTypes
+};
+
 class NxDriver
     : public CFxObject<WDFDRIVER, NxDriver, GetNxDriverFromWdfDriver, false>
 {
@@ -26,6 +40,13 @@ private:
 
     NDIS_HANDLE
         m_ndisMiniportDriverHandle = nullptr;
+
+    //
+    // Lightweight miniport driver handle we get from NDIS
+    // when client driver creates deviceless NETADAPTER
+    //
+    unique_lwm_driver
+        m_ndisLwmDriverHandle;
 
     NX_PRIVATE_GLOBALS *
         m_privateGlobals = nullptr;
@@ -37,10 +58,13 @@ private:
 
 public:
 
+    static EXECUTION_CONTEXT_RUNTIME_KNOBS DevicelessEcRuntimeKnobs;
+
     static
     NTSTATUS
     _CreateAndRegisterIfNeeded(
-        _In_ NX_PRIVATE_GLOBALS * NxPrivateGlobals
+        _In_ NX_PRIVATE_GLOBALS * NxPrivateGlobals,
+        _In_ NetCxDriverType DriverType
     );
 
     static
@@ -60,8 +84,18 @@ public:
         void
     );
 
+    NTSTATUS
+    RegisterLwmDriver(
+        void
+    );
+
     NDIS_HANDLE
     GetNdisMiniportDriverHandle(
+        void
+    ) const;
+
+    NDIS_HANDLE
+    GetNdisLwmDriverHandle(
         void
     ) const;
 

@@ -71,6 +71,30 @@ public:
         void
     );
 
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    bool
+    IsAffinitized(
+        void
+    ) const;
+
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    void
+    SetAffinity(
+        PROCESSOR_NUMBER const & Affinity
+    );
+
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    bool
+    IsMapped(
+        void
+    ) const;
+
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    void
+    SetMapped(
+        bool IsMapped
+    );
+
 protected:
 
     NxTranslationApp &
@@ -122,7 +146,13 @@ private:
     bool
         m_stopping = false;
 
+    bool
+        m_affinitySet = false;
+
     size_t const
         m_queueId = SIZE_T_MAX;
+
+    bool
+        m_mapped = false;
 };
 

@@ -5,7 +5,9 @@
 #include <net/ring.h>
 #include <net/packet.h>
 #include <NetClientDriverConfigurationImpl.hpp>
+#ifdef NETCX_KMDF
 #include "NxExecutionContext.hpp"
+#endif
 #include "NxQueue.hpp"
 #include "NxDevice.hpp"
 #include "NxQueueVerifier.hpp"
@@ -15,6 +17,7 @@
 #include "verifier.hpp"
 
 #include "NxQueue.tmh"
+
 
 using namespace NetCx::Core;
 
@@ -103,6 +106,19 @@ NetClientQueueSetArmed(
 {
     reinterpret_cast<NxQueue *>(Queue)->SetArmed(IsArmed);
 }
+
+#ifdef NETCX_UMDF
+_Use_decl_annotations_
+void
+EvtAdapterQueuePoll(
+    void * Context,
+    EXECUTION_CONTEXT_POLL_PARAMETERS * Poll
+)
+{
+    auto nxQueue = static_cast<NxQueue *>(Context);
+    nxQueue->Advance(Poll);
+}
+#endif
 
 static
 void
@@ -228,7 +244,11 @@ PacketQueueCreate(
 
     *PacketQueue = queue.release();
 
-    return STATUS_SUCCESS;
+    CX_RETURN_STATUS_SUCCESS_MSG(
+        "Packet queue created. NETPACKETQUEUE %p, Type %!QUEUETYPE!, NETADAPTER %p",
+        *PacketQueue,
+        static_cast<ULONG>(Type),
+        InitContext.ParentObject);
 }
 
 _Use_decl_annotations_
@@ -236,14 +256,23 @@ NxQueue::NxQueue(
     QUEUE_CREATION_CONTEXT const & InitContext,
     NET_PACKET_QUEUE_CONFIG const & QueueConfig,
     Queue::Type QueueType
-) :
-    m_queue(static_cast<NETPACKETQUEUE>(WdfObjectContextGetObject(this))),
-    m_parent(InitContext.ParentObject),
-    m_queueType(QueueType),
-    m_queueId(InitContext.QueueId),
-    m_clientQueue(InitContext.ClientQueue),
-    m_clientDispatch(InitContext.ClientDispatch)
+)
+    : m_queue{ static_cast<NETPACKETQUEUE>(WdfObjectContextGetObject(this)) }
+    , m_parent{ InitContext.ParentObject }
+    , m_queueType{ QueueType }
+    , m_queueId{ InitContext.QueueId }
+    , m_clientQueue{ InitContext.ClientQueue }
+    , m_clientDispatch{ InitContext.ClientDispatch }
+#ifdef NETCX_UMDF
+    , m_startTask{ *this }
+    , m_cancelTask{ *this }
+    , m_stopTask{ *this }
+#endif
 {
+    m_demuxPeerAddressProperty = InitContext.ClientQueueConfig->DemuxPeerAddressProperty;
+    m_demuxWmmProperty = InitContext.ClientQueueConfig->DemuxWmmProperty;
+    m_demux8021pProperty = InitContext.ClientQueueConfig->Demux8021pProperty;
+
     INITIALIZE_EXECUTION_CONTEXT_NOTIFICATION(
         &m_driverNotification,
         this,
@@ -253,6 +282,14 @@ NxQueue::NxQueue(
         &m_packetQueueConfig,
         &QueueConfig,
         QueueConfig.Size);
+
+#ifdef NETCX_UMDF
+    INITIALIZE_EXECUTION_CONTEXT_POLL(
+        &m_poll,
+        ExecutionContextPollTypeAdvance,
+        this,
+        EvtAdapterQueuePoll);
+#endif
 }
 
 _Use_decl_annotations_
@@ -261,6 +298,11 @@ EvtQueueCleanup(
     WDFOBJECT Object
 )
 {
+    LogInfo(
+        FLAG_NET_QUEUE,
+        "NETPACKETQUEUE %p deleted",
+        Object);
+
     auto queue = GetNxQueueFromHandle(Object);
     queue->Cleanup();
 }
@@ -270,10 +312,12 @@ NxQueue::Cleanup(
     void
 )
 {
+#ifdef NETCX_KMDF
     if (m_packetQueueConfig.ExecutionContext != WDF_NO_HANDLE)
     {
         WdfObjectDereference(m_packetQueueConfig.ExecutionContext);
     }
+#endif
 }
 
 _Use_decl_annotations_
@@ -282,6 +326,7 @@ NxQueue::Initialize(
     QUEUE_CREATION_CONTEXT & InitContext
 )
 {
+#ifdef NETCX_KMDF
     if (m_packetQueueConfig.ExecutionContext != WDF_NO_HANDLE)
     {
         // If the client driver provided their own execution context we need to reference
@@ -292,6 +337,7 @@ NxQueue::Initialize(
         m_executionContext = GetExecutionContextFromHandle(m_packetQueueConfig.ExecutionContext);
     }
     else
+#endif
     {
         // If the client driver did not provide their own execution context we create and manage
         // the lifetime of one for them
@@ -306,8 +352,7 @@ NxQueue::Initialize(
             InitContext.Extensions,
             InitContext.ClientQueueConfig->NumberOfPackets,
             InitContext.ClientQueueConfig->NumberOfFragments,
-            InitContext.ClientQueueConfig->NumberOfDataBuffers,
-            reinterpret_cast<BufferPool *>(InitContext.ClientQueueConfig->DataBufferPool)));
+            InitContext.CreateReturnContextRing));
 
     return STATUS_SUCCESS;
 }
@@ -320,16 +365,17 @@ NxQueue::CreateFrameworkExecutionContext(
 {
     auto nxAdapter = GetNxAdapterFromHandle(GetParent());
 
-    m_frameworkExecutionContext = 
-        wil::make_unique_nothrow<ExecutionContext>(
+    m_frameworkExecutionContext =
+        wil::make_unique_nothrow<ExecutionContextWrapper>(
             nxAdapter->GetInterfaceGuid(),
             nxAdapter->m_executionContextKnobs);
 
     CX_RETURN_NTSTATUS_IF_MSG(
         STATUS_INSUFFICIENT_RESOURCES,
         !m_frameworkExecutionContext,
-        "Failed to allocate new ExecutionContext object");
+        "Failed to allocate new ExecutionContextWrapper object");
 
+#ifdef NETCX_KMDF
     // Construct a friendly name for the EC to help when analyzing traces.
     // This is best effort, failure to do so won't fail queue creation.
     auto const & name = nxAdapter->GetInstanceName();
@@ -341,7 +387,7 @@ NxQueue::CreateFrameworkExecutionContext(
 
     auto const ntStatus = RtlUnicodeStringPrintf(
         &friendlyName,
-        L"%ws execution context #%zu for %wZ",
+        L"%ws execution context #%lu for %wZ",
         usage,
         m_queueId,
         &name);
@@ -350,16 +396,19 @@ NxQueue::CreateFrameworkExecutionContext(
     auto const pFriendlyName = ntStatus == STATUS_SUCCESS
         ? &friendlyName
         : nullptr;
+#else
+    UNICODE_STRING *pFriendlyName = nullptr;
+#endif
 
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         m_frameworkExecutionContext->Initialize(pFriendlyName),
-        "Failed to initialize new ExecutionContext object");
+        "Failed to initialize new ExecutionContextWrapper object");
 
     return STATUS_SUCCESS;
 }
 
 _Use_decl_annotations_
-ExecutionContext *
+ExecutionContextWrapper *
 NxQueue::GetExecutionContext(
     void
 )
@@ -370,37 +419,43 @@ NxQueue::GetExecutionContext(
 template <typename PFn>
 void
 InvokeQueueCallback(
-    _In_ ExecutionContext * ExecutionContext,
+    _In_ ExecutionContextWrapper * ExecutionContext,
     _In_ NETPACKETQUEUE Queue,
-    _In_ PFn Callback
+    _In_ PFn Callback,
+    _In_ const wchar_t *CallbackName
 )
 {
-    // Invoke the queue callback from the execution context.
-    // This function returns only after the task is complete.
-
-    struct
+    auto lambda = [Queue, Callback, CallbackName]()
     {
-        NETPACKETQUEUE
-            Queue;
+        LogInfo(
+            FLAG_NET_QUEUE,
+            "Begin(%ws): NETPACKETQUEUE %p",
+            CallbackName,
+            Queue);
 
-        PFn
-            Callback;
-    } taskContext;
+        Callback(Queue);
 
-    taskContext.Queue = Queue;
-    taskContext.Callback = Callback;
-
-    auto invokeCallbackFn = [](void * Context)
-    {
-        auto task = static_cast<decltype(taskContext) *>(Context);
-        task->Callback(task->Queue);
+        LogInfo(
+            FLAG_NET_QUEUE,
+            "End(%ws): NETPACKETQUEUE %p",
+            CallbackName,
+            Queue);
     };
 
-    ExecutionContextTask invokeCallbackTask{ &taskContext, invokeCallbackFn };
+#if NETCX_KMDF
+    // In KMDF, invoke the queue callback from the execution context.
+    // This function returns only after the task is complete.
+
+    LambdaTask invokeCallbackTask{ lambda };
 
     // Queue an EC task and wait until it is complete
-    ExecutionContext->QueueTask(invokeCallbackTask);
+    ExecutionContext->QueueTask(invokeCallbackTask.GetTask());
     invokeCallbackTask.WaitForCompletion();
+#else
+    // In UMDF version queue callbacks are already serialized by EC
+    UNREFERENCED_PARAMETER(ExecutionContext);
+    lambda();
+#endif // NETCX_KMDF
 }
 
 void
@@ -408,6 +463,11 @@ NxQueue::Start(
     void
 )
 {
+    LogInfo(
+        FLAG_NET_QUEUE,
+        "Entry: NETPACKETQUEUE %p",
+        m_queue);
+
     for (auto ring : m_ringCollection.Rings)
     {
         if (ring != nullptr)
@@ -424,13 +484,21 @@ NxQueue::Start(
         InvokeQueueCallback(
             m_executionContext,
             m_queue,
-            m_packetQueueConfig.EvtStart);
+            m_packetQueueConfig.EvtStart,
+            L"EvtStart");
     }
 
+#ifdef NETCX_KMDF
     if (m_packetQueueConfig.EvtSetNotificationEnabled != nullptr)
     {
         m_executionContext->RegisterNotification(&m_driverNotification);
     }
+#endif
+
+    LogInfo(
+        FLAG_NET_QUEUE,
+        "Exit: NETPACKETQUEUE %p",
+        m_queue);
 }
 
 void
@@ -438,20 +506,31 @@ NxQueue::Stop(
     void
 )
 {
+    LogInfo(
+        FLAG_NET_QUEUE,
+        "Entry: NETPACKETQUEUE %p",
+        m_queue);
+
+#ifdef NETCX_KMDF
     if (m_packetQueueConfig.EvtSetNotificationEnabled != nullptr)
     {
         m_executionContext->UnregisterNotification(&m_driverNotification);
     }
+#endif
 
     if (m_packetQueueConfig.EvtStop)
     {
         InvokeQueueCallback(
             m_executionContext,
             m_queue,
-            m_packetQueueConfig.EvtStop);
+            m_packetQueueConfig.EvtStop,
+            L"EvtStop");
     }
 
-    PostStopReclaimDataBuffers();
+    LogInfo(
+        FLAG_NET_QUEUE,
+        "Exit: NETPACKETQUEUE %p",
+        m_queue);
 }
 
 void
@@ -459,9 +538,7 @@ NxQueue::Advance(
     void
 )
 {
-    PreAdvancePostDataBuffer();
     m_packetQueueConfig.EvtAdvance(m_queue);
-    PostAdvanceRefCounting();
 }
 
 
@@ -472,24 +549,59 @@ NxQueue::Advance(
 {
     auto rings = GetRingCollection();
 
-    PreAdvancePostDataBuffer();
-
     Verifier.PreAdvance(rings);
     m_packetQueueConfig.EvtAdvance(m_queue);
     Verifier.PostAdvance(rings);
-
-    PostAdvanceRefCounting();
 }
+
+#ifdef NETCX_UMDF
+void
+NxQueue::Advance(
+    EXECUTION_CONTEXT_POLL_PARAMETERS * Poll
+)
+{
+    auto pr = NetRingCollectionGetPacketRing(&m_ringCollection);
+    auto fr = NetRingCollectionGetFragmentRing(&m_ringCollection);
+
+    const UINT32 oPrBegin = pr->BeginIndex;
+    const UINT32 oFrBegin = fr->BeginIndex;
+
+    this->Advance();
+
+    Poll->WorkCounter += NetRingGetRangeCount(pr, oPrBegin, pr->BeginIndex);
+    Poll->WorkCounter += NetRingGetRangeCount(fr, oFrBegin, fr->BeginIndex);
+}
+#endif
 
 void
 NxQueue::Cancel(
     void
 )
 {
+    LogInfo(
+        FLAG_NET_QUEUE,
+        "Entry: NETPACKETQUEUE %p",
+        m_queue);
+
     if (m_packetQueueConfig.EvtCancel != nullptr)
     {
+        LogInfo(
+            FLAG_NET_QUEUE,
+            "Begin(EvtCancel): NETPACKETQUEUE %p",
+            m_queue);
+
         m_packetQueueConfig.EvtCancel(m_queue);
+
+        LogInfo(
+            FLAG_NET_QUEUE,
+            "End(EvtCancel): NETPACKETQUEUE %p",
+            m_queue);
     }
+
+    LogInfo(
+        FLAG_NET_QUEUE,
+        "Exit: NETPACKETQUEUE %p",
+        m_queue);
 }
 
 void
@@ -497,6 +609,11 @@ NxQueue::Cancel(
     NxQueueVerifier & Verifier
 )
 {
+    LogInfo(
+        FLAG_NET_QUEUE,
+        "Entry: NETPACKETQUEUE %p",
+        m_queue);
+
     if (m_packetQueueConfig.EvtCancel != nullptr)
     {
         auto rings = GetRingCollection();
@@ -505,11 +622,28 @@ NxQueue::Cancel(
 
         KIRQL irql;
         KeRaiseIrql(DISPATCH_LEVEL, &irql);
+
+        LogInfo(
+            FLAG_NET_QUEUE,
+            "Begin(EvtCancel): NETPACKETQUEUE %p",
+            m_queue);
+
         m_packetQueueConfig.EvtCancel(m_queue);
+
+        LogInfo(
+            FLAG_NET_QUEUE,
+            "End(EvtCancel): NETPACKETQUEUE %p",
+            m_queue);
+
         KeLowerIrql(irql);
 
         Verifier.PostAdvance(rings);
     }
+
+    LogInfo(
+        FLAG_NET_QUEUE,
+        "Exit: NETPACKETQUEUE %p",
+        m_queue);
 }
 
 void
@@ -568,6 +702,24 @@ NxQueue::GetWdfObject(
     return m_queue;
 }
 
+#ifdef NETCX_UMDF
+void
+NxQueue::GetCallbacks(
+    _Out_ EXECUTION_CONTEXT_POLL * Advance,
+    _Out_ EXECUTION_CONTEXT_TASK * Start,
+    _Out_ EXECUTION_CONTEXT_TASK * Cancel,
+    _Out_ EXECUTION_CONTEXT_TASK * Stop,
+    _Out_ EXECUTION_CONTEXT_NOTIFICATION * SetNotification
+)
+{
+    *Advance = m_poll;
+    *Start = m_startTask.GetUnderlyingEcTask();
+    *Cancel = m_cancelTask.GetUnderlyingEcTask();
+    *Stop = m_stopTask.GetUnderlyingEcTask();
+    *SetNotification = m_driverNotification;
+}
+#endif
+
 void
 NxQueue::NotifyMorePacketsAvailable(
     void
@@ -581,7 +733,15 @@ NxQueue::GetTxDemuxProperty(
     NET_CLIENT_QUEUE_TX_DEMUX_TYPE Type
 ) const
 {
-    return m_clientDispatch->GetTxDemuxProperty(
-        reinterpret_cast<NET_CLIENT_QUEUE>(m_clientQueue),
-        Type);
+    switch (Type)
+    {
+    case NET_CLIENT_QUEUE_TX_DEMUX_TYPE::TxDemuxTypePeerAddress:
+        return &m_demuxPeerAddressProperty;
+    case NET_CLIENT_QUEUE_TX_DEMUX_TYPE::TxDemuxTypeWmmInfo:
+        return &m_demuxWmmProperty;
+    case NET_CLIENT_QUEUE_TX_DEMUX_TYPE::TxDemuxType8021p:
+        return &m_demux8021pProperty;
+    default:
+        return nullptr;
+    }
 }

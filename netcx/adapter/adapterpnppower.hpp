@@ -126,8 +126,19 @@ public:
 
     _IRQL_requires_max_(PASSIVE_LEVEL)
     void
+    IoStartNoWait(
+        void
+    );
+
+    _IRQL_requires_max_(PASSIVE_LEVEL)
+    void
     IoStop(
         _In_ WDF_POWER_DEVICE_STATE TargetPowerState
+    );
+
+    _IRQL_requires_max_(PASSIVE_LEVEL)
+    void
+    IoStopNoWait(
     );
 
     _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -192,6 +203,9 @@ private:
 
     KAutoEvent
         m_ioEventProcessed;
+
+    bool
+        m_areBindingsAllowed = false;
 
 private:
 

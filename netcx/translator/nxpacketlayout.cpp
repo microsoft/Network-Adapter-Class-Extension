@@ -49,22 +49,42 @@ ParseLayer2LayoutIfNeeded(
     _Inout_ bool & PreCheck
 )
 {
-    if (PreCheck &&
-        Packet->Layout.Layer2Type != NetPacketLayer2TypeUnspecified &&
-        Packet->Layout.Layer2HeaderLength != 0U)
+    /*
+     * special case check for NetPacketLayer2TypeNull to abandon parsing
+     * earlier due to regression introduced described in comment below.
+     */
+    if (Packet->Layout.Layer2Type == NetPacketLayer2TypeNull)
     {
+        return true;
+    }
+
+    if (Packet->Layout.Layer2Type == NetPacketLayer2TypeUnspecified)
+    {
+        return false;
+    }
+
+    if (Packet->Layout.Layer2HeaderLength != 0U)
+    {
+        if (BytesRemaining < Packet->Layout.Layer2HeaderLength)
+        {
+            return false;
+        }
+
         Offset += Packet->Layout.Layer2HeaderLength;
         BytesRemaining -= Packet->Layout.Layer2HeaderLength;
 
         return true;
     }
 
-    if (Packet->Layout.Layer2Type == NetPacketLayer2TypeUnspecified ||
-        BytesRemaining == 0U)
-    {
-        return false;
-    }
-
+    /*
+     * the following comment describes incorrect behavior. it is being
+     * retained with the code that is also incorrect. the impact of the
+     * code is that if parsing of Layer2 layout fails it destroys the
+     * driver provided Layer3{Type,HeaderLength} which is wrong.
+     *
+     * we cannot remove this code right now as a driver may have taken
+     * a dependency on the inappropriate initialization.
+     */
     // Since layer 2 info is not present, no need to check if client driver
     // filled layer 3/4 layout info.
     PreCheck = false;
@@ -161,6 +181,18 @@ NxGetPacketLayout(
 
     if (Packet->Layout.Layer2Type == NetPacketLayer2TypeUnspecified)
     {
+        /*
+         * Packet->Layout = {}; is incorrect here. the translator should not
+         * assume that the driver hasn't provided valid Layer{3,4} metadata
+         * just because they indicated Layer2 was unspecified.
+         *
+         * since a driver may have taken a dependency on this incorrect
+         * initialization (instead not supplying their own initialization)
+         * we cannot remove the code without risking a compatibility break.
+         *
+         * the correct behavior here is to Packet->Layout.Layer2Length = 0
+         * and then request a layer2 parse.
+         */
         Packet->Layout = {};
         Packet->Layout.Layer2Type = TranslateMedium(MediaType);
     }
@@ -181,6 +213,91 @@ NxGetPacketLayout(
     }
 
     ParseLayer4LayoutIfNeeded(Packet, buffer, offset, bytesRemaining, preCheck);
+}
+
+static
+AddressType
+NxGetEthernetAddressType(
+    _In_ const BYTE * L2HeaderStart,
+    _In_ size_t BytesRemaining
+)
+{
+    static UINT8 const broadcast[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+
+    if (BytesRemaining < sizeof(broadcast))
+    {
+        return AddressType::Unicast;
+    }
+
+    if (! (*L2HeaderStart & 0x01))
+    {
+        return AddressType::Unicast;
+    }
+
+    if (! RtlEqualMemory(&broadcast, L2HeaderStart, sizeof(broadcast)))
+    {
+        return AddressType::Multicast;
+    }
+
+    return AddressType::Broadcast;
+}
+
+
+_Use_decl_annotations_
+AddressType
+NxInitializePacketLayout(
+    NDIS_MEDIUM MediaType,
+    const void *Payload,
+    size_t PayloadSize,
+    NET_PACKET* Packet
+)
+{
+    const BYTE *buffer = static_cast<const BYTE *>(Payload);
+    size_t bytesRemaining = PayloadSize;
+
+    AddressType destinationType = AddressType::Unicast;
+
+    if (Packet->Layout.Layer2Type == NetPacketLayer2TypeUnspecified)
+    {
+        /*
+         * Packet->Layout = {}; is incorrect here. the translator should not
+         * assume that the driver hasn't provided valid Layer{3,4} metadata
+         * just because they indicated Layer2 was unspecified.
+         *
+         * since a driver may have taken a dependency on this incorrect
+         * initialization (instead not supplying their own initialization)
+         * we cannot remove the code without risking a compatibility break.
+         *
+         * the correct behavior here is to Packet->Layout.Layer2Length = 0
+         * and then request a layer2 parse.
+         */
+        Packet->Layout = {};
+        Packet->Layout.Layer2Type = TranslateMedium(MediaType);
+    }
+
+    if (Packet->Layout.Layer2Type == NetPacketLayer2TypeEthernet)
+    {
+        destinationType = NxGetEthernetAddressType(buffer, bytesRemaining);
+    }
+
+    size_t offset = 0U;
+
+    // Initially should check if client driver already filled layout info.
+    bool preCheck = true;
+
+    if (! ParseLayer2LayoutIfNeeded(Packet, buffer, offset, bytesRemaining, preCheck))
+    {
+        return destinationType;
+    }
+
+    if (! ParseLayer3LayoutIfNeeded(Packet, buffer, offset, bytesRemaining, preCheck))
+    {
+        return destinationType;
+    }
+
+    ParseLayer4LayoutIfNeeded(Packet, buffer, offset, bytesRemaining, preCheck);
+
+    return destinationType;
 }
 
 _Use_decl_annotations_

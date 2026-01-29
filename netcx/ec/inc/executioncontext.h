@@ -65,3 +65,35 @@ INITIALIZE_EXECUTION_CONTEXT_RUNTIME_KNOBS(
     RuntimeKnobs->Size = sizeof(*RuntimeKnobs);
     RuntimeKnobs->Flags = ExecutionContextFlagNone;
 }
+
+typedef struct _EXECUTION_CONTEXT_NOTIFY_PARAMETERS
+{
+    ULONG Size;
+    KIRQL Irql;
+    BOOLEAN AllowContextStealing;
+} EXECUTION_CONTEXT_NOTIFY_PARAMETERS;
+
+inline
+void
+INITIALIZE_EXECUTION_CONTEXT_NOTIFY_PARAMETERS_WITH_IRQL(
+    _Out_ EXECUTION_CONTEXT_NOTIFY_PARAMETERS * Parameters,
+    _In_ KIRQL Irql
+)
+{
+    RtlZeroMemory(Parameters, sizeof(*Parameters));
+    Parameters->Size = sizeof(*Parameters);
+    Parameters->Irql = Irql;
+}
+
+inline
+void
+INITIALIZE_EXECUTION_CONTEXT_NOTIFY_PARAMETERS(
+    _Out_ EXECUTION_CONTEXT_NOTIFY_PARAMETERS * Parameters
+)
+{
+#ifdef _KERNEL_MODE
+    INITIALIZE_EXECUTION_CONTEXT_NOTIFY_PARAMETERS_WITH_IRQL(Parameters, KeGetCurrentIrql());
+#else
+    INITIALIZE_EXECUTION_CONTEXT_NOTIFY_PARAMETERS_WITH_IRQL(Parameters, PASSIVE_LEVEL);
+#endif
+}

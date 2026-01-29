@@ -22,6 +22,11 @@ public:
         size_t Range
     ) noexcept;
 
+    virtual
+    ~NxTxDemux(
+        void
+    ) = default;
+
     NxTxDemux::Type
     GetType(
         void

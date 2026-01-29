@@ -5,6 +5,7 @@
 #include "QueueControl.tmh"
 #include "QueueControl.hpp"
 
+#include "Driver.hpp"
 #include "RxScaling.hpp"
 
 _Use_decl_annotations_
@@ -20,10 +21,24 @@ QueueControl::QueueControl(
     , m_dispatch(Dispatch)
     , m_adapter(Adapter)
     , m_adapterDispatch(AdapterDispatch)
-    , m_work(this, &QueueControl::SynchronizeDatapathWork)
+    , m_work(this)
     , m_txQueues(TxQueues)
     , m_rxQueues(RxQueues)
 {
+}
+
+_IRQL_requires_(PASSIVE_LEVEL)
+PAGEDX
+NTSTATUS
+QueueControl::Initialize(
+    void
+) noexcept
+{
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        m_work.Initialize(GetTranslatorDriverObject()),
+        "Failed to initialize QueueControl work item");
+
+    return STATUS_SUCCESS;
 }
 
 _Use_decl_annotations_
@@ -148,13 +163,15 @@ QueueControl::CreateRxScalingQueues(
     }
 
     Rtl::KArray<wistd::unique_ptr<NxRxXlat>> queues;
-    CX_RETURN_NTSTATUS_IF(
+    CX_RETURN_NTSTATUS_IF_MSG(
         STATUS_INSUFFICIENT_RESOURCES,
-        ! queues.resize(RxScaling->GetNumberOfQueues() - m_rxQueues.count()));
+        ! queues.resize(RxScaling->GetNumberOfQueues() - m_rxQueues.count()),
+        "Failed to create array to store Rx queues for Rx scaling");
 
-    CX_RETURN_NTSTATUS_IF(
+    CX_RETURN_NTSTATUS_IF_MSG(
         STATUS_INSUFFICIENT_RESOURCES,
-        ! m_rxQueues.reserve(RxScaling->GetNumberOfQueues()));
+        ! m_rxQueues.reserve(RxScaling->GetNumberOfQueues()),
+        "Failed to reserve memory for Rx scaling queues");
 
     for (auto i = m_rxQueues.count(); i < RxScaling->GetNumberOfQueues(); i++)
     {
@@ -165,12 +182,14 @@ QueueControl::CreateRxScalingQueues(
             m_adapter,
             m_adapterDispatch);
 
-        CX_RETURN_NTSTATUS_IF(
+        CX_RETURN_NTSTATUS_IF_MSG(
             STATUS_INSUFFICIENT_RESOURCES,
-            ! rxQueue);
+            ! rxQueue,
+            "Failed to create queue for Rx scaling");
 
-        CX_RETURN_IF_NOT_NT_SUCCESS(
-            rxQueue->Initialize());
+        CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+            rxQueue->Initialize(),
+            "Failed to initialize queue for Rx scaling");
 
         queues[i - m_rxQueues.count()] = wistd::move(rxQueue);
     }
@@ -180,8 +199,9 @@ QueueControl::CreateRxScalingQueues(
         NT_FRE_ASSERT(m_rxQueues.append(wistd::move(queue)));
     }
 
-    CX_RETURN_IF_NOT_NT_SUCCESS(
-        RxScaling->Configure());
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        RxScaling->Configure(),
+        "Failed to configure RxScaling");
 
     CX_RETURN_STATUS_SUCCESS_MSG("Created Rx Scaling Queues"
         " Rx Count: %Iu/%Iu",
@@ -238,12 +258,28 @@ QueueControl::ProvisionOnDemandQueues(
 
 _Use_decl_annotations_
 void
-QueueControl::DestroyOnDemandQueue(
-    size_t Index
+QueueControl::DestroyOnDemandQueuesByPeerDemux(
+    size_t PeerDemux
 )
 {
     KLockThisExclusive lock(m_workSyncLock);
 
+    for (auto const & queue : m_txQueues)
+    {
+        auto const property = queue->GetTxDemuxProperty(TxDemuxTypePeerAddress);
+        if (property && property->Value == PeerDemux)
+        {
+            DestroyOnDemandQueue(queue->GetQueueId());
+        }
+    }
+}
+
+_Use_decl_annotations_
+void
+QueueControl::DestroyOnDemandQueue(
+    size_t Index
+)
+{
     auto & queue = m_txQueues[Index];
 
     if (queue->IsCreated())
@@ -279,7 +315,8 @@ QueueControl::SignalQueueStateChange(
     KAcquireSpinLock lock(m_workQueueLock);
 
     m_event.Clear();
-    m_work.Queue();
+
+    TryQueueWorkItem();
 }
 
 _Use_decl_annotations_
@@ -294,7 +331,8 @@ QueueControl::SetDatapathState(
         reinterpret_cast<volatile LONG *>(&m_state),
         static_cast<LONG>(State));
     m_event.Clear();
-    m_work.Queue();
+    
+    TryQueueWorkItem();
 }
 
 _Use_decl_annotations_
@@ -349,8 +387,47 @@ QueueControl::SynchronizeDatapathWork(
     void
 )
 {
-    while (SynchronizeDatapathState()
-        || ! IsDatapathStateSynchronized());
+    LogInfo(FLAG_TRANSLATOR,
+        "QueueControl work item entry. ClientAdapter: %p",
+        m_adapter);
+
+    ULONG counter = 0;
+
+    while (true)
+    {
+        while (SynchronizeDatapathState() || !IsDatapathStateSynchronized())
+        {
+            counter++;
+        }
+
+        {
+            KAcquireSpinLock lock(m_workQueueLock);
+            if (m_loopState == SynchronizationLoop::Running)
+            {
+                LogInfo(FLAG_TRANSLATOR,
+                    "m_loopState is set to Stopping. ClientAdapter: %p",
+                    m_adapter);
+
+                m_loopState = SynchronizationLoop::Stopping;
+            }
+            else if (m_loopState == SynchronizationLoop::Stopping)
+            {
+                LogInfo(FLAG_TRANSLATOR,
+                    "m_loopState is set to Stopped. ClientAdapter: %p",
+                    m_adapter);
+
+                // between setting state to Stopping and then running another iteration,
+                // no new workitem has been scheduled, so we can now quit.
+                m_loopState = SynchronizationLoop::Stopped;
+                break;
+            }
+        }
+    }
+
+    LogInfo(FLAG_TRANSLATOR,
+        "QueueControl work item exit. ClientAdapter: %p, counter: %u",
+        m_adapter,
+        counter);
 }
 
 bool
@@ -366,6 +443,14 @@ QueueControl::SynchronizeDatapathState(
     {
 
     case DatapathState::Started:
+        
+        if (m_queueControlCriticalFailure)
+        {
+            // We encountered critical failure when trying to create the queues;
+            // Re-enumeration request has been issued, meanwhile ignoring all consequent attempts to create the queues.
+            return false;
+        }
+        
         for (auto & queue : m_txQueues)
         {
             auto const notCreated = ! queue->IsCreated() && queue->IsQueuingNetBufferLists();
@@ -373,8 +458,18 @@ QueueControl::SynchronizeDatapathState(
             if (notCreated)
             {
                 NT_FRE_ASSERT(queue->IsOnDemand());
+                const NTSTATUS queueCreationStatus = queue->Create();
+                if (!NT_SUCCESS(queueCreationStatus))
+                {
+                    LogError(FLAG_ADAPTER,
+                        "Failed to create on demand queue. NETADAPTER: %p, Status: %!STATUS!",
+                        m_adapter,
+                        queueCreationStatus);
 
-                queue->Create();
+                    m_adapterDispatch->SetDeviceFailed(m_adapter, queueCreationStatus);
+                    m_queueControlCriticalFailure = true;
+                    return false;
+                }
 
                 return true;
             }
@@ -415,11 +510,15 @@ QueueControl::SynchronizeDatapathState(
                 changed = true;
                 queue->Cancel();
             }
-            else if (created && !started)
+            else if (!started)
             {
                 // DatapathStop() can race with the creation of an on demand queue,
-                // which can leave the queue in the created but not started state.
-                // For such queues we must drop any currently queued NBLs
+                // which can leave the queue in the created but not started state
+                // OR both not created and not started state - if m_workitem hadn't 
+                // had a chance to run at all before m_state was set to DatapathState::Stopping.
+                // For such queues we must drop any currently queued NBLs. 
+                // Please note, we can't drop packets for "started" queue because we'll be 
+                // racing with polling callbacks of ExecutionContext that drives the queues. 
                 queue->DropQueuedNetBufferLists();
             }
         }
@@ -477,12 +576,18 @@ QueueControl::IsDatapathStateSynchronized(
     void
 )
 {
-    KAcquireSpinLock lock(m_workQueueLock);
+    KLockThisExclusive lock(m_workSyncLock);
 
     switch (m_state)
     {
 
     case DatapathState::Started:
+        if (m_queueControlCriticalFailure)
+        {
+            // We encountered critical failure when trying to create the queues;
+            // Re-enumeration request has been issued, meanwhile ignoring all consequent attempts to create the queues.
+            return true;
+        }
         for (size_t i = 0u; i < m_txQueues.count(); i++)
         {
             auto & queue = m_txQueues[i];
@@ -539,9 +644,37 @@ QueueControl::IsDatapathStateSynchronized(
 
         break;
     }
-
+    
     m_event.Set();
 
     return true;
 }
 
+_Use_decl_annotations_
+void
+QueueControl::TryQueueWorkItem(
+    void
+)
+{
+    // The primary reason for this elaboration is to avoid running functions SynchronizeDatapathState and IsDatapathStateSynchronized
+    // from multiple workitems concurrently. These functions acquire pushlocks, held during potentially long operations which can lead to large
+    // accumulation of stuck workitems, hogging many threads, severely degrading performance and starving system resources.
+
+    const bool alreadyRunning = (m_loopState == SynchronizationLoop::Running) || (m_loopState == SynchronizationLoop::Stopping);
+
+    if (m_loopState == SynchronizationLoop::Stopping || m_loopState == SynchronizationLoop::Stopped)
+    {
+        LogInfo(FLAG_TRANSLATOR,
+            "m_loopState is set to Running. ClientAdapter: %p",
+            m_adapter);
+
+        m_loopState = SynchronizationLoop::Running;
+    }
+
+    if (alreadyRunning)
+    {
+        return;
+    }
+
+    m_work.Queue();
+}

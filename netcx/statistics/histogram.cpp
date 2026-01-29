@@ -62,8 +62,7 @@ namespace Statistics
     }
 
     template<>
-    PAGEDX
-    _Use_decl_annotations_
+    PAGED
     ULONG
     Histogram::SerializedSize<NDIS_SINGLE_HISTOGRAM_ENTRY>() const
     {
@@ -74,13 +73,12 @@ namespace Statistics
     }
 
     template<>
-    PAGEDX
-    _Use_decl_annotations_
+    PAGED
     NTSTATUS
     Histogram::Serialize<NDIS_SINGLE_HISTOGRAM_ENTRY>(
-        NDIS_SINGLE_HISTOGRAM_ENTRY *out,
-        ULONG cbOut,
-        ULONG &bytesNeeded
+        _Out_writes_bytes_(cbOut) NDIS_SINGLE_HISTOGRAM_ENTRY *out,
+        _In_ ULONG cbOut,
+        _Out_ ULONG &bytesNeeded
     ) const
     {
         bytesNeeded = SerializedSize<NDIS_SINGLE_HISTOGRAM_ENTRY>();

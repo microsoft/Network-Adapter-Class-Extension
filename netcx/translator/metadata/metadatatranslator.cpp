@@ -22,6 +22,8 @@
 #include <net/ieee8021q.h>
 #include <net/packethash.h>
 
+DEFINE_ENUM_FLAG_OPERATORS(NET_PACKET_HASH_PROTOCOL_TYPE);
+
 _Use_decl_annotations_
 RxMetadataTranslator::RxMetadataTranslator(
     NET_RING_COLLECTION const & Rings,
@@ -98,22 +100,32 @@ RxMetadataTranslator::TranslatePacketRsc(
 
     auto const packet = NetRingGetPacketAtIndex(NetRingCollectionGetPacketRing(&m_rings), PacketIndex);
 
-    // We currently support RSC only for TCP
-    if (packet->Layout.Layer4Type != NetPacketLayer4TypeTcp)
+    if (packet->Layout.Layer4Type == NetPacketLayer4TypeTcp)
     {
-        return;
+        auto const rsc = NetExtensionGetPacketRsc(&m_extensions.Extension.Rsc, PacketIndex);
+        NDIS_RSC_NBL_INFO info = {};
+
+        if (rsc->TCP.CoalescedSegmentCount > 0)
+        {
+            info.Info.CoalescedSegCount = rsc->TCP.CoalescedSegmentCount;
+            info.Info.DupAckCount = rsc->TCP.DuplicateAckCount;
+        }
+
+        NetBufferList.NetBufferListInfo[TcpRecvSegCoalesceInfo] = info.Value;
     }
-
-    auto const rsc = NetExtensionGetPacketRsc(&m_extensions.Extension.Rsc, PacketIndex);
-    NDIS_RSC_NBL_INFO info = {};
-
-    if (rsc->TCP.CoalescedSegmentCount > 0)
+    else if (packet->Layout.Layer4Type == NetPacketLayer4TypeUdp)
     {
-        info.Info.CoalescedSegCount = rsc->TCP.CoalescedSegmentCount;
-        info.Info.DupAckCount = rsc->TCP.DuplicateAckCount;
-    }
+        auto const rsc = NetExtensionGetPacketRsc(&m_extensions.Extension.Rsc, PacketIndex);
+        NDIS_UDP_RSC_OFFLOAD_NET_BUFFER_LIST_INFO info = {};
 
-    NetBufferList.NetBufferListInfo[TcpRecvSegCoalesceInfo] = info.Value;
+        if (rsc->UDP.CoalescedSegmentCount > 0)
+        {
+            info.Receive.SegCount = rsc->UDP.CoalescedSegmentCount;
+            info.Receive.SegSize = rsc->UDP.CoalescedSegmentSize;
+        }
+
+        NetBufferList.NetBufferListInfo[UdpRecvSegCoalesceOffloadInfo] = info.Value;
+    }
 }
 
 _Use_decl_annotations_
@@ -560,4 +572,288 @@ TxMetadataTranslator::TranslatePacketIeee8021q(
     }
 
     return ieee8021q;
+}
+
+static
+UINT16
+ParseLayer3Type(
+    _In_ const NET_PACKET_LAYOUT & Layout,
+    _In_ const unsigned char * L2Header,
+    _In_ size_t L2HeaderSize
+)
+{
+    if (Layout.Layer2Type != NetPacketLayer2TypeEthernet)
+    {
+        return 0u;
+    }
+
+    const ETHERNET_HEADER UNALIGNED * ethernet = reinterpret_cast<ETHERNET_HEADER UNALIGNED const *>(L2Header);
+
+    if (L2HeaderSize < sizeof(*ethernet))
+    {
+        return 0u;
+    }
+
+    if (ETHERNET_TYPE_MINIMUM < RtlUshortByteSwap(ethernet->Type))
+    {
+        return ethernet->Type;
+    }
+
+    SNAP_HEADER UNALIGNED const * snap = reinterpret_cast<SNAP_HEADER UNALIGNED const *>(ethernet + 1);
+
+    if (L2HeaderSize - sizeof(*ethernet) < sizeof(*snap))
+    {
+        return 0u;
+    }
+
+    if (snap->Control == SNAP_CONTROL
+        && snap->Dsap == SNAP_DSAP
+        && snap->Ssap == SNAP_SSAP
+        && snap->Oui[0] == SNAP_OUI
+        && snap->Oui[1] == SNAP_OUI
+        && snap->Oui[2] == SNAP_OUI)
+    {
+        return snap->Type;
+    }
+
+    return 0u;
+}
+
+_Use_decl_annotations_
+void
+RxMetadataTranslator::TranslatePacketLayout(
+    NET_BUFFER_LIST & NetBufferList,
+    const NET_PACKET_LAYOUT & Layout,
+    const unsigned char *Payload,
+    size_t PayloadSize
+)
+{
+    NetBufferList.NblFlags = 0;
+
+    COALEASCING_FALLBACK_INFO rscFallbackInfo = {};
+    rscFallbackInfo.Info.Layer2Type = Layout.Layer2Type;
+    rscFallbackInfo.Info.Layer2HeaderLength = Layout.Layer2HeaderLength;
+
+    RX_NBL_CONTEXT *rxNblContext = GetRxContextFromNbl(&NetBufferList);
+    rxNblContext->CoaleascingFallbackInfo.Value = rscFallbackInfo.Value;
+
+    UINT16 layer3Type = 0u;
+    switch (Layout.Layer3Type)
+    {
+
+    case NetPacketLayer3TypeIPv4UnspecifiedOptions:
+    case NetPacketLayer3TypeIPv4WithOptions:
+    case NetPacketLayer3TypeIPv4NoOptions:
+        layer3Type = RtlUshortByteSwap(ETHERNET_TYPE_IPV4);
+        NdisSetNblFlag(&NetBufferList, NDIS_NBL_FLAGS_IS_IPV4);
+        break;
+
+    case NetPacketLayer3TypeIPv6UnspecifiedExtensions:
+    case NetPacketLayer3TypeIPv6WithExtensions:
+    case NetPacketLayer3TypeIPv6NoExtensions:
+        layer3Type = RtlUshortByteSwap(ETHERNET_TYPE_IPV6);
+        NdisSetNblFlag(&NetBufferList, NDIS_NBL_FLAGS_IS_IPV6);
+        break;
+
+    default:
+        layer3Type = ::ParseLayer3Type(Layout, Payload, PayloadSize);
+        break;
+
+    }
+
+    // NetBufferListFrameType expects layer 3 type in network byte order
+    NetBufferList.NetBufferListInfo[NetBufferListFrameType] = reinterpret_cast<void *>(layer3Type);
+
+    switch (Layout.Layer4Type)
+    {
+
+    case NetPacketLayer4TypeTcp:
+        NdisSetNblFlag(&NetBufferList, NDIS_NBL_FLAGS_IS_TCP);
+        break;
+
+    case NetPacketLayer4TypeUdp:
+        NdisSetNblFlag(&NetBufferList, NDIS_NBL_FLAGS_IS_UDP);
+        break;
+
+    }
+}
+
+_Use_decl_annotations_
+void
+RxMetadataTranslator::TranslatePacketChecksum(
+    NET_BUFFER_LIST & NetBufferList,
+    const NET_PACKET_LAYOUT & Layout,
+    const NET_PACKET_CHECKSUM * Checksum
+)
+{
+    NDIS_TCP_IP_CHECKSUM_NET_BUFFER_LIST_INFO info = {};
+
+    if (Checksum->Layer3 == NetPacketRxChecksumEvaluationValid)
+    {
+        info.Receive.IpChecksumSucceeded = true;
+    }
+    else if (Checksum->Layer3 == NetPacketRxChecksumEvaluationInvalid)
+    {
+        info.Receive.IpChecksumFailed = true;
+    }
+
+    if (Layout.Layer4Type == NetPacketLayer4TypeTcp)
+    {
+        if (Checksum->Layer4 == NetPacketRxChecksumEvaluationValid)
+        {
+            info.Receive.TcpChecksumSucceeded = true;
+        }
+        else if (Checksum->Layer4 == NetPacketRxChecksumEvaluationInvalid)
+        {
+            info.Receive.TcpChecksumFailed = true;
+        }
+    }
+    else if (Layout.Layer4Type == NetPacketLayer4TypeUdp)
+    {
+        if (Checksum->Layer4 == NetPacketRxChecksumEvaluationValid)
+        {
+            info.Receive.UdpChecksumSucceeded = true;
+        }
+        else if (Checksum->Layer4 == NetPacketRxChecksumEvaluationInvalid)
+        {
+            info.Receive.UdpChecksumFailed = true;
+        }
+    }
+
+    NetBufferList.NetBufferListInfo[TcpIpChecksumNetBufferListInfo] = info.Value;
+}
+
+_Use_decl_annotations_
+void
+RxMetadataTranslator::TranslatePacketRsc(
+    NET_BUFFER_LIST & NetBufferList,
+    const NET_PACKET_LAYOUT & Layout,
+    const NET_PACKET_RSC * Rsc
+)
+{
+    if (Layout.Layer4Type == NetPacketLayer4TypeTcp)
+    {
+        NDIS_RSC_NBL_INFO info = {};
+
+        if (Rsc->TCP.CoalescedSegmentCount > 0)
+        {
+            info.Info.CoalescedSegCount = Rsc->TCP.CoalescedSegmentCount;
+            info.Info.DupAckCount = Rsc->TCP.DuplicateAckCount;
+        }
+
+        NetBufferList.NetBufferListInfo[TcpRecvSegCoalesceInfo] = info.Value;
+    }
+    else if (Layout.Layer4Type == NetPacketLayer4TypeUdp)
+    {
+        NDIS_UDP_RSC_OFFLOAD_NET_BUFFER_LIST_INFO info = {};
+
+        if (Rsc->UDP.CoalescedSegmentCount > 0)
+        {
+            info.Receive.SegCount = Rsc->UDP.CoalescedSegmentCount;
+            info.Receive.SegSize = Rsc->UDP.CoalescedSegmentSize;
+        }
+
+        NetBufferList.NetBufferListInfo[UdpRecvSegCoalesceOffloadInfo] = info.Value;
+    }
+}
+
+_Use_decl_annotations_
+void
+RxMetadataTranslator::TranslatePacketRscTimestamp(
+    NET_BUFFER_LIST & NetBufferList,
+    const NET_PACKET_LAYOUT & Layout,
+    const NET_PACKET_RSC_TIMESTAMP * Rsc
+)
+{
+    // We currently support RSC only for TCP
+    if (Layout.Layer4Type != NetPacketLayer4TypeTcp)
+    {
+        return;
+    }
+
+    void * info = reinterpret_cast<void *>(Rsc->TCP.RscTcpTimestampDelta);
+
+    NetBufferList.NetBufferListInfo[RscTcpTimestampDelta] = info;
+}
+
+_Use_decl_annotations_
+void
+RxMetadataTranslator::TranslatePacketIeee8021q(
+    NET_BUFFER_LIST & NetBufferList,
+    const NET_PACKET_IEEE8021Q * Ieee8021q
+)
+{
+    NDIS_NET_BUFFER_LIST_8021Q_INFO info = {};
+
+    info.TagHeader.UserPriority = Ieee8021q->PriorityCodePoint;
+    info.TagHeader.VlanId = Ieee8021q->VlanIdentifier;
+
+    NetBufferList.NetBufferListInfo[Ieee8021QNetBufferListInfo] = info.Value;
+}
+
+_Use_decl_annotations_
+void
+RxMetadataTranslator::TranslatePacketHash(
+    NET_BUFFER_LIST & NetBufferList,
+    const NET_PACKET_HASH * PacketHash
+)
+{
+    ULONG hashType = 0;
+
+    const NET_PACKET_HASH_PROTOCOL_TYPE ipv4Flags = NetPacketHashProtocolTypeIPv4 | NetPacketHashProtocolTypeIPv4Options;
+
+    if (WI_IsAnyFlagSet(PacketHash->ProtocolType, ipv4Flags))
+    {
+        if (WI_IsFlagSet(PacketHash->ProtocolType, NetPacketHashProtocolTypeTcp))
+        {
+            hashType = NDIS_HASH_TCP_IPV4;
+        }
+        else if (WI_IsFlagSet(PacketHash->ProtocolType, NetPacketHashProtocolTypeUdp))
+        {
+            hashType = NDIS_HASH_UDP_IPV4;
+        }
+        else
+        {
+            hashType = NDIS_HASH_IPV4;
+        }
+    }
+
+    if (WI_IsFlagSet(PacketHash->ProtocolType, NetPacketHashProtocolTypeIPv6))
+    {
+        if (WI_IsFlagSet(PacketHash->ProtocolType, NetPacketHashProtocolTypeTcp))
+        {
+            hashType = NDIS_HASH_TCP_IPV6;
+        }
+        else if (WI_IsFlagSet(PacketHash->ProtocolType, NetPacketHashProtocolTypeUdp))
+        {
+            hashType = NDIS_HASH_UDP_IPV6;
+        }
+        else
+        {
+            hashType = NDIS_HASH_IPV6;
+        }
+    }
+
+    if (WI_IsFlagSet(PacketHash->ProtocolType, NetPacketHashProtocolTypeIPv6Extensions))
+    {
+        if (WI_IsFlagSet(PacketHash->ProtocolType, NetPacketHashProtocolTypeTcp))
+        {
+            hashType = NDIS_HASH_TCP_IPV6_EX;
+        }
+        else if (WI_IsFlagSet(PacketHash->ProtocolType, NetPacketHashProtocolTypeUdp))
+        {
+            hashType = NDIS_HASH_UDP_IPV6_EX;
+        }
+        else
+        {
+            hashType = NDIS_HASH_IPV6_EX;
+        }
+    }
+
+    if (hashType)
+    {
+        NET_BUFFER_LIST_SET_HASH_TYPE(&NetBufferList, hashType);
+        NET_BUFFER_LIST_SET_HASH_FUNCTION(&NetBufferList, NdisHashFunctionToeplitz);
+        NET_BUFFER_LIST_SET_HASH_VALUE(&NetBufferList, PacketHash->HashValue);
+    }
 }

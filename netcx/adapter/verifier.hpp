@@ -46,7 +46,9 @@ class NxExecutionContextTask;
     NDIS_WLAN_WAKE_ON_NLO_DISCOVERY_SUPPORTED | \
     NDIS_WLAN_WAKE_ON_AP_ASSOCIATION_LOST_SUPPORTED | \
     NDIS_WLAN_WAKE_ON_GTK_HANDSHAKE_ERROR_SUPPORTED | \
-    NDIS_WLAN_WAKE_ON_4WAY_HANDSHAKE_REQUEST_SUPPORTED) \
+    NDIS_WLAN_WAKE_ON_4WAY_HANDSHAKE_REQUEST_SUPPORTED | \
+    NDIS_WLAN_WAKE_ON_INCOMING_ACTION_FRAME_SUPPORTED | \
+    NDIS_WLAN_WAKE_ON_CLIENT_DRIVER_DIAGNOSTIC_SUPPORTED) \
 
 #define NET_PACKET_FILTER_SUPPORTED_FLAGS ( \
     NetPacketFilterFlagDirected | \
@@ -175,6 +177,11 @@ typedef enum _FailureCode : ULONG_PTR
     FailureCode_OffloadNotPaused,
     FailureCode_InvalidGsoHardwareCapabilities,
     FailureCode_InvalidRSSConfiguration,
+    FailureCode_InvalidAlpcMessage,
+    FailureCode_StuckNetBufferList,
+    FailureCode_InvalidNetMemoryRelease,
+    FailureCode_InvalidNetMemoryConfigStructure,
+    FailureCode_LeakedNetMemoryNotAllMemoryReleased,
 } FailureCode;
 
 //
@@ -388,7 +395,19 @@ Verifier_VerifyNetAdapterTxCapabilities(
 );
 
 void
+Verifier_VerifyNetAdapterTxCapabilitiesNonDmaFields(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ const NET_ADAPTER_TX_CAPABILITIES *TxCapabilities
+);
+
+void
 Verifier_VerifyNetAdapterRxCapabilities(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ const NET_ADAPTER_RX_CAPABILITIES * RxCapabilities
+);
+
+void
+Verifier_VerifyNetAdapterRxCapabilitiesNonDmaFields(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ const NET_ADAPTER_RX_CAPABILITIES * RxCapabilities
 );
@@ -572,4 +591,10 @@ void
 Verifier_VerifyOffloadPaused(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ NxAdapter * pNxAdapter
+);
+
+void
+Verifier_VerifyNetMemoryConfig(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ NET_MEMORY_CONFIG const * Configuration
 );

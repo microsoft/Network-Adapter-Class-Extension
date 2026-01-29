@@ -4,10 +4,10 @@
 #pragma once
 
 #include "Nx.hpp"
-#include "ExecutionContext.hpp"
+#include "ExecutionContextWrapper.hpp"
 
 class NxExecutionContext
-    : public ExecutionContext
+    : public ExecutionContextWrapper
 {
 public:
 

@@ -30,3 +30,11 @@ NxGetPacketAddressType(
     _In_ NET_PACKET_LAYER2_TYPE Layer2Type,
     _In_ NET_BUFFER const & NetBuffer
 );
+
+AddressType
+NxInitializePacketLayout(
+    _In_ NDIS_MEDIUM MediaType,
+    _In_ const void *Payload,
+    _In_ size_t PayloadSize,
+    _Inout_ NET_PACKET* Packet
+);

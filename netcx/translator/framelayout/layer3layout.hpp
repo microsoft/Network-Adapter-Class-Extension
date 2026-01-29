@@ -23,11 +23,18 @@ ParseIPv4orIPv6Layout(
     _Inout_ size_t & Length
 );
 
+/*
+ * Protocol Numbers
+ * https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml
+ */
 enum class Protocol : UINT8
 {
     ICMPv4 = 0x01,
     TCP = 0x06,
     UDP = 0x11,
+    IPv6Fragment = 0x2c,
+    ICMPv6 = 0x3a,
+    IPv6DestOptions = 0x3c,
 };
 
 union IPv4
@@ -70,12 +77,19 @@ ParseIPv4Layout(
     _Inout_ size_t & Length
 );
 
+/*
+ * Next Header Types
+ * IPv6 Extension Header Types
+ * https://www.iana.org/assignments/ipv6-parameters/ipv6-parameters.xhtml
+ */
 enum class NextHeader : UINT8
 {
     ICMPv4 = Protocol::ICMPv4,
     TCP = Protocol::TCP,
     UDP = Protocol::UDP,
-    ICMPv6 = 58,
+    IPv6FragmentHeader = Protocol::IPv6Fragment, // extension header
+    ICMPv6 = Protocol::ICMPv6,
+    IPv6DestOptions = Protocol::IPv6DestOptions,
     NoNextHeader = 59,
 };
 

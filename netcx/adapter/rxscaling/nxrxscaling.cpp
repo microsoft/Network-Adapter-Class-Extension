@@ -11,13 +11,21 @@
 #include <windows.h>
 #include <ntstatus.h>
 #include <ntintsafe.h>
+#include <ntassert.h>
+#define ASSERT(x)
 
+#include <ntddndis.h>
 #include <ifdef.h>
 
 #endif
 
 #include <wdf.h>
-#include <preview/netadaptercx.h>
+#include <netadaptercx.h>
+
+#if NETCX_UMDF
+#include <WudfSystem.h>
+#endif
+
 #include <NetClientBuffer.h>
 #include <NetClientAdapter.h>
 #include <NxTrace.hpp>
@@ -28,6 +36,8 @@
 
 #include "idle/IdleStateMachine.hpp"
 #include "WdfObjectCallback.hpp"
+
+#include "NxRxScaling.tmh"
 
 static
 NDIS_RECEIVE_SCALE_CAPABILITIES const

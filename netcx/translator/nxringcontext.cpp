@@ -28,7 +28,7 @@ NxRingContext::Initialize(
     auto const allocationSize = ringSize + FIELD_OFFSET(NET_RING, Buffer[0]);
 
     auto context = reinterpret_cast<NET_RING *>(
-        ExAllocatePoolWithTag(NonPagedPoolNxCacheAligned, allocationSize, 'BRxN'));
+        ExAllocatePool2(POOL_FLAG_NON_PAGED | POOL_FLAG_CACHE_ALIGNED, allocationSize, 'BRxN'));
     if (! context)
     {
         return STATUS_INSUFFICIENT_RESOURCES;

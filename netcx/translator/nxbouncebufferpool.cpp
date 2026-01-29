@@ -12,12 +12,14 @@
 #include <net/virtualaddress_p.h>
 #include <net/mdl_p.h>
 
+
 struct FragmentContext
 {
     NET_CLIENT_BUFFER_POOL BufferPool;
     NET_CLIENT_BUFFER_POOL_DISPATCH const * BufferPoolDispatch;
     SIZE_T BufferIndex;
 };
+
 
 NxBounceBufferPool::NxBounceBufferPool(
     NET_RING_COLLECTION const & Rings,
@@ -47,11 +49,17 @@ NxBounceBufferPool::~NxBounceBufferPool(
 _Use_decl_annotations_
 NTSTATUS
 NxBounceBufferPool::Initialize(
+    PEPROCESS AssociatedProcess,
     NET_CLIENT_DISPATCH const &ClientDispatch,
     NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES &DatapathCapabilities,
     size_t NumberOfBuffers
 )
 {
+    // Currently the same NxBounceBufferPool can be initialized multiple times because of how
+    // we implement on demand Tx queues. This results in a memory leak because we don't have
+    // RAII wrappers for dispatch objects such as NET_CLIENT_BUFFER_POOL used in this class.
+    // We need to revisit how to handle on demand Tx queue resource allocation, but in the
+    // mean time ensure we don't leak resources.
     if (m_bufferPool != nullptr)
     {
         m_bufferPoolDispatch->NetClientDestroyBufferPool(m_bufferPool);
@@ -82,11 +90,13 @@ NxBounceBufferPool::Initialize(
         0,
         0,
         MM_ANY_NODE_OK, //use the numa node supplied by adapter capabilities
-        NET_CLIENT_BUFFER_POOL_FLAGS_NONE
+        NET_CLIENT_BUFFER_POOL_FLAGS_NONE,
+        AssociatedProcess
     };
 
     CX_RETURN_IF_NOT_NT_SUCCESS(
-        ClientDispatch.NetClientCreateBufferPool(&bufferPoolConfig,
+        ClientDispatch.NetClientCreateBufferPool(
+            &bufferPoolConfig,
             &m_bufferPool,
             &m_bufferPoolDispatch));
 
@@ -137,7 +147,7 @@ Remarks:
     }
 
     auto fragment = NetRingGetFragmentAtIndex(fr, frOsBegin);
-    auto virtualAddress = NetExtensionGetFragmentVirtualAddress(
+    auto virtualAddressExtension = NetExtensionGetFragmentVirtualAddress(
         &m_virtualAddressExtension, frOsBegin);
 
     RtlZeroMemory(fragment, sizeof(NET_FRAGMENT));
@@ -152,8 +162,12 @@ Remarks:
     {
         return false;
     }
- 
-    virtualAddress->VirtualAddress = dataHeader.VirtualAddress;
+
+#ifdef NETCX_REDIRECTOR
+    virtualAddressExtension->VirtualAddress = dataHeader.UmVirtualAddress;
+#else
+    virtualAddressExtension->VirtualAddress = dataHeader.KmVirtualAddress;
+#endif
 
     if (m_logicalAddressExtension.Enabled)
     {
@@ -166,6 +180,7 @@ Remarks:
     {
         auto fragmentMdl = NetExtensionGetFragmentMdl(
             &m_mdlExtension, frOsBegin);
+        // This is always null if DMA is enabled
         fragmentMdl->Mdl = dataHeader.Mdl;
     }
 
@@ -173,14 +188,14 @@ Remarks:
     fragment->Capacity = m_bufferSize;
     fragment->ValidLength = m_txPayloadBackfill;
 
-    PMDL mdl = NET_BUFFER_CURRENT_MDL(&NetBuffer);
+    PMDL mdlFromOs = NET_BUFFER_CURRENT_MDL(&NetBuffer);
     size_t mdlOffset = NET_BUFFER_CURRENT_MDL_OFFSET(&NetBuffer);
 
     size_t fragmentOffset = (size_t)fragment->Offset + m_txPayloadBackfill;
-    auto baseFragmentVa = static_cast<unsigned char *>(virtualAddress->VirtualAddress);
-    for (size_t remain = bytesToCopy; remain > 0; mdl = mdl->Next)
+    auto baseFragmentVa = static_cast<unsigned char *>(dataHeader.KmVirtualAddress);
+    for (size_t remain = bytesToCopy; remain > 0; mdlFromOs = mdlFromOs->Next)
     {
-        size_t const mdlByteCount = MmGetMdlByteCount(mdl);
+        size_t const mdlByteCount = MmGetMdlByteCount(mdlFromOs);
         if (mdlByteCount == 0)
         {
             continue;
@@ -190,8 +205,15 @@ Remarks:
 
         size_t const copySize = min(remain, mdlByteCount - mdlOffset);
 
-        void *sourceBuffer = static_cast<UCHAR *>(MmGetSystemAddressForMdlSafe(mdl, LowPagePriority | MdlMappingNoExecute)) + mdlOffset;
-        void *destinationBuffer = baseFragmentVa + fragmentOffset;
+        void * virtualAddress = MmGetSystemAddressForMdlSafe(mdlFromOs, LowPagePriority | MdlMappingNoExecute);
+        if (virtualAddress == nullptr)
+        {
+            // Unable to get the mapped system-space virtual address due to low resources
+            break;
+        }
+
+        void * sourceBuffer = static_cast<UCHAR*>(virtualAddress) + mdlOffset;
+        void * destinationBuffer = baseFragmentVa + fragmentOffset;
 
         // If we make the parsing code optional or parse the packets in
         // batches we might benefit from using RtlCopyMemoryNonTemporal
@@ -236,10 +258,12 @@ NxBounceBufferPool::FreeBounceBuffers(
     NET_PACKET &NetPacket
 )
 {
+#ifndef NETCX_REDIRECTOR
     if (NetPacket.Ignore)
     {
         return;
     }
+#endif
 
     auto fr = NetRingCollectionGetFragmentRing(m_rings);
     for (UINT32 i = 0; i < NetPacket.FragmentCount; i++)

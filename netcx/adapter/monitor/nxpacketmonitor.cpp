@@ -148,11 +148,12 @@ NxPacketMonitor::RegisterAdapter(
             &m_adapter.m_currentLinkLayerAddress.Address,
             m_adapter.m_currentLinkLayerAddress.Length));
 
-    UNICODE_STRING lowerEdgeName = RTL_CONSTANT_STRING(PKTMON_EDGE_LOWER);
+    DECLARE_CONST_UNICODE_STRING(lowerEdgeName, PKTMON_EDGE_LOWER);
+
     CX_RETURN_IF_NOT_NT_SUCCESS(
         PktMonClientAddEdge(
             &m_clientComponentContext,
-            &lowerEdgeName,
+            const_cast<UNICODE_STRING *>(&lowerEdgeName),
             PktMonDirTag_Rx,
             PktMonDirTag_Tx,
             m_adapter.GetMediaType(),

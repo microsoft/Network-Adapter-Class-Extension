@@ -81,6 +81,15 @@ ParseNullLayout(
 
     NT_FRE_ASSERT(Layout.Layer2Type == NetPacketLayer2TypeNull);
 
+    /*
+     * driver should have been required as a pre-condition to set
+     * Layout.Layer2HeaderLength == 0U but when this code was added
+     * the assert was not supplied. because this is not enforced we
+     * are now performing an unnecessary store.
+     *
+     * NT_FRE_ASSERT(Layout.Layer2HeaderLength == 0U);
+     */
+
     Layout.Layer2HeaderLength = 0U;
 
     return true;
@@ -129,6 +138,23 @@ ParseEthernetLayout(
     Layout.Layer2HeaderLength = size;
     switch (etherType)
     {
+
+    /*
+     * the assignment of Layout.Layer3Type is not right since the translator
+     * has been modified to operate directly on NET_PACKET.Layout. previously
+     * a new NET_PACKET_LAYOUT was provided and that allowed the caller to
+     * the opportunity to retain more specific layer 3 types.
+     *
+     * to resolve this problem we need to decide if we want the overwrite
+     * handled in the layer parser or if it is the responsibility of the
+     * caller.
+     *
+     * if the driver provides Layout.Layer3Type == NetPacketLayer3TypeIPv4WithOptions
+     * the assignment is incorrectly discarding the driver provided
+     * type with Layout.Layer3Type = NetPacketLayer3TypeIPv4UnspecifiedOptions
+     * which may negatively impact performance by causing packets to take
+     * the slow path.
+     */
 
     case EthernetType::IPv4:
         Layout.Layer3Type = NetPacketLayer3TypeIPv4UnspecifiedOptions;

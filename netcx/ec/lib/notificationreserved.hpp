@@ -10,6 +10,7 @@ struct NotificationReserved
     BOOLEAN
         Enabled;
 
+
     _IRQL_requires_max_(DISPATCH_LEVEL)
     static
     NotificationReserved *

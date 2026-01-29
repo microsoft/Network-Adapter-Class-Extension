@@ -69,6 +69,7 @@ PAGED KPoolPtr<THeader> MakeSizedPoolPtr(ULONG poolTag, size_t allocationSize)
 
 #else // (NTDDI_VERSION >= NTDDI_WIN10_VB && !defined(KRTL_USE_LEGACY_POOL_API)
 
+    #pragma warning( suppress : 4996 )
     auto allocation = ExAllocatePoolWithTag(NonPagedPoolNx, allocationSize, poolTag);
     if (!allocation)
     {
@@ -102,6 +103,7 @@ NONPAGED KPoolPtrNP<THeader> MakeSizedPoolPtrNP(ULONG poolTag, size_t allocation
 
 #else // (NTDDI_VERSION >= NTDDI_WIN10_VB) && !defined(KRTL_USE_LEGACY_POOL_API)
 
+    #pragma warning( suppress : 4996 )
     auto allocation = ExAllocatePoolWithTag(NonPagedPoolNx, allocationSize, poolTag);
     if (!allocation)
     {

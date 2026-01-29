@@ -39,7 +39,8 @@ void
 ActivityTracker::LogStateChange(
     ExecutionContextStateChangeReason Reason,
     ExecutionContextState PreviousState,
-    ExecutionContextState NewState
+    ExecutionContextState NewState,
+    Dispatcher const * Dispatcher
 )
 {
     auto & entry = m_entries[m_entryIndex];
@@ -59,7 +60,8 @@ ActivityTracker::LogStateChange(
         m_iterationCounter,
         m_workCounter,
         m_friendlyName->Length / sizeof(UNICODE_NULL),
-        m_friendlyName->Buffer);
+        m_friendlyName->Buffer,
+        reinterpret_cast<UINT64>(Dispatcher));
 }
 
 _Use_decl_annotations_

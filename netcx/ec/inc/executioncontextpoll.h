@@ -9,6 +9,7 @@ typedef enum _EXECUTION_CONTEXT_POLL_TYPE
     ExecutionContextPollTypeAdvance = 4000,
     ExecutionContextPollTypeNdisMiniportPostDriverPoll = 6000,
     ExecutionContextPollTypePostAdvance = 6000,
+    ExecutionContextPollTypeWake = 8000,
 } EXECUTION_CONTEXT_POLL_TYPE;
 
 typedef struct _EXECUTION_CONTEXT_POLL_PARAMETERS

@@ -16,6 +16,7 @@ TimeBudget::TimeBudget(
     : m_tryExtendMaxTime(TryExtendMaxTime)
     // 1 unit of "time increment" == 100 nanoseconds, typical value is 10ms or 10 * 10 * 1000 "TimeIncrement" units
     , m_timeIncrement(KeQueryTimeIncrement())
+     // sanity clamp to 60 minutes allowed in DPC
     , m_allowedTimeDurationInTicks(min(MaxTimeMs, ONE_HOUR_MS) * MS_TO_TIME_INCREMENT_MULT / m_timeIncrement)
     , m_watchdogDpcStarvationLimit(WatchdogDpcStarvationLimit)
     , m_irql(CurrentIrql)

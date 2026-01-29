@@ -27,9 +27,13 @@ Abstract:
 #include <net/ieee8021qtypes_p.h>
 
 #include "NxTranslationapp.hpp"
+#include "NxTxNblContext.hpp"
 #include <netiodef.h>
 #include <pktmonclnt.h>
 #include <pktmonloc.h>
+
+#include "NxPerfTuner.hpp"
+
 
 #ifndef _KERNEL_MODE
 #define NDIS_STATUS_PAUSED ((NDIS_STATUS)STATUS_NDIS_PAUSED)
@@ -203,18 +207,24 @@ NxTxXlat::TransmitNbls(
     // Check if the NBL serialization has any data
     PollNetBufferLists();
 
+    // Read maximum number of packets to indicate
+    UpdateMaxPacketsFromKnobs(Parameters->Irql);
+
     // Post NBLs to the producer side of the NBL
     TranslateNbls();
 
-    // Allow the NetAdapter to return any packets that it is done with.
-    YieldToNetAdapter();
+#ifndef NETCX_REDIRECTOR
+    if (m_packetRing.AnyNicPackets())
+    {
+        // if NIC owns any pacets, allow Nic to process them
+        YieldToNetAdapter();
+    }
+#endif
 
     // Drain any packets that the NIC has completed.
     // This means returning the associated NBLs for each completed
     // NET_PACKET.
     DrainCompletions();
-
-    UpdatePerfCounter();
 
     Parameters->WorkCounter = m_producedPackets + m_completedPackets;
 }
@@ -227,6 +237,9 @@ NxTxXlat::TransmitNblsStopping(
     bool isAllPacketsReturnedToOs = false;
     bool isAllPacketsSendCompleted = false;
 
+#ifdef NETCX_REDIRECTOR
+    isAllPacketsReturnedToOs = !m_packetRing.AnyNicPackets();
+#else
     if (m_packetRing.AnyNicPackets())
     {
         // if NIC still has pending packets, continue to poll them so the client driver
@@ -237,9 +250,13 @@ NxTxXlat::TransmitNblsStopping(
     {
         isAllPacketsReturnedToOs = true;
     }
+#endif
 
     if (m_packetRing.AnyReturnedPackets())
     {
+        // Read maximum number of packets to indicate
+        UpdateMaxPacketsFromKnobs(Parameters->Irql);
+
         // continue to drain any packets that the NIC has completed.
         // This means returning the associated NBLs for each completed
         // NET_PACKET
@@ -250,8 +267,6 @@ NxTxXlat::TransmitNblsStopping(
         isAllPacketsSendCompleted = true;
     }
 
-    UpdatePerfCounter();
-
     // The termination condition is that the NIC has returned all its
     // packets and netcx has send-completed all packets too
     if (isAllPacketsReturnedToOs && isAllPacketsSendCompleted)
@@ -260,8 +275,24 @@ NxTxXlat::TransmitNblsStopping(
         DropQueuedNetBufferLists();
 
         // DropQueuedNetBufferLists had completed as many NBLs as possible, but there's
-        // a chance that one parital NBL couldn't be completed up there.  Do it now.
-        AbortNbls(m_currentNbl);
+        // a chance that one parital NBL couldn't be completed up there.
+        if (m_currentNbl)
+        {
+            // This partially completed NBL may not be the original NBL,
+            // but replaced with a new one during software GSO
+            if (IsNetBufferListSoftwareSegmented(m_currentNbl))
+            {
+                auto originalNbl = m_currentNbl->ParentNetBufferList;
+                m_gsoContext.FreeSoftwareSegmentedNetBufferList(m_currentNbl);
+
+                // The NBL pointed by originalNbl was already completed when DropQueuedNetBufferLists()
+                // was invoked above, so we need to make sure we break the link to avoid a double free
+                originalNbl->Next = nullptr;
+                m_currentNbl = originalNbl;
+            }
+            AbortNbls(m_currentNbl);
+        }
+
         m_currentNbl = nullptr;
         m_currentNetBuffer = nullptr;
 
@@ -269,7 +300,7 @@ NxTxXlat::TransmitNblsStopping(
         m_readyToStop.Set();
     }
 
-    Parameters->WorkCounter = m_producedPackets + m_completedPackets;
+    Parameters->WorkCounter = (m_completedPackets << 16) + m_producedPackets;
 }
 
 void
@@ -293,7 +324,8 @@ NxTxXlat::DrainCompletions()
         m_txChecksumHardwareCapabilities,
         m_gsoHardwareCapabilities,
         m_adapterProperties.PacketMonitorLowerEdge,
-        m_adapterProperties.PacketMonitorComponentContext
+        m_adapterProperties.PacketMonitorComponentContext,
+        m_maxPackets
     };
 
     auto const result = translator.CompletePackets();
@@ -334,21 +366,11 @@ NxTxXlat::TranslateNbls()
         m_txChecksumHardwareCapabilities,
         m_gsoHardwareCapabilities,
         m_adapterProperties.PacketMonitorLowerEdge,
-        m_adapterProperties.PacketMonitorComponentContext
+        m_adapterProperties.PacketMonitorComponentContext,
+        m_maxPackets
     };
 
     m_producedPackets = translator.TranslateNbls();
-}
-
-void
-NxTxXlat::UpdatePerfCounter()
-{
-    auto pr = NetRingCollectionGetPacketRing(&m_rings);
-
-    InterlockedIncrementNoFence64(reinterpret_cast<LONG64 *>(&m_statistics.Perf.IterationCount));
-    InterlockedAddNoFence64(reinterpret_cast<LONG64 *>(&m_statistics.Perf.NblPending), m_synchronizedNblQueue.GetNblQueueDepth());
-    InterlockedAddNoFence64(reinterpret_cast<LONG64 *>(&m_statistics.Perf.PacketsCompleted), m_completedPackets);
-    InterlockedAddNoFence64(reinterpret_cast<LONG64 *>(&m_statistics.Perf.QueueDepth), NetRingGetRangeCount(pr, pr->BeginIndex, pr->EndIndex));
 }
 
 void
@@ -452,15 +474,12 @@ NxTxXlat::DequeueNetBufferListQueue()
 void
 NxTxXlat::YieldToNetAdapter()
 {
-    if (m_packetRing.AnyNicPackets())
+    if (m_dmaAdapter)
     {
-        if (m_dmaAdapter)
-        {
-            m_dmaAdapter->FlushIoBuffers(m_packetRing.NicPackets());
-        }
-
-        m_queueDispatch->Advance(m_queue);
+        m_dmaAdapter->FlushIoBuffers(m_packetRing.NicPackets());
     }
+
+    m_queueDispatch->Advance(m_queue);
 }
 
 _Use_decl_annotations_
@@ -524,6 +543,21 @@ NxTxXlat::Create(
     if (nbl)
     {
         m_app.GenerateDemuxProperties(nbl, m_properties);
+    }
+
+    if (auto peerAddressProperty = GetTxDemuxProperty(TxDemuxTypePeerAddress))
+    {
+        config.DemuxPeerAddressProperty = *peerAddressProperty;
+    }
+
+    if (auto wmmProperty = GetTxDemuxProperty(TxDemuxTypeWmmInfo))
+    {
+        config.DemuxWmmProperty = *wmmProperty;
+    }
+
+    if (auto demux8021pProperty = GetTxDemuxProperty(TxDemuxType8021p))
+    {
+        config.Demux8021pProperty = *demux8021pProperty;
     }
 
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
@@ -601,6 +635,7 @@ NxTxXlat::Create(
 
     CX_RETURN_IF_NOT_NT_SUCCESS(
         m_bounceBufferPool.Initialize(
+            m_adapterProperties.Process,
             *m_dispatch,
             m_datapathCapabilities,
             perfParameters.NumberOfBounceBuffers));
@@ -625,11 +660,13 @@ NxTxXlat::Create(
                 " Properties"
                 " Type %!QUEUETXDEMUXTYPE!"
                 " Demux %Iu"
-                " Value %u",
+                " Value %u"
+                " NET_CLIENT_ADAPTER %p",
                 GetQueueId(),
                 property.Type,
                 property.Value,
-                property.Property.UserPriority);
+                property.Property.UserPriority,
+                m_adapter);
 
             break;
 
@@ -639,7 +676,8 @@ NxTxXlat::Create(
                 " Properties"
                 " Type %!QUEUETXDEMUXTYPE!"
                 " Demux %Iu"
-                " Value %0.2x:%0.2x:%0.2x:%0.2x:%0.2x:%0.2x",
+                " Value %0.2x:%0.2x:%0.2x:%0.2x:%0.2x:%0.2x"
+                " NET_CLIENT_ADAPTER %p",
                 GetQueueId(),
                 property.Type,
                 property.Value,
@@ -648,7 +686,8 @@ NxTxXlat::Create(
                 property.Property.PeerAddress.Value[2],
                 property.Property.PeerAddress.Value[3],
                 property.Property.PeerAddress.Value[4],
-                property.Property.PeerAddress.Value[5]);
+                property.Property.PeerAddress.Value[5],
+                m_adapter);
 
             break;
 
@@ -780,10 +819,15 @@ NxTxXlat::GetTxDemuxProperty(
     return nullptr;
 }
 
-const NxTxCounters &
-NxTxXlat::GetStatistics(
-    void
-) const
+void
+NxTxXlat::UpdateMaxPacketsFromKnobs(
+    KIRQL Irql
+)
 {
-    return m_statistics;
+    NET_CLIENT_ADAPTER_PROPERTIES adapterProperties;
+    m_adapterDispatch->GetProperties(m_adapter, &adapterProperties);
+    m_maxPackets =
+        Irql == PASSIVE_LEVEL ?
+        adapterProperties.ExecutionContextKnobs->MaxPacketsSendComplete.AtPassive :
+        adapterProperties.ExecutionContextKnobs->MaxPacketsSendComplete.AtDispatch;
 }

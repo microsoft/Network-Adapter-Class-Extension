@@ -9,8 +9,8 @@
 #include <NxCollection.hpp>
 
 #include "BufferPool.hpp"
-#include "ExecutionContext.hpp"
-#include "ExecutionContextTask.hpp"
+#include "ExecutionContextWrapper.hpp"
+#include "KWaitTask.hpp"
 #include "IBufferVectorAllocator.hpp"
 #include "extension/NxExtensionLayout.hpp"
 
@@ -166,7 +166,7 @@ private:
     KPoolPtrNP<NET_RING>
         m_ring;
 
-    ExecutionContext * const
+    ExecutionContextWrapper * const
         m_executionContext;
 
     EXECUTION_CONTEXT_POLL
@@ -175,7 +175,7 @@ private:
     EXECUTION_CONTEXT_POLL
         m_reclaimBuffersPoll;
 
-    ExecutionContextTask
+    KWaitTask
         m_cancelTask;
 
     KAutoEvent

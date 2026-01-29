@@ -5,6 +5,7 @@
 #include "DmaAllocator.hpp"
 #include "DmaAllocator.tmh"
 
+
 _Use_decl_annotations_
 DmaAllocator::DmaAllocator(
     NET_CLIENT_MEMORY_CONSTRAINTS::DMA & Dma
@@ -40,17 +41,6 @@ DmaAllocator::AllocateVector(
         ? m_PreferredNode
         : PreferredNode;
 
-    auto bufferVector = wil::make_unique_nothrow<CommonBufferVector>(
-        m_DmaAdapter,
-        BufferCount,
-        BufferSize,
-        BufferOffset);
-
-    if (!bufferVector)
-    {
-        return nullptr;
-    }
-
     // Currently AllocateCommonBufferVector takes in MI_NODE_NUMBER_ZERO_BASED
     // as NUMA node parameter, so we have to convert MM_ANY_NODE_OK to an actual
     // node id ourself - pick node 0
@@ -58,6 +48,8 @@ DmaAllocator::AllocateVector(
     {
         node = 0;
     }
+
+    PDMA_COMMON_BUFFER_VECTOR commonBufferVector{ nullptr };
 
     auto const status = m_DmaAdapter->DmaOperations->AllocateCommonBufferVector(
         m_DmaAdapter,
@@ -68,12 +60,67 @@ DmaAllocator::AllocateVector(
         0,
         static_cast<ULONG>(BufferCount),
         static_cast<ULONG>(BufferSize),
-        &bufferVector->m_CommonBufferVector);
+        &commonBufferVector);
 
     if (status != STATUS_SUCCESS)
     {
         return nullptr;
     }
+
+    auto commonBufferVectorGuard = wil::scope_exit([this, commonBufferVector]()
+    {
+        if (commonBufferVector != nullptr)
+        {
+            m_DmaAdapter->DmaOperations->FreeCommonBufferVector(
+                m_DmaAdapter,
+                commonBufferVector);
+        }
+    });
+
+    Rtl::KArray<void*, NonPagedPoolNx> kernelModeAddress;
+    Rtl::KArray<ULONG64, NonPagedPoolNx> logicalAddress;
+
+    if (!kernelModeAddress.resize(BufferCount))
+    {
+        return nullptr;
+    }
+
+    if (!logicalAddress.resize(BufferCount))
+    {
+        return nullptr;
+    }
+
+    for (ULONG i = 0; i < BufferCount; i++)
+    {
+        void* va{ nullptr };
+        PHYSICAL_ADDRESS la{};
+
+        m_DmaAdapter->DmaOperations->GetCommonBufferFromVectorByIndex(
+            m_DmaAdapter,
+            commonBufferVector,
+            i,
+            &va,
+            &la);
+
+        kernelModeAddress[i] = va;
+        logicalAddress[i] = la.QuadPart;
+    }
+
+    auto bufferVector = wil::make_unique_nothrow<CommonBufferVector>(
+        m_DmaAdapter,
+        BufferCount,
+        BufferSize,
+        BufferOffset,
+        commonBufferVector,
+        wistd::move(kernelModeAddress),
+        wistd::move(logicalAddress));
+
+    if (!bufferVector)
+    {
+        return nullptr;
+    }
+
+    commonBufferVectorGuard.release();
 
     return bufferVector.release();
 }

@@ -15,6 +15,7 @@ using EC_THREAD_PRIORITY = LONG;
 
 using unique_zw_handle = wil::unique_any<HANDLE, decltype(&::ZwClose), &::ZwClose>;
 using unique_pkthread = wil::unique_any<PKTHREAD, decltype(&ObfDereferenceObject), &ObfDereferenceObject>;
+using unique_fileobject = wil::unique_any<FILE_OBJECT *, decltype(&ObfDereferenceObject), &ObfDereferenceObject>;
 
 struct unique_thread
 {
@@ -33,7 +34,10 @@ struct unique_thread
 };
 
 #else
-using EC_START_ROUTINE = wistd::remove_pointer<PTHREAD_START_ROUTINE>::type;
+_IRQL_requires_same_
+typedef DWORD (WINAPI EC_START_ROUTINE)(
+    LPVOID lpThreadParameter
+);
 using EC_RETURN = DWORD;
 using EC_THREAD = DWORD;
 static const EC_THREAD EC_THREAD_INVALID = 0;

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "ExecutionContextStatistics.hpp"
+#include <ExecutionContextPoll.h>
 #include <KPtr.h>
 
 typedef struct _EXECUTION_CONTEXT_POLL EXECUTION_CONTEXT_POLL;
@@ -12,6 +13,8 @@ struct PollReserved
     KPoolPtr<Statistics::Histogram>
         histogram;
 };
+
+static_assert(sizeof(PollReserved) <= FIELD_SIZE(EXECUTION_CONTEXT_POLL, Reserved));
 
 NONPAGED
 PollReserved &

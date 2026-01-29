@@ -47,4 +47,3 @@ typedef PHYSICAL_ADDRESS NDIS_PHYSICAL_ADDRESS, *PNDIS_PHYSICAL_ADDRESS;
 #include <KPtr.h>
 #include <KIntrusiveList.h>
 #include <KArray.h>
-

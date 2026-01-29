@@ -118,7 +118,7 @@ static
 size_t
 ComputeSizeAndUpdateExtensions(
     _In_ size_t Offset,
-    _In_ NET_EXTENSION_PRIVATE ** Array,
+    _Inout_updates_all_(ElementCount) NET_EXTENSION_PRIVATE ** Array,
     _In_ size_t ElementCount
 )
 {
@@ -177,6 +177,16 @@ NxExtensionLayout::GetExtension(
 
     return nullptr;
 }
+
+#ifdef NETCX_UMDF
+Rtl::KArray<NET_EXTENSION_PRIVATE> &
+NxExtensionLayout::GetAllExtensions(
+    void
+)
+{
+    return m_extensions;
+}
+#endif
 
 NTSTATUS
 NxExtensionLayout::PutExtension(

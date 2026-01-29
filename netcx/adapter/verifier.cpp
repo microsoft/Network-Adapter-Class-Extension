@@ -12,13 +12,13 @@ Abstract:
 #include "verifier.hpp"
 
 #include <net/checksumtypes_p.h>
+#include <net/databuffer_p.h>
 #include <net/logicaladdresstypes_p.h>
 #include <net/gsotypes_p.h>
 #include <net/mdltypes_p.h>
 #include <net/returncontexttypes_p.h>
 #include <net/rsctypes_p.h>
 #include <net/virtualaddresstypes_p.h>
-#include <net/databuffer_p.h>
 #include <net/wifi/exemptionactiontypes.h>
 #include <net/ieee8021qtypes.h>
 #include <net/packethashtypes.h>
@@ -27,8 +27,10 @@ Abstract:
 #include "NxAdapter.hpp"
 #include "NxDevice.hpp"
 #include "NxDriver.hpp"
+#ifdef _KERNEL_MODE
 #include "NxExecutionContext.hpp"
 #include "NxExecutionContextTask.hpp"
+#endif
 #include "NxQueue.hpp"
 #include "powerpolicy/NxPowerList.hpp"
 #include "version.hpp"
@@ -36,9 +38,15 @@ Abstract:
 
 #pragma warning(push)
 #pragma warning(disable:4201)
+#ifdef _KERNEL_MODE
 #include <Net20.h>
 #include <Net21.h>
 #include <Net22.h>
+#include <Net23.h>
+#endif // _KERNEL_MODE
+#include <Net24.h>
+#include <Net25.h>
+#include <Net26.h>
 #pragma warning(pop)
 
 #include "verifier.tmh"
@@ -532,38 +540,29 @@ Verifier_VerifyNetPacketQueueConfiguration(
 )
 {
     auto const uInputSize = Configuration->Size;
-    ULONG uExpectedSize = 0;
+#ifdef _KERNEL_MODE
+    ULONG uExpectedMinimumSize = sizeof(NET_PACKET_QUEUE_CONFIG_V2_0);
+#else
+    ULONG uExpectedMinimumSize = sizeof(NET_PACKET_QUEUE_CONFIG_V2_4);
+#endif
 
-    auto const clientVersion = MAKEVER(PrivateGlobals->ClientVersion.Major, PrivateGlobals->ClientVersion.Minor);
-
-    switch (clientVersion)
-    {
-        case MAKEVER(2,0):
-            uExpectedSize = sizeof(NET_PACKET_QUEUE_CONFIG_V2_0);
-            break;
-
-        case MAKEVER(2,1):
-            uExpectedSize = sizeof(NET_PACKET_QUEUE_CONFIG_V2_1);
-            break;
-
-        case MAKEVER(2,2):
-            uExpectedSize = sizeof(NET_PACKET_QUEUE_CONFIG_V2_2);
-            break;
-    }
-
-    if (uInputSize != uExpectedSize)
+    if (uInputSize < uExpectedMinimumSize)
     {
         Verifier_ReportViolation(
             PrivateGlobals,
             VerifierAction_DbgBreakIfDebuggerPresent,
             FailureCode_InvalidStructTypeSize,
             uInputSize,
-            uExpectedSize);
+            uExpectedMinimumSize);
     }
 
+#ifdef _KERNEL_MODE
     NETEXECUTIONCONTEXT executionContext = uInputSize > sizeof(NET_PACKET_QUEUE_CONFIG_V2_0)
         ? Configuration->ExecutionContext
         : nullptr;
+#else
+    NETEXECUTIONCONTEXT executionContext = nullptr;
+#endif
 
     // All Evt callbacks are required if an execution context is not provided
     if (executionContext == nullptr &&
@@ -769,15 +768,6 @@ Verifier_VerifyReceiveScalingCapabilities(
             0);
     }
 
-    if (! RTL_IS_POWER_OF_TWO(Capabilities->NumberOfQueues))
-    {
-        Verifier_ReportViolation(PrivateGlobals,
-            VerifierAction_BugcheckAlways,
-            FailureCode_NotPowerOfTwo,
-            Capabilities->NumberOfQueues,
-            0);
-    }
-
     if (Capabilities->ReceiveScalingHashTypes >=
         (NetAdapterReceiveScalingHashTypeToeplitz << 1))
     {
@@ -824,6 +814,35 @@ Verifier_VerifyReceiveScalingCapabilities(
 }
 
 void
+Verifier_VerifyNetMemoryConfig(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ const NET_MEMORY_CONFIG * Configuration
+)
+{
+    Verifier_VerifyNotNull(PrivateGlobals, Configuration);
+
+    if (Configuration->BufferAddress == nullptr)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_ParameterCantBeNull,
+            reinterpret_cast<ULONG_PTR>(Configuration),
+            0);
+    }
+
+    if (Configuration->BufferLength == 0)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidNetMemoryConfigStructure,
+            reinterpret_cast<ULONG_PTR>(Configuration),
+            0);
+    }
+}
+
+void
 Verifier_VerifyNetExtensionName(
     _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
     _In_ PCWSTR ExtensionName
@@ -836,14 +855,14 @@ Verifier_VerifyNetExtensionName(
             wcscmp(ExtensionName, NET_PACKET_EXTENSION_GSO_NAME) == 0 ||
             wcscmp(ExtensionName, NET_PACKET_EXTENSION_RSC_NAME) == 0 ||
             wcscmp(ExtensionName, NET_PACKET_EXTENSION_RSC_TIMESTAMP_NAME) == 0 ||
-            wcscmp(ExtensionName, NET_FRAGMENT_EXTENSION_DATA_BUFFER_NAME) == 0 ||
             wcscmp(ExtensionName, NET_FRAGMENT_EXTENSION_LOGICAL_ADDRESS_NAME) == 0 ||
             wcscmp(ExtensionName, NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_NAME) == 0 ||
             wcscmp(ExtensionName, NET_FRAGMENT_EXTENSION_RETURN_CONTEXT_NAME) == 0 ||
             wcscmp(ExtensionName, NET_FRAGMENT_EXTENSION_MDL_NAME) == 0 ||
             wcscmp(ExtensionName, NET_PACKET_EXTENSION_WIFI_EXEMPTION_ACTION_NAME) == 0 ||
             wcscmp(ExtensionName, NET_PACKET_EXTENSION_IEEE8021Q_NAME) == 0 ||
-            wcscmp(ExtensionName, NET_PACKET_EXTENSION_HASH_NAME) == 0;
+            wcscmp(ExtensionName, NET_PACKET_EXTENSION_HASH_NAME) == 0 || 
+            wcscmp(ExtensionName, NET_FRAGMENT_EXTENSION_NET_MEMORY_NAME) == 0;
 
         if (! isBuiltin)
         {
@@ -927,6 +946,7 @@ Verifier_VerifyNetAdapterTxCapabilities(
             1);
     }
 
+#if NETCX_KMDF
     // If the mapping requirement is DMA, the adapter has to provide the DMA v3 inteface
     if (TxCapabilities->MappingRequirement == NetMemoryMappingRequirementDmaMapped)
     {
@@ -944,7 +964,17 @@ Verifier_VerifyNetAdapterTxCapabilities(
                 2);
         }
     }
+#endif
 
+    Verifier_VerifyNetAdapterTxCapabilitiesNonDmaFields(PrivateGlobals, TxCapabilities);
+}
+
+void
+Verifier_VerifyNetAdapterTxCapabilitiesNonDmaFields(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ const NET_ADAPTER_TX_CAPABILITIES *TxCapabilities
+)
+{
     if (TxCapabilities->MaximumNumberOfQueues == 0)
     {
         Verifier_ReportViolation(
@@ -985,6 +1015,7 @@ Verifier_VerifyNetAdapterRxCapabilities(
     _In_ const NET_ADAPTER_RX_CAPABILITIES *RxCapabilities
 )
 {
+#if NETCX_KMDF
     // If the adapter does not ask the OS to allocate receive fragments, then
     // EvtAdapterReturnRxBuffer must be set
     if (RxCapabilities->AllocationMode == NetRxFragmentBufferAllocationModeDriver)
@@ -1000,6 +1031,30 @@ Verifier_VerifyNetAdapterRxCapabilities(
                 0);
         }
     }
+    else if (RxCapabilities->AllocationMode == NetRxFragmentBufferAllocationModeDriverV2)
+    {
+        if ((RxCapabilities->AttachmentMode != NetRxFragmentBufferAttachmentModeDriver) ||
+            (RxCapabilities->MemoryCollection == WDF_NO_HANDLE))
+        {
+            Verifier_ReportViolation(
+                PrivateGlobals,
+                VerifierAction_BugcheckAlways,
+                FailureCode_InvalidAdapterRxCapabilities,
+                (ULONG_PTR) RxCapabilities,
+                0);
+        }
+    }
+#else
+    if (RxCapabilities->AllocationMode == NetRxFragmentBufferAllocationModeDriver)
+    {
+        Verifier_ReportViolation(
+            PrivateGlobals,
+            VerifierAction_BugcheckAlways,
+            FailureCode_InvalidAdapterRxCapabilities,
+            (ULONG_PTR) RxCapabilities,
+            0);
+    }
+#endif
 
     // If the mapping requirement is DMA, the adapter has to provide the DMA capabilities
     if (RxCapabilities->MappingRequirement == NetMemoryMappingRequirementDmaMapped &&
@@ -1013,6 +1068,7 @@ Verifier_VerifyNetAdapterRxCapabilities(
             1);
     }
 
+#if NETCX_KMDF
     // If the mapping requirement is DMA, the adapter has to provide the DMA v3 inteface
     if (RxCapabilities->MappingRequirement == NetMemoryMappingRequirementDmaMapped)
     {
@@ -1030,7 +1086,17 @@ Verifier_VerifyNetAdapterRxCapabilities(
                 2);
         }
     }
+#endif
 
+    Verifier_VerifyNetAdapterRxCapabilitiesNonDmaFields(PrivateGlobals, RxCapabilities);
+}
+
+void
+Verifier_VerifyNetAdapterRxCapabilitiesNonDmaFields(
+    _In_ NX_PRIVATE_GLOBALS const * PrivateGlobals,
+    _In_ const NET_ADAPTER_RX_CAPABILITIES * RxCapabilities
+)
+{
     if (RxCapabilities->MaximumNumberOfQueues == 0)
     {
         Verifier_ReportViolation(
@@ -1923,36 +1989,24 @@ Verifier_VerifyNdisPmCapabilities(
 )
 {
     ULONG uInputSize = NdisPmCapabilities->Size;
-    ULONG uExpectedSize = 0;
+#ifdef _KERNEL_MODE
+    ULONG uExpectedMinimumSize = sizeof(NET_ADAPTER_NDIS_PM_CAPABILITIES_V2_0);
+#else
+    ULONG uExpectedMinimumSize = sizeof(NET_ADAPTER_NDIS_PM_CAPABILITIES_V2_4);
+#endif
 
-    auto const clientVersion = MAKEVER(PrivateGlobals->ClientVersion.Major, PrivateGlobals->ClientVersion.Minor);
-
-    switch (clientVersion)
-    {
-        case MAKEVER(2,0):
-            uExpectedSize = sizeof(NET_ADAPTER_NDIS_PM_CAPABILITIES_V2_0);
-            break;
-
-        case MAKEVER(2,1):
-            uExpectedSize = sizeof(NET_ADAPTER_NDIS_PM_CAPABILITIES_V2_1);
-            break;
-
-        case MAKEVER(2,2):
-            uExpectedSize = sizeof(NET_ADAPTER_NDIS_PM_CAPABILITIES_V2_2);
-            break;
-    }
-
-    if (uInputSize != uExpectedSize)
+    if (uInputSize < uExpectedMinimumSize)
     {
         Verifier_ReportViolation(
             PrivateGlobals,
             VerifierAction_BugcheckAlways,
             FailureCode_InvalidStructTypeSize,
             uInputSize,
-            uExpectedSize);
+            uExpectedMinimumSize);
     }
 
-    auto const & mediaSpecificWakeUpEvents = NdisPmCapabilities->MediaSpecificWakeUpEvents;
+    auto const clientVersion = MAKEVER(PrivateGlobals->ClientVersion.Major, PrivateGlobals->ClientVersion.Minor);
+    auto const& mediaSpecificWakeUpEvents = NdisPmCapabilities->MediaSpecificWakeUpEvents;
     auto const supportedProtocolOffloads = clientVersion > MAKEVER(2, 0)
         ? NdisPmCapabilities->SupportedProtocolOffloads
         : 0;
@@ -2124,6 +2178,7 @@ Verifier_VerifyIsCollectingResetDiagnostics(
     }
 }
 
+#ifdef _KERNEL_MODE
 _Use_decl_annotations_
 void
 Verifier_VerifyTaskNotQueued(
@@ -2158,6 +2213,7 @@ Verifier_VerifyExecutionContextConfig(
             0);
     }
 }
+#endif
 
 void
 Verifier_VerifyTxChecksumCapabilities(

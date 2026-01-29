@@ -55,9 +55,6 @@ union RxExtensions {
             RscTimestamp;
 
         NET_EXTENSION
-            DataBuffer;
-
-        NET_EXTENSION
             LogicalAddress;
 
         NET_EXTENSION
@@ -71,6 +68,9 @@ union RxExtensions {
 
         NET_EXTENSION
             Hash;
+
+        NET_EXTENSION
+            NetMemoryId;
     } Extension;
 
     NET_EXTENSION

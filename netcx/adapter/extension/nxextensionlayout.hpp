@@ -36,6 +36,13 @@ public:
         NET_EXTENSION_TYPE Type
     ) const;
 
+#ifdef NETCX_UMDF
+    Rtl::KArray<NET_EXTENSION_PRIVATE> &
+    GetAllExtensions(
+        void
+    );
+#endif
+
     NTSTATUS
     PutExtension(
         PCWSTR Name,

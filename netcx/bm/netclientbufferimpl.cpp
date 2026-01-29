@@ -6,6 +6,7 @@
 #include "KPtr.h"
 
 #include <net/fragment.h>
+#include <UserModeMapping.hpp>
 
 #include "NetClientBufferImpl.tmh"
 
@@ -22,10 +23,24 @@ NetClientDestroyBufferPool(
 {
     PAGED_CODE();
 
-    BufferPool* pool
-        = reinterpret_cast<BufferPool *> (Pool);
+    BufferPool* pool = reinterpret_cast<BufferPool*>(Pool);
+    auto process = pool->GetAssociatedProcess();
 
-    delete pool;
+    if (process)
+    {
+#ifdef _KERNEL_MODE
+        ObfReferenceObject(process);
+        unique_process_object referencedProcess{ process };
+#endif
+        RunInProcessContext(process, [pool]()
+        {
+            delete pool;
+        });
+    }
+    else
+    {
+        delete pool;
+    }
 }
 
 NONPAGEDX
@@ -66,7 +81,7 @@ NetClientAllocateBuffer(
     pool->AddRef(index);
 
     pool->OwnedByOs(index);
-    
+
     pool->Preview(index,
                   NetDataHeader);
 
@@ -135,7 +150,7 @@ NetClientCreateBufferPool(
     CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !bufferManager);
 
     wistd::unique_ptr<BufferPool> pool
-        = wil::make_unique_nothrow<BufferPool>();
+        = wil::make_unique_nothrow<BufferPool>(BufferPoolConfig->Process);
 
     CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !pool);
 
@@ -148,14 +163,31 @@ NetClientCreateBufferPool(
 
     IBufferVector* bufferVector = nullptr;
 
-    CX_RETURN_IF_NOT_NT_SUCCESS(
-        bufferManager->AllocateBufferVector(
-            BufferPoolConfig->BufferCount,
-            BufferPoolConfig->BufferSize,
-            combinedAlignmentRequirement,
-            BufferPoolConfig->BufferAlignmentOffset,
-            BufferPoolConfig->PreferredNode,
-            &bufferVector));
+    if (pool->GetAssociatedProcess())
+    {
+        CX_RETURN_IF_NOT_NT_SUCCESS(
+            RunInProcessContext(pool->GetAssociatedProcess(), [&]()
+            {
+                return bufferManager->AllocateBufferVector(
+                    BufferPoolConfig->BufferCount,
+                    BufferPoolConfig->BufferSize,
+                    combinedAlignmentRequirement,
+                    BufferPoolConfig->BufferAlignmentOffset,
+                    BufferPoolConfig->PreferredNode,
+                    &bufferVector);
+            }));
+    }
+    else
+    {
+        CX_RETURN_IF_NOT_NT_SUCCESS(
+            bufferManager->AllocateBufferVector(
+                BufferPoolConfig->BufferCount,
+                BufferPoolConfig->BufferSize,
+                combinedAlignmentRequirement,
+                BufferPoolConfig->BufferAlignmentOffset,
+                BufferPoolConfig->PreferredNode,
+                &bufferVector));
+    }
 
     CX_RETURN_IF_NOT_NT_SUCCESS(pool->Fill(bufferVector));
 

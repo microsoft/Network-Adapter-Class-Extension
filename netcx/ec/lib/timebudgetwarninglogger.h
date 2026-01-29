@@ -8,25 +8,17 @@
 class TimeBudgetWarningLogger
 {
 public:
-    PAGED
+    NONPAGED
     TimeBudgetWarningLogger(
         const GUID& ClientIdentifier,
-        const ULONG DispatchTimeWarningInterval
+        const ULONG DispatchTimeWarningInterval,
+        ULONG DispatchIrqlWarningWatermarkMs,
+        UNICODE_STRING const* FriendlyName
     );
 
     NONPAGED
     void LogWarningIfOvertime(
         _In_ const TimeBudget& timeBudget
-    );
-
-    PAGED
-    void SetFriendlyName(
-        UNICODE_STRING const * FriendlyName
-    );
-
-    PAGED
-    void SetWatermark(
-        _In_ ULONG DispatchIrqlWarningWatermarkMs
     );
 
 private:

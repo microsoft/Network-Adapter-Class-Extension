@@ -48,62 +48,24 @@ RxScaling::Initialize(
 
     auto const capabilities = m_app.GetReceiveScalingCapabilities();
 #ifdef _KERNEL_MODE
-    NDIS_CONFIGURATION_OBJECT configurationObject = {
-        {
-            NDIS_OBJECT_TYPE_CONFIGURATION_OBJECT,
-            NDIS_CONFIGURATION_OBJECT_REVISION_1,
-            NDIS_SIZEOF_CONFIGURATION_OBJECT_REVISION_1
-        },
+    size_t RssProcInfoBufSize = 0;
+    NDIS_STATUS ndisStatus = NdisGetRssProcessorInformation(
         m_app.GetProperties().NdisAdapterHandle,
-        0,
-    };
+        NULL,
+        reinterpret_cast<PSIZE_T>(&RssProcInfoBufSize));
+    NT_FRE_ASSERT(ndisStatus == NDIS_STATUS_BUFFER_TOO_SHORT && RssProcInfoBufSize > 0);
 
-    NDIS_HANDLE handle;
-    NDIS_STATUS ndisStatus = NdisOpenConfigurationEx(&configurationObject, &handle);
-    if (ndisStatus != NDIS_STATUS_SUCCESS)
-    {
-        return NdisConvertNdisStatusToNtStatus(ndisStatus);
-    }
+    auto rssProcessorInfo = MakeSizedPoolPtrNP<NDIS_RSS_PROCESSOR_INFO>('RxrN',
+        RssProcInfoBufSize);
+    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !rssProcessorInfo);
 
-    auto configurationHandle = wil::unique_any<NDIS_HANDLE,
-        decltype(&::NdisCloseConfiguration), &::NdisCloseConfiguration>(handle);
-    auto const readParameter = [handle](
-        NDIS_STRING & ParameterName,
-        ULONG & ParameterValue,
-        ULONG ParameterLimit,
-        ULONG DefaultValue
-    )
-    {
-        NDIS_STATUS status;
-        NDIS_CONFIGURATION_PARAMETER * parameter;
-        NdisReadConfiguration(&status, &parameter, handle, &ParameterName, NdisParameterInteger);
-        switch (status)
-        {
-        case NDIS_STATUS_SUCCESS:
-            ParameterValue = parameter->ParameterData.IntegerData;
-            if (ParameterValue > ParameterLimit)
-            {
-                ParameterValue = ParameterLimit;
-            }
-            break;
+    CX_RETURN_NTSTATUS_IF_NOT_NDIS_STATUS_SUCCESS(NdisGetRssProcessorInformation(
+        m_app.GetProperties().NdisAdapterHandle,
+        rssProcessorInfo.get(),
+        reinterpret_cast<PSIZE_T>(&RssProcInfoBufSize)));
 
-        case NDIS_STATUS_FAILURE:
-            ParameterValue = DefaultValue;
-            return STATUS_SUCCESS;
-
-        }
-        return NdisConvertNdisStatusToNtStatus(status);
-    };
-
-    ULONG minGroup;
-    NDIS_STRING RssBaseProcGroupStr = NDIS_STRING_CONST("*RssBaseProcGroup");
-    CX_RETURN_IF_NOT_NT_SUCCESS(
-        readParameter(RssBaseProcGroupStr, minGroup, MAXIMUM_GROUPS - 1, 0));
-
-    ULONG maxGroup;
-    NDIS_STRING RssMaxProcGroupStr = NDIS_STRING_CONST("*RssMaxProcGroup");
-    CX_RETURN_IF_NOT_NT_SUCCESS(
-        readParameter(RssMaxProcGroupStr, maxGroup, MAXIMUM_GROUPS - 1, 0));
+    ULONG minGroup = rssProcessorInfo.get()->RssBaseProcessor.Group;
+    ULONG maxGroup = rssProcessorInfo.get()->RssMaxProcessor.Group;
 
     for (auto groupIndex = static_cast<UINT16>(minGroup); groupIndex <= maxGroup; groupIndex++)
     {
@@ -116,15 +78,8 @@ RxScaling::Initialize(
 
     NT_FRE_ASSERT(0 != m_maxGroupProcessorCount);
 
-    ULONG minNumber;
-    NDIS_STRING RssBaseProcNumberStr = NDIS_STRING_CONST("*RssBaseProcNumber");
-    CX_RETURN_IF_NOT_NT_SUCCESS(
-        readParameter(RssBaseProcNumberStr, minNumber, MAXIMUM_PROC_PER_GROUP - 1, 0));
-
-    ULONG maxNumber;
-    NDIS_STRING RssMaxProcNumberStr = NDIS_STRING_CONST("*RssMaxProcNumber");
-    CX_RETURN_IF_NOT_NT_SUCCESS(
-        readParameter(RssMaxProcNumberStr, maxNumber, MAXIMUM_PROC_PER_GROUP - 1, MAXIMUM_PROC_PER_GROUP - 1));
+    ULONG minNumber = rssProcessorInfo.get()->RssBaseProcessor.Number;
+    ULONG maxNumber = rssProcessorInfo.get()->RssMaxProcessor.Number;
 
     m_defaultProcessor = { static_cast<UINT16>(minGroup), static_cast<UINT8>(minNumber) };
 
@@ -137,15 +92,21 @@ RxScaling::Initialize(
         static_cast<UINT8>(maxNumber));
 
     m_numberOfQueues = capabilities.NumberOfIndirectionQueues;
+
+    m_rssProfile = rssProcessorInfo.get()->RssProfile;
+
 #endif // _KERNEL_MODE
 
-    CX_RETURN_NTSTATUS_IF(
+    CX_RETURN_NTSTATUS_IF_MSG(
         STATUS_INSUFFICIENT_RESOURCES,
-        ! m_affinitizedQueues.resize(m_maxProcessorIndex - m_minProcessorIndex));
+        ! m_affinitizedQueues.resize(m_maxProcessorIndex - m_minProcessorIndex + 1),
+        "Failed to resize affinitized queues for RxScaling");
 
-    CX_RETURN_NTSTATUS_IF(
+    CX_RETURN_NTSTATUS_IF_MSG(
         STATUS_INSUFFICIENT_RESOURCES,
-        ! m_indirectionTable.resize(capabilities.NumberOfIndirectionTableEntries));
+        ! m_indirectionTable.resize(capabilities.NumberOfIndirectionTableEntries),
+        "Failed to resize indirection table for RxScaling");
+
     for (auto & entry : m_indirectionTable)
     {
         entry = 0U;
@@ -313,6 +274,11 @@ RxScaling::EvaluateIndirectionTableEntries(
         }
 
         TranslatedIndirectionEntries translatedEntries = {};
+        CX_RETURN_NTSTATUS_IF_MSG(
+            STATUS_INSUFFICIENT_RESOURCES,
+            ! translatedEntries.resize(Parameters.NumberOfIndirectionTableEntries),
+            "Insufficient resource to store translated entries.");
+
         for (size_t i = 0; i < Parameters.NumberOfIndirectionTableEntries; i++)
         {
             auto const queueIndex = m_indirectionTable[i];
@@ -410,7 +376,21 @@ RxScaling::SetAffinitizedQueue(
     PROCESSOR_NUMBER const & Affinity
 )
 {
+    // Maintain the queue mapping to route packets to correct queue
     Queue->SetAffinity(Affinity);
+    m_affinitizedQueues[Index] = { Queue, Queue->GetQueueId(), Affinity };
+}
+
+_Use_decl_annotations_
+void
+RxScaling::SetMappedQueue(
+    size_t Index,
+    NxRxXlat * Queue,
+    PROCESSOR_NUMBER const & Affinity
+)
+{
+    // Maintain the queue mapping to route packets to correct queue
+    Queue->SetMapped(true);
     m_affinitizedQueues[Index] = { Queue, Queue->GetQueueId(), Affinity };
 }
 
@@ -436,14 +416,29 @@ RxScaling::MapAffinitizedQueue(
     //
     // find an unmapped queue and map it to the target processor
     //
-    for (size_t i = 0; i < m_queues.count(); i++)
+    if (m_rssProfile == NdisRssProfileBalanced)
     {
-        auto & searchQueue = m_queues[i];
-        if (! searchQueue->IsAffinitized())
+        for (size_t i = 0; i < m_queues.count(); i++)
         {
-            SetAffinitizedQueue(Index, searchQueue.get(), Affinity);
+            auto& searchQueue = m_queues[i];
+            if (!searchQueue->IsMapped())
+            {
+                SetMappedQueue(Index, searchQueue.get(), Affinity);
+                return searchQueue.get();
+            }
+        }
+    }
+    else
+    {
+        for (size_t i = 0; i < m_queues.count(); i++)
+        {
+            auto& searchQueue = m_queues[i];
+            if (!searchQueue->IsAffinitized())
+            {
+                SetAffinitizedQueue(Index, searchQueue.get(), Affinity);
 
-            return searchQueue.get();
+                return searchQueue.get();
+            }
         }
     }
 
@@ -597,7 +592,7 @@ RxScaling::SetIndirectionEntries(
     NTSTATUS status = STATUS_SUCCESS;
     do {
         NET_CLIENT_RECEIVE_SCALING_INDIRECTION_ENTRIES entries = {
-            TranslatedEntries.Entries,
+            &TranslatedEntries.Entries[0],
             NumberOfEntries,
         };
 
@@ -678,8 +673,8 @@ RxScaling::SetIndirectionEntries(
     NDIS_OID_REQUEST & Request
 )
 {
-    auto const buffer = static_cast<unsigned char *>(Request.DATA.SET_INFORMATION.InformationBuffer);
-    auto const length = Request.DATA.SET_INFORMATION.InformationBufferLength;
+    auto const buffer = static_cast<unsigned char const *>(Request.DATA.METHOD_INFORMATION.InformationBuffer);
+    auto const length = Request.DATA.METHOD_INFORMATION.InputBufferLength;
 
     CX_RETURN_NTSTATUS_IF_MSG(
         STATUS_INVALID_PARAMETER,
@@ -704,6 +699,11 @@ RxScaling::SetIndirectionEntries(
         "RssEntryTable does not start and finish within the InformationBuffer");
 
     TranslatedIndirectionEntries translatedEntries = {};
+    CX_RETURN_NTSTATUS_IF_MSG(
+        STATUS_INSUFFICIENT_RESOURCES,
+        ! translatedEntries.resize(parameters->NumberOfRssEntries),
+        "Insufficient resource to store translated entries.");
+
     for (size_t i = 0; i < parameters->NumberOfRssEntries; i++)
     {
         auto const processorNumber = entries[i].TargetProcessorNumber;
@@ -753,9 +753,6 @@ RxScaling::SetIndirectionEntries(
             "Unable to set indirection table entries");
     }
 
-    m_numberIndirectionTableEntries = parameters->NumberOfRssEntries;
-
-
     return status;
 }
 
@@ -780,7 +777,7 @@ RxScaling::Configure(
     {
         if (! queue->IsAffinitized())
         {
-            (void)MapAffinitizedQueue(m_minProcessorIndex, m_defaultProcessor);
+            (void)MapAffinitizedQueue(0, m_defaultProcessor);
         }
     }
 
@@ -789,14 +786,18 @@ RxScaling::Configure(
     //
     // This re-establishes the association between the translator queues
     // and any processors the queues had been affinitized to.
+    // Set the affinity only when RSS profile is not NdisRssProfileBalanced.
     //
-    for (size_t i = 0; i < m_affinitizedQueues.count(); i++)
+    if (m_rssProfile != NdisRssProfileBalanced)
     {
-        auto & affinitizedQueue = m_affinitizedQueues[i];
-        if (affinitizedQueue.Queue)
+        for (size_t i = 0; i < m_affinitizedQueues.count(); i++)
         {
-            affinitizedQueue.Queue = m_queues[affinitizedQueue.QueueId].get();
-            affinitizedQueue.Queue->SetAffinity(affinitizedQueue.Affinity);
+            auto & affinitizedQueue = m_affinitizedQueues[i];
+            if (affinitizedQueue.Queue)
+            {
+                affinitizedQueue.Queue = m_queues[affinitizedQueue.QueueId].get();
+                affinitizedQueue.Queue->SetAffinity(affinitizedQueue.Affinity);
+            }
         }
     }
 
@@ -807,6 +808,11 @@ RxScaling::Configure(
     // is done even if receive scaling is disabled.
     //
     TranslatedIndirectionEntries translatedEntries = {};
+    CX_RETURN_NTSTATUS_IF_MSG(
+        STATUS_INSUFFICIENT_RESOURCES,
+        ! translatedEntries.resize(m_indirectionTable.count()),
+        "Insufficient resource to store translated entries.");
+
     for (size_t i = 0; i < m_indirectionTable.count(); i++)
     {
         auto const queueIndex = m_indirectionTable[i];
@@ -816,22 +822,25 @@ RxScaling::Configure(
         translatedEntries.Entries[i] = { queue->GetQueue(), STATUS_SUCCESS, static_cast<UINT32>(i) };
     }
 
-    CX_RETURN_IF_NOT_NT_SUCCESS(
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         SetIndirectionEntries(
             m_indirectionTable.count(),
             SET_INDIRECTION_ENTRIES_RETRY,
-            translatedEntries));
+            translatedEntries),
+        "Failed to set indirection entries while configuring Rx scaling");
 
     //
     // Restore receive scaling on the adapter, if enabled.
     //
     if (m_enabled)
     {
-        CX_RETURN_IF_NOT_NT_SUCCESS(
-            SetHashSecretKey());
+        CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+            SetHashSecretKey(),
+            "Failed to set Hash secret key while configuring Rx scaling");
 
-        CX_RETURN_IF_NOT_NT_SUCCESS(
-            SetEnabled());
+        CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+            SetEnabled(),
+            "Failed to enable RSS while configuring Rx scaling");
     }
 
     m_configured = true;
@@ -881,8 +890,8 @@ RxScaling::IsContained(
    return IsContained(BufferSize, ElementOffset, end);
 }
 
-_Use_decl_annotations_
 template<typename T>
+_Use_decl_annotations_
 T const *
 RxScaling::TryGetArray(
     void const * Buffer,
@@ -897,4 +906,13 @@ RxScaling::TryGetArray(
     }
 
     return reinterpret_cast<T const *>(reinterpret_cast<unsigned char const *>(Buffer) + ElementOffset);
+}
+
+_Use_decl_annotations_
+Rtl::KArray<size_t, NonPagedPoolNx> const &
+RxScaling::GetIndirectionTable(
+    void
+) const
+{
+    return m_indirectionTable;
 }

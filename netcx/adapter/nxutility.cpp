@@ -134,9 +134,8 @@ Arguments:
         if (!NT_SUCCESS(status)) {
 
             //
-            // TODO: This would result in the client's EvtCleanup and
-            // EvtDestroy callbacks getting called.
-            // That is not ideal. We need WDF support to address that.
+            // Deleting the string triggers the client's EvtCleanup and
+            // EvtDestroy callbacks. WDF does not provide an alternate path.
             //
             WdfObjectDelete(wdfstring);
             LogError(FLAG_UTILITY,
@@ -164,9 +163,8 @@ Exit:
         while (numberOfStringsAdded != 0) {
 
             //
-            // TODO: This would result in the client's EvtCleanup and
-            // EvtDestroy callbacks getting called.
-            // That is not ideal. We need WDF support to address that.
+            // Deleting the string triggers the client's EvtCleanup and
+            // EvtDestroy callbacks. WDF does not provide an alternate path.
             //
             WDFOBJECT str;
             str = WdfCollectionGetLastItem(Collection);

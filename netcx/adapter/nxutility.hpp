@@ -14,8 +14,6 @@ Abstract:
 #include <KWaitEvent.h>
 #include <KArray.h>
 
-#include "ExecutionContext.hpp"
-
 class AsyncResult
 {
 public:
@@ -37,15 +35,6 @@ private:
 
     NTSTATUS
         m_status = STATUS_SUCCESS;
-};
-
-enum class DeviceState
-{
-    Initialized = 0,
-    SelfManagedIoInitialized,
-    Releasing,
-    Released,
-    Removed
 };
 
 _Must_inspect_result_
@@ -110,7 +99,9 @@ using unique_wdf_reference = wil::unique_any<TWdfHandle, decltype(&::_WdfObjectD
 template<typename TFxObject>
 using unique_fx_ptr = wistd::unique_ptr<TFxObject, CFxObjectDeleter>;
 
+#ifdef _KERNEL_MODE
 using unique_file_object_reference = wistd::unique_ptr<FILE_OBJECT, wil::function_deleter<decltype(&::ObfDereferenceObject), &::ObfDereferenceObject>>;
+#endif
 
 struct unique_ptr_array_deleter
 {
@@ -159,9 +150,9 @@ InterlockedDecrementU(
 inline
 LONG
 NxInterlockedDecrementFloor(
-    __inout LONG  volatile *Target,
-    __in LONG Floor
-    )
+    _Inout_ LONG  volatile * Target,
+    _In_ LONG Floor
+)
 {
     LONG startVal;
     LONG currentVal;

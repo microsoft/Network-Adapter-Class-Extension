@@ -59,8 +59,7 @@ namespace Statistics
     }
 
     template<>
-    PAGEDX
-    _Use_decl_annotations_
+    PAGED
     ULONG
     Hub::SerializedSize<NDIS_COLLECT_HISTOGRAM_OUT>(
         void
@@ -77,12 +76,11 @@ namespace Statistics
 
     template<>
     PAGEDX
-    _Use_decl_annotations_
     NTSTATUS
     Hub::Serialize<NDIS_COLLECT_HISTOGRAM_OUT>(
-        NDIS_COLLECT_HISTOGRAM_OUT *out,
-        ULONG cbOut,
-        ULONG &bytesNeeded
+        _Out_writes_bytes_(cbOut) NDIS_COLLECT_HISTOGRAM_OUT *out,
+        _In_ ULONG cbOut,
+        _Out_ ULONG &bytesNeeded
     ) const
     {
         KLockThisExclusive lock { m_histogramsListLock };

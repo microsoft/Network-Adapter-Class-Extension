@@ -20,24 +20,20 @@ VOID KeQueryTickCount (
 }
 #endif
 
-PAGED
+NONPAGED
 TimeBudgetWarningLogger::TimeBudgetWarningLogger(
     const GUID& ClientIdentifier,
-    const ULONG DispatchTimeWarningInterval
-)
+    const ULONG DispatchTimeWarningInterval,
+    ULONG DispatchIrqlWarningWatermarkMs,
+    UNICODE_STRING const * FriendlyName
+    )
     : m_reportIntervalTicks(DispatchTimeWarningInterval * MS_TO_TIME_INCREMENT_MULT / KeQueryTimeIncrement())
     , m_clientIdentifier(ClientIdentifier)
     , m_dispatchTimeWarningIntervalMs(DispatchTimeWarningInterval)
+    , m_watermarkTicks(DispatchIrqlWarningWatermarkMs* MS_TO_TIME_INCREMENT_MULT / KeQueryTimeIncrement())
+    , m_watermarkMs(DispatchIrqlWarningWatermarkMs)
+    , m_friendlyEcName(FriendlyName)
 {
-}
-
-PAGED
-void TimeBudgetWarningLogger::SetWatermark(
-    _In_ ULONG DispatchIrqlWarningWatermarkMs
-)
-{
-    m_watermarkTicks = DispatchIrqlWarningWatermarkMs * MS_TO_TIME_INCREMENT_MULT / KeQueryTimeIncrement();
-    m_watermarkMs = DispatchIrqlWarningWatermarkMs;
 }
 
 NONPAGED
@@ -89,12 +85,4 @@ void TimeBudgetWarningLogger::ReportWarning(ULONG TimeSinceLastReportMs)
         m_iterationsOverTimeCount,
         TimeSinceLastReportMs
     );
-}
-
-PAGED
-void TimeBudgetWarningLogger::SetFriendlyName(
-    UNICODE_STRING const * FriendlyName
-)
-{
-    m_friendlyEcName = FriendlyName;
 }

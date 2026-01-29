@@ -9,6 +9,8 @@ enum class ExecutionContextEvent;
 enum class ExecutionContextState;
 enum class ExecutionContextStateChangeReason;
 
+class Dispatcher;
+
 class ActivityTracker
 {
 private:
@@ -70,7 +72,8 @@ public:
     LogStateChange(
         _In_ ExecutionContextStateChangeReason Reason,
         _In_ ExecutionContextState PreviousState,
-        _In_ ExecutionContextState NewState
+        _In_ ExecutionContextState NewState,
+        _In_ Dispatcher const * Dispatcher
     );
 
     _IRQL_requires_max_(DISPATCH_LEVEL)

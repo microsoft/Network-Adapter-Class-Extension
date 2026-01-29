@@ -13,9 +13,56 @@
 
 #include "NxAdapterApi.tmh"
 
+#include <Net24.h>
+
+
 extern
 WDFWAITLOCK
     g_RegistrationLock;
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+static
+wistd::unique_ptr<AdapterInit>
+NetAdapterInitAllocateCommon(
+    _In_ NX_PRIVATE_GLOBALS const * NxPrivateGlobals,
+    _In_ WDFOBJECT ParentObject
+)
+{
+    Verifier_VerifyPrivateGlobals(NxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(NxPrivateGlobals);
+
+    auto adapterInit = wil::make_unique_nothrow<AdapterInit>();
+
+    if (!adapterInit || !adapterInit->TxDemux.reserve(3))
+    {
+        return nullptr;
+    }
+
+    adapterInit->ExtensionType = MediaExtensionTypeFromClientGlobals(NxPrivateGlobals->ClientDriverGlobals);
+
+    // Create the object now, but hold creation of NxAdapter context until NetAdapterCreate is called
+    WDF_OBJECT_ATTRIBUTES attributes;
+    WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
+    if (ParentObject == WDF_NO_HANDLE)
+    {
+        // Deviceless NETADAPTER's parent object is client driver's WDFDRIVER object
+        ParentObject = NxPrivateGlobals->ClientDriverGlobals->Driver;
+    }
+    attributes.ParentObject = ParentObject;
+
+    auto const ntStatus = WdfObjectCreate(
+        &attributes,
+        &adapterInit->Object);
+
+    CX_LOG_IF_NOT_NT_SUCCESS_MSG(ntStatus, "Failed to create NETADAPTER object");
+
+    if (ntStatus != STATUS_SUCCESS)
+    {
+        return nullptr;
+    }
+
+    return adapterInit;
+}
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
@@ -47,36 +94,68 @@ Remarks
 --*/
 {
     auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
-
-    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
-    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
     Verifier_VerifyNotNull(nxPrivateGlobals, Device);
 
-    auto adapterInit = wil::make_unique_nothrow<AdapterInit>();
-
+    wistd::unique_ptr<AdapterInit> adapterInit = NetAdapterInitAllocateCommon(nxPrivateGlobals, Device);
     if (!adapterInit)
     {
         return nullptr;
     }
 
-    if (! adapterInit->TxDemux.reserve(3))
+    adapterInit->ParentDevice = Device;
+
+    return reinterpret_cast<NETADAPTER_INIT *>(adapterInit.release());
+}
+
+#ifdef _KERNEL_MODE
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NETADAPTER_INIT *
+NETEXPORT(NetAdapterLightweightInitAllocate)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ GUID const * NetworkInterfaceGuid
+)
+/*++
+Routine Description:
+
+    WDF client driver calls this API to allocate an opaque NETADAPTER_INIT object,
+    which is to be used for creating an network adapter NOT backed by a PnP device.
+
+    When client driver calls into this API with a valid network interface GUID, netcx needs to
+    1) allocate an internal AdapterInit object and properly intialize its fields, such as
+       NetworkInterfaceGuid, Object created with ParentObject = client driver's WDFDRIVER object
+    2) register itself as a lightweight miniport driver to NDIS.
+
+Arguments:
+
+    Globals - Client driver's globals
+    NetworkInterfaceGuid - GUID of a valid network interface using the to-be-created deviceless adapter
+
+Return Value:
+
+    NETADAPTER_INIT object upon success.
+    nullptr in case of any failure.
+
+Remarks
+
+    The returned NETADAPTER_INIT object's lifetime is owned by the WDF client driver.
+    After using it to create an adapter, it has to call NetAdapterInitFree.
+
+--*/
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    Verifier_VerifyNotNull(nxPrivateGlobals, NetworkInterfaceGuid);
+
+    wistd::unique_ptr<AdapterInit> adapterInit = NetAdapterInitAllocateCommon(nxPrivateGlobals, WDF_NO_HANDLE);
+    if (!adapterInit)
     {
         return nullptr;
     }
 
-    adapterInit->ParentDevice = Device;
-    adapterInit->ExtensionType = MediaExtensionTypeFromClientGlobals(nxPrivateGlobals->ClientDriverGlobals);
+    adapterInit->DevicelessNetworkInterfaceGuid = *NetworkInterfaceGuid;
+    adapterInit->ShouldAcquirePowerReferencesForAdapter = false;
 
-    // Create the object now, but hold creation of NxAdapter context until NetAdapterCreate is called
-    WDF_OBJECT_ATTRIBUTES attributes;
-    WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
-    attributes.ParentObject = Device;
-
-    auto const ntStatus = WdfObjectCreate(
-        &attributes,
-        &adapterInit->Object);
-
-    CX_LOG_IF_NOT_NT_SUCCESS_MSG(ntStatus, "Failed to create NETADAPTER object");
+    auto const ntStatus = NxDriver::_CreateAndRegisterIfNeeded(nxPrivateGlobals, NetCxDriverType::DevicelessDriver);
+    CX_LOG_IF_NOT_NT_SUCCESS_MSG(ntStatus, "Failed to create deviceless driver or register to NDIS as LWM driver");
 
     if (ntStatus != STATUS_SUCCESS)
     {
@@ -85,6 +164,7 @@ Remarks
 
     return reinterpret_cast<NETADAPTER_INIT *>(adapterInit.release());
 }
+#endif
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
@@ -208,6 +288,11 @@ Return Value:
 
 --*/
 {
+    LogInfo(
+        FLAG_ADAPTER,
+        "AdapterInit %p",
+        AdapterInit);
+
     *Adapter = nullptr;
 
     auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
@@ -220,11 +305,15 @@ Return Value:
     Verifier_VerifyAdapterInitNotUsed(nxPrivateGlobals, adapterInit);
 
     auto device = adapterInit->ParentDevice;
-    auto nxDevice = GetNxDeviceFromHandle(device);
 
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        nxDevice->EnsureInitialized(device),
-        "Failed to initialize NxDevice. WDFDEVICE=%p", device);
+    if (device != WDF_NO_HANDLE)
+    {
+        auto nxDevice = GetNxDeviceFromHandle(device);
+
+        CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+            nxDevice->EnsureInitialized(device),
+            "Failed to initialize NxDevice. WDFDEVICE=%p", device);
+    }
 
     // Client is not allowed to specify a parent for a NETADAPTER object
     Verifier_VerifyObjectAttributesParentIsNull(nxPrivateGlobals, AdapterAttributes);
@@ -264,8 +353,10 @@ Return Value:
     *Adapter = reinterpret_cast<NETADAPTER>(adapterInit->Object.release());
 
     CX_RETURN_STATUS_SUCCESS_MSG(
-        "NETADAPTER %p",
-        *Adapter);
+        "NETADAPTER %p NxAdapter %p AdapterInit %p",
+        *Adapter,
+        nxAdapter,
+        AdapterInit);
 }
 
 _Must_inspect_result_
@@ -306,6 +397,7 @@ NETEXPORT(NetAdapterStop)(
     adapter->PnpPower.NetAdapterStop(nxPrivateGlobals);
 }
 
+#ifdef _KERNEL_MODE
 WDFAPI
 NDIS_HANDLE
 NETEXPORT(NetAdapterWdmGetNdisHandle)(
@@ -330,6 +422,7 @@ Return Value:
 
     return GetNxAdapterFromHandle(Adapter)->GetNdisHandle();
 }
+#endif
 
 WDFAPI
 _IRQL_requires_(PASSIVE_LEVEL)
@@ -443,6 +536,7 @@ Returns:
     return status;
 }
 
+#ifdef NETCX_KMDF
 _IRQL_requires_(PASSIVE_LEVEL)
 WDFAPI
 void
@@ -482,6 +576,73 @@ NETEXPORT(NetAdapterSetDataPathCapabilities)(
         TxCapabilities,
         RxCapabilities);
 }
+#else
+_IRQL_requires_(PASSIVE_LEVEL)
+WDFAPI
+void
+NETEXPORT(NetAdapterSetDataPathCapabilities)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER Adapter,
+    _In_ NET_ADAPTER_TX_CAPABILITIES * TxCapabilities,
+    _In_ NET_ADAPTER_RX_CAPABILITIES * RxCapabilities
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+    Verifier_VerifyAdapterNotStarted(nxPrivateGlobals, nxAdapter);
+
+    auto const driverVersion = MAKEVER(nxPrivateGlobals->ClientVersion.Major,
+        nxPrivateGlobals->ClientVersion.Minor);
+
+    if (driverVersion > MAKEVER(2,5))
+    {
+        Verifier_VerifyTypeSize(nxPrivateGlobals, TxCapabilities);
+        Verifier_VerifyTypeSize(nxPrivateGlobals, RxCapabilities);
+
+        Verifier_VerifyNetAdapterTxCapabilities(nxPrivateGlobals, TxCapabilities);
+        Verifier_VerifyNetAdapterRxCapabilities(nxPrivateGlobals, RxCapabilities);
+
+        if (TxCapabilities->DmaCapabilities != nullptr)
+        {
+            Verifier_VerifyTypeSize(nxPrivateGlobals, TxCapabilities->DmaCapabilities);
+        }
+
+        if (RxCapabilities->DmaCapabilities != nullptr)
+        {
+            Verifier_VerifyTypeSize(nxPrivateGlobals, RxCapabilities->DmaCapabilities);
+        }
+
+        nxAdapter->SetDatapathCapabilities(
+            TxCapabilities,
+            RxCapabilities);
+    }
+    else
+    {
+        // there's only 2.4 and 2.5 versions in UMDF and both have the same capabilities structure. 
+        // So the size can only be checked against one of them.
+        const bool expectedTxSize = sizeof(NET_ADAPTER_TX_CAPABILITIES_V2_4) == TxCapabilities->Size;
+        const bool expectedRxSize = sizeof(NET_ADAPTER_RX_CAPABILITIES_V2_4) == RxCapabilities->Size;
+
+        if (!expectedTxSize || !expectedRxSize)
+        {
+            Verifier_ReportViolation(
+                nxPrivateGlobals,
+                VerifierAction_BugcheckAlways,
+                FailureCode_InvalidStructTypeSize,
+                TxCapabilities->Size,
+                sizeof(NET_ADAPTER_TX_CAPABILITIES_V2_4));
+        }
+
+        Verifier_VerifyNetAdapterTxCapabilitiesNonDmaFields(nxPrivateGlobals, TxCapabilities);
+        Verifier_VerifyNetAdapterRxCapabilitiesNonDmaFields(nxPrivateGlobals, RxCapabilities);
+
+        nxAdapter->SetDatapathCapabilities_UMDF_2_5_and_older(
+            TxCapabilities,
+            RxCapabilities);
+    }
+}
+#endif
 
 WDFAPI
 _IRQL_requires_(PASSIVE_LEVEL)
@@ -960,6 +1121,7 @@ Remarks:
     GetNxAdapterFromHandle(Adapter)->SetCurrentLinkState(*State);
 }
 
+#ifdef _KERNEL_MODE
 WDFAPI
 _IRQL_requires_(PASSIVE_LEVEL)
 void
@@ -1167,6 +1329,7 @@ NETEXPORT(NetOffloadIsChecksumUdpEnabled)(
 
     return capabilities->Udp;
 }
+#endif
 
 WDFAPI
 _IRQL_requires_(PASSIVE_LEVEL)
@@ -1525,6 +1688,24 @@ NETEXPORT(NetOffloadIsRscTcpTimestampOptionEnabled)(
     return capabilities->TcpTimestampOption;
 }
 
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+BOOLEAN
+NETEXPORT(NetOffloadIsUdpRscEnabled)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETOFFLOAD Offload
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    auto const capabilities = reinterpret_cast<NET_ADAPTER_OFFLOAD_RSC_CAPABILITIES const *>(Offload);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+    Verifier_VerifyTypeSize(nxPrivateGlobals, capabilities);
+
+    return WI_IsFlagSet(capabilities->Layer4Flags, NetAdapterOffloadLayer4FlagUdp);
+}
+
 _IRQL_requires_(PASSIVE_LEVEL)
 void
 NETEXPORT(NetAdapterReportWakeReasonPacket)(
@@ -1609,6 +1790,42 @@ NETEXPORT(NetAdapterGetTxPeerAddressDemux)(
     Verifier_VerifyIrqlPassive(nxPrivateGlobals);
 
     return GetNxAdapterFromHandle(Adapter)->GetTxPeerAddressDemux();
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+void
+NETEXPORT(NetAdapterWifiAddPeer)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER Adapter,
+    _In_ const NET_EUI48_ADDRESS * Address
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+    nxAdapter->TxPeerDemuxTableAddPeer(Address);
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+void
+NETEXPORT(NetAdapterWifiRemovePeer)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER Adapter,
+    _In_ const NET_EUI48_ADDRESS * Address
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+    nxAdapter->TxPeerDemuxTableRemovePeer(Address);
 }
 
 WDFAPI
@@ -1709,4 +1926,20 @@ NETEXPORT(NetAdapterInitSetSelfManagedPowerReferences)(
     // If the adapter has indicated that it is self-managing power references, we should not acquire
     // any power references on its behalf
     adapterInit->ShouldAcquirePowerReferencesForAdapter = !SelfManagedPowerReference;
+}
+
+WDFAPI
+_IRQL_requires_(PASSIVE_LEVEL)
+NET_WAKE_REASON_TYPE
+NETEXPORT(NetAdapterQueryWakeReason)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETADAPTER Adapter
+)
+{
+    auto const nxPrivateGlobals = GetPrivateGlobals(DriverGlobals);
+    Verifier_VerifyPrivateGlobals(nxPrivateGlobals);
+    Verifier_VerifyIrqlPassive(nxPrivateGlobals);
+
+    auto nxAdapter = GetNxAdapterFromHandle(Adapter);
+    return nxAdapter->GetWakeReason();
 }

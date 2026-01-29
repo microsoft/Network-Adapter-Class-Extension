@@ -7,21 +7,40 @@
 #include <KSpinLock.h>
 #include <Histogram.h>
 #include <kwaitevent.h>
+#include <karray.h>
 #include <limits.h>
+#include <IExecutionContext.hpp>
 
 #include "ActivityTracker.hpp"
 #include "Thread.hpp"
 #include <ExecutionContextPoll.h>
 #include <ExecutionContextNotification.h>
 #include <ExecutionContextTask.h>
-#include "ExecutionContextTask.hpp"
+#include <KWaitTask.hpp>
 #include <ExecutionContextDispatch.h>
 #include "Dpc.h"
 #include "TimeBudget.h"
 #include "TimeBudgetWarningLogger.h"
+#include "Dispatcher.hpp"
+#include "DispatcherWorker.hpp"
+#include "PassiveLevelKnobs.hpp"
 
 extern GUID g_staticEcClientIdentier;
-extern EXECUTION_CONTEXT_RUNTIME_KNOBS g_staticEcKnobs;
+
+DispatcherWorkerStart
+    PollWorkerStart;
+
+DispatcherWorkerStop
+    PollWorkerStop;
+
+DispatcherWorkerEntry
+    PollWorkerEntry;
+
+DispatcherWorkerEntry
+    TaskWorkerEntry;
+
+DispatcherWorkerEntry
+    SetAffinityWorker;
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NET_EXECUTION_CONTEXT_DISPATCH const *
@@ -50,6 +69,7 @@ enum class ExecutionContextState
     WaitingWorkerThread,
     WaitingWorkerDpc,
     Running,
+    WaitingDispatcher,
 };
 
 // Keep these values in sync with ETW manifest: <valueMap name="ExecutionContextStateChangeReason">
@@ -68,33 +88,51 @@ enum class ExecutionContextStateChangeReason
     NoMoreWork,
     OutOfDpcBudget,
     TerminateWorkerThread,
+    NotifyContextStealing,
+    PollWorkerEntry,
+    PollWorkerExit,
 };
 
-class ExecutionContext : public NONPAGED_OBJECT<'xtCE'>
+class ExecutionContext
+    : public NONPAGED_OBJECT<'xtCE'>
+    , public IExecutionContext
 {
     friend class
         ExecutionContextNotification;
+
 #ifdef TEST_HARNESS_CLASS_NAME
     friend class
         TEST_HARNESS_CLASS_NAME;
 #endif
 
-    static
-    EVT_EXECUTION_CONTEXT_TASK
-        EvtSetWorkerThreadAffinity;
+    friend class
+        Dispatcher;
 
-    static
-    EVT_EXECUTION_CONTEXT_TASK
-        EvtTerminateWorkerThread;
+    friend DispatcherWorkerStart
+        PollWorkerStart;
+
+    friend DispatcherWorkerStop
+        PollWorkerStop;
+
+    friend DispatcherWorkerEntry
+        PollWorkerEntry;
+
+    friend DispatcherWorkerEntry
+        TaskWorkerEntry;
+
+    friend DispatcherWorkerEntry
+        SetAffinityWorker;
 
 public:
 
+    _IRQL_requires_(PASSIVE_LEVEL)
     static
     void
     InitializeSubsystem(
         void
     );
 
+    _IRQL_requires_(PASSIVE_LEVEL)
     static
     void
     UninitializeSubsystem(
@@ -114,13 +152,9 @@ public:
         NotifyDpc = 1,
         WorkerDpc,
         WorkerThread,
-    };
-
-    enum class PollExitReason
-    {
-        NoMoreWork = 1,
-        OutOfDpcBudget,
-        TaskPending,
+        ArbitraryContextAtDispatch,
+        ArbitraryContextAtApc,
+        ArbitraryContextAtPassive,
     };
 
 public:
@@ -134,9 +168,10 @@ public:
     _No_competing_thread_
     PAGEDX
     ExecutionContext(
-        _In_ GUID const * ClientIdentifier,
-        _In_ EXECUTION_CONTEXT_RUNTIME_KNOBS const * RuntimeMutableKnobs
-    );
+        _In_ GUID const* ClientIdentifier,
+        _In_ wistd::unique_ptr<Dispatcher> dispatcher,
+        _In_ KPoolPtr<UNICODE_STRING> clientFriendlyName
+    ) noexcept;
 
     _IRQL_requires_(PASSIVE_LEVEL)
     PAGEDX
@@ -146,11 +181,13 @@ public:
     );
 
     _IRQL_requires_(PASSIVE_LEVEL)
-    _No_competing_thread_
     PAGEDX
+    static
     NTSTATUS
-    Initialize(
-        _In_opt_ UNICODE_STRING const * clientFriendlyName = nullptr
+    Create(
+        _In_opt_ UNICODE_STRING const* ClientFriendlyName,
+        _In_opt_ GUID const* ClientIdentifier,
+        _Out_ wistd::unique_ptr<ExecutionContext>& executionContext
     );
 
     _IRQL_requires_(PASSIVE_LEVEL)
@@ -189,41 +226,23 @@ public:
         _Inout_ EXECUTION_CONTEXT_NOTIFICATION * Notification
     );
 
-    _IRQL_requires_(PASSIVE_LEVEL)
-    EC_THREAD_PRIORITY
-    GetWorkerThreadPriority(
-        void
-    );
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    void
-    SetWorkerThreadAffinity(
-        _In_ const GROUP_AFFINITY & GroupAffinity
-    );
-
     _IRQL_requires_max_(DISPATCH_LEVEL)
     void
-    SetDpcTargetProcessor(
-        _In_ const PROCESSOR_NUMBER & GroupAffinity
+    SetAffinity(
+        _In_ const PROCESSOR_NUMBER & Processor
     );
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
     void
     QueueTask(
-        _In_ ExecutionContextTask & Task
+        _In_ EXECUTION_CONTEXT_TASK * Task
     );
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
     void
     QueueTask(
-        _In_ ExecutionContextTask & Task,
+        _In_ EXECUTION_CONTEXT_TASK * Task,
         _In_ ExecutionContextEvent Event
-    );
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    void
-    SetWorkerThreadDescription(
-        _In_ const UNICODE_STRING & Description
     );
 
     _IRQL_requires_max_(HIGH_LEVEL)
@@ -232,15 +251,13 @@ public:
         void
     );
 
-private:
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    _No_competing_thread_
-    PAGEDX
-    NTSTATUS
-    InitializeFriendlyName(
-        _In_opt_ UNICODE_STRING const * FriendlyName
+    _IRQL_requires_max_(HIGH_LEVEL)
+    void
+    NotifyEx(
+        _In_ EXECUTION_CONTEXT_NOTIFY_PARAMETERS * Parameters
     );
+
+private:
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
     _Requires_lock_not_held_(m_lock)
@@ -261,6 +278,7 @@ private:
     _IRQL_requires_(PASSIVE_LEVEL)
     void
     Destroy(
+        void
     );
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -288,95 +306,39 @@ private:
         _In_ KIRQL Irql
     );
 
-    _IRQL_requires_max_(DISPATCH_LEVEL)
-    PollExitReason
-    Poll(
-        _In_ KIRQL Irql
-    );
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    void
-    WorkerThreadRoutine(
-        void
-    );
-
-    _IRQL_requires_(DISPATCH_LEVEL)
-    void
-    PollDpc(
-        void
-    );
-
     _IRQL_requires_(DISPATCH_LEVEL)
     void
     NotifyDpc(
         void
     );
 
-    _IRQL_requires_max_(HIGH_LEVEL)
-    bool
-    ShouldRunInDpc(
-        void
-    ) const;
-
-    _IRQL_requires_max_(DISPATCH_LEVEL)
-    static
-    void
-    NotifyDpcRoutine(
-        _In_ ExecutionContext * ExecutionContext
-    );
-
-    _IRQL_requires_max_(DISPATCH_LEVEL)
-    static
-    void
-    PollDpcRoutine(
-        _In_ ExecutionContext * ExecutionContext
-    );
-
     _IRQL_requires_max_(DISPATCH_LEVEL)
     _Requires_lock_not_held_(m_lock)
     void
     NotifyCommon(
-        _In_ NotifyContext Context
+        _In_ NotifyContext Context,
+        _In_ EXECUTION_CONTEXT_NOTIFY_PARAMETERS * Parameters
     );
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
-    _Requires_lock_not_held_(m_lock)
-    void
-    RunLockNotHeld(
-        _In_ RunContext Context
-    );
+    WorkerExitStatus
+    TaskWorker(KIRQL Irql);
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
-    _Requires_lock_held_(m_lock)
     void
-    RunLockHeld(
-        _In_ KAcquireSpinLock & Lock,
-        _In_ RunContext Context
-    );
+    PollStart();
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
-    _Requires_lock_held_(m_lock)
     void
-    QueueWorkerThread(
-        _In_ ExecutionContextStateChangeReason Reason
-    );
+    PollStop();
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
-    _Requires_lock_held_(m_lock)
-    void
-    QueueWorkerDpc(
-        _In_ ExecutionContextStateChangeReason Reason
-    );
+    WorkerExitStatus
+    PollWorker(KIRQL Irql);
 
-    _IRQL_requires_(PASSIVE_LEVEL)
+    _IRQL_requires_max_(DISPATCH_LEVEL)
     void
-    SetWorkerThreadAffinityTask(
-        void
-    );
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    void
-    TerminateWorkerThreadTask(
+    SetAffinityWorkerInner(
         void
     );
 
@@ -388,12 +350,6 @@ private:
     KPoolPtr<UNICODE_STRING>
         m_clientFriendlyName;
 
-    unique_thread
-        m_workerThreadObject;
-
-    EC_THREAD
-        m_pollingThread = EC_THREAD_INVALID;
-
     _Guarded_by_(m_lock)
     ExecutionContextState
         m_state = ExecutionContextState::Stopped;
@@ -401,19 +357,6 @@ private:
     _Guarded_by_(m_lock)
     ActivityTracker
         m_activityTracker;
-
-    _Guarded_by_(m_lock)
-    bool
-        m_hasPollWork = false;
-
-    bool
-        m_terminateWorkerThread = false;
-
-    KAutoEvent
-        m_workerThreadReady;
-
-    KAutoEvent
-        m_workerThreadRequested;
 
     KSpinLock
         m_lock;
@@ -428,40 +371,28 @@ private:
     LIST_ENTRY
         m_notificationList;
 
-    GROUP_AFFINITY
-        m_workerThreadAffinity = {};
-
-    GROUP_AFFINITY
-        m_originalWorkerThreadAffinity = {};
-
     bool
-        m_affinityChanged = false;
+        m_armed{ false };
 
     // Use MAXIMUM_PROC_PER_GROUP to differentiate between when no
     // affinity was set and when the affinity was set to processor 0
     static_assert(MAXIMUM_PROC_PER_GROUP <= UCHAR_MAX);
 
     PROCESSOR_NUMBER
-        m_dpcAffinity = { 0, MAXIMUM_PROC_PER_GROUP, 0 };
+        m_affinity = { 0, MAXIMUM_PROC_PER_GROUP, 0 };
 
-    EcDpc<ExecutionContext>
+    Dpc<ExecutionContext, &ExecutionContext::NotifyDpc>
         m_notifyDpc;
 
-    EcDpc<ExecutionContext>
-        m_pollDpc;
+    wistd::unique_ptr<Dispatcher>
+        m_dispatcher;
 
-    Statistics::Histogram
-        m_dpcHistogram;
+    DispatcherWorker
+        m_taskWorker;
 
-    EXECUTION_CONTEXT_RUNTIME_KNOBS const * const
-        m_runtimeKnobs;
+    DispatcherWorker
+        m_pollWorker;
 
-    TimeBudgetWarningLogger
-        m_warningLogger;
-
-    ExecutionContextTask
-        m_setWorkerThreadAffinityTask;
-
-    ExecutionContextTask
-        m_terminateWorkerThreadTask;
+    DispatcherWorker
+        m_setAffinityWorker;
 };

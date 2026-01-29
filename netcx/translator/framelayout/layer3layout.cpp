@@ -15,6 +15,8 @@
 #define IP_VERSION_4 4
 #define IP_VERSION_6 6
 
+bool g_featureNDPQualitySummer25IsEnabled = false;
+
 namespace Layer3
 {
 
@@ -194,6 +196,7 @@ ParseIPv6ExtensionLayout(
 
             break;
 
+        case NextHeader::ICMPv6:
         case NextHeader::NoNextHeader:
             nextHeader = false;
 
@@ -256,22 +259,23 @@ ParseIPv6Layout(
 
     case NextHeader::ICMPv4:
     case NextHeader::ICMPv6:
-        Layout.Layer3Type = NetPacketLayer3TypeIPv6NoExtensions;
-
-        break;
-
     case NextHeader::NoNextHeader:
         Layout.Layer3Type = NetPacketLayer3TypeIPv6NoExtensions;
+
+            break;
+
+    case NextHeader::IPv6FragmentHeader:
+    case NextHeader::IPv6DestOptions:
+        if (!ParseIPv6ExtensionLayout(Layout, Pointer, o, l))
+        {
+            return true;
+        }
 
         break;
 
     default:
-        if (! ParseIPv6ExtensionLayout(Layout, Pointer, o, l))
-        {
-            return false;
-        }
 
-        break;
+        return false;
 
     }
 

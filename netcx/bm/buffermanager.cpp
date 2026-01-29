@@ -93,6 +93,9 @@ BufferManager::AllocateBufferVector(
 
     CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, bufferVector == nullptr);
 
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        bufferVector->Initialize());
+
     *BufferVector = bufferVector;
 
     return STATUS_SUCCESS;

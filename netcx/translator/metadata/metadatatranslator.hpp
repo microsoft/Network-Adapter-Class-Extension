@@ -10,6 +10,7 @@
 #include <net/gsotypes.h>
 #include <net/rsctypes.h>
 #include <net/ieee8021qtypes.h>
+#include <net/packethashtypes.h>
 
 #include "NxExtensions.hpp"
 
@@ -63,6 +64,53 @@ public:
         _In_ NET_BUFFER_LIST & NetBufferList,
         _In_ UINT32 const PacketIndex
     ) const;
+
+    static
+    void
+    TranslatePacketLayout(
+        _Inout_ NET_BUFFER_LIST & NetBufferList,
+        _In_ const NET_PACKET_LAYOUT & Layout,
+        _In_ const unsigned char *Payload,
+        _In_ size_t PayloadSize
+    );
+
+    static
+    void
+    TranslatePacketChecksum(
+        _Inout_ NET_BUFFER_LIST & NetBufferList,
+        _In_ const NET_PACKET_LAYOUT & Layout,
+        _In_ const NET_PACKET_CHECKSUM * Checksum
+    );
+
+    static
+    void
+    TranslatePacketRsc(
+        _Inout_ NET_BUFFER_LIST & NetBufferList,
+        _In_ const NET_PACKET_LAYOUT & Layout,
+        _In_ const NET_PACKET_RSC * Rsc
+    );
+
+    static
+    void
+    TranslatePacketRscTimestamp(
+        _Inout_ NET_BUFFER_LIST & NetBufferList,
+        _In_ const NET_PACKET_LAYOUT & Layout,
+        _In_ const NET_PACKET_RSC_TIMESTAMP * Rsc
+    );
+
+    static
+    void
+    TranslatePacketIeee8021q(
+        _Inout_ NET_BUFFER_LIST & NetBufferList,
+        _In_ const NET_PACKET_IEEE8021Q * Ieee8021q
+    );
+
+    static
+    void
+    TranslatePacketHash(
+        _Inout_ NET_BUFFER_LIST & NetBufferList,
+        _In_ const NET_PACKET_HASH * PacketHash
+    );
 
 private:
 

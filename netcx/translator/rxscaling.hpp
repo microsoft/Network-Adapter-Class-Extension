@@ -4,9 +4,22 @@
 
 #include <KArray.h>
 
+#include "NxTxXlat.hpp"
 #include "NxRxXlat.hpp"
 
 class NxTranslationApp;
+
+struct AffinitizedQueue
+{
+    NxRxXlat *
+        Queue = nullptr;
+
+    size_t
+        QueueId = 0;
+
+    PROCESSOR_NUMBER
+        Affinity = {};
+};
 
 class RxScaling
     : public NxNonpagedAllocation<'RxrN'>
@@ -51,27 +64,27 @@ public:
         _Inout_ NDIS_OID_REQUEST & Request
     );
 
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    Rtl::KArray<size_t, NonPagedPoolNx> const &
+    GetIndirectionTable(
+        void
+    ) const;
+
 private:
-
-    struct AffinitizedQueue
-    {
-        NxRxXlat *
-            Queue = nullptr;
-
-        size_t
-            QueueId = 0;
-
-        PROCESSOR_NUMBER
-            Affinity = {};
-    };
 
     struct TranslatedIndirectionEntries
     {
-        NET_CLIENT_RECEIVE_SCALING_INDIRECTION_ENTRY
-            Entries[NDIS_RSS_INDIRECTION_TABLE_MAX_SIZE_REVISION_1];
+        Rtl::KArray<NET_CLIENT_RECEIVE_SCALING_INDIRECTION_ENTRY, NonPagedPoolNx>
+            Entries;
 
-        UINT32
-            Restore[NDIS_RSS_INDIRECTION_TABLE_MAX_SIZE_REVISION_1];
+        Rtl::KArray<UINT32, NonPagedPoolNx>
+            Restore;
+
+        bool
+        resize(size_t size)
+        {
+            return Entries.resize(size) && Restore.resize(size);
+        }
     };
 
     _IRQL_requires_(PASSIVE_LEVEL)
@@ -140,6 +153,15 @@ private:
     _IRQL_requires_(DISPATCH_LEVEL)
     void
     SetAffinitizedQueue(
+        size_t Index,
+        NxRxXlat * Queue,
+        PROCESSOR_NUMBER const & Affinity
+    );
+
+    _Requires_lock_held_(this->m_receiveScalingLock)
+    _IRQL_requires_(DISPATCH_LEVEL)
+    void
+    SetMappedQueue(
         size_t Index,
         NxRxXlat * Queue,
         PROCESSOR_NUMBER const & Affinity
@@ -265,5 +287,8 @@ private:
 
     size_t
         m_numberIndirectionTableEntries = 0;
+
+    NDIS_RSS_PROFILE
+        m_rssProfile;
 };
 

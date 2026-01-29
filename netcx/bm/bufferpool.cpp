@@ -1,19 +1,45 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
 
 #include "bmprecomp.hpp"
+
 #include "BufferPool.hpp"
+#include <umwdm.h>
 #include "BufferPool.tmh"
+
+BufferPool::BufferPool(
+    PEPROCESS AssociatedProcess
+) : KStackPool::KStackPool()
+  , m_associatedProcess(AssociatedProcess)
+{
+#ifdef _KERNEL_MODE
+    if (m_associatedProcess)
+    {
+        ObfReferenceObject(m_associatedProcess);
+    }
+#endif
+}
 
 BufferPool::~BufferPool()
 {
-    NT_FRE_ASSERT(IsFull());
+#ifdef _KERNEL_MODE
+    if (m_associatedProcess)
+    {
+        ObfDereferenceObject(m_associatedProcess);
+    }
+#endif
+    if (!IsFull())
+    {
+        LogError(FLAG_ERROR,
+            "BufferPool::~BufferPool: Buffer pool being destroyed with buffers still allocated. Current index:%d",
+            static_cast<int>(Size()));
+    }
 }
 
 NTSTATUS
 BufferPool::Fill(
     _In_ IBufferVector* BufferVector
 )
-{    
+{
     m_BufferVector.reset(BufferVector);
 
     m_PoolSize = m_BufferVector->m_BufferCount;
@@ -59,8 +85,14 @@ BufferPool::Enumerate(
         NET_DATA_HEADER NetDataHeader;
         m_BufferVector->GetEntryByIndex(i, &NetDataHeader);
 
-        Callback(Context, i, NetDataHeader.LogicalAddress, NetDataHeader.VirtualAddress);
+        Callback(Context, &NetDataHeader);
     }
+}
+
+PEPROCESS
+BufferPool::GetAssociatedProcess(void)
+{
+    return m_associatedProcess;
 }
 
 NONPAGED
@@ -156,100 +188,4 @@ BufferPool::GetPoolSize()
     return m_PoolSize;
 }
 
-_Use_decl_annotations_
-BufferPool2::BufferPool2(
-    size_t BufferSize,
-    size_t BufferAlignment
-)
-    : m_bufferSize(BufferSize)
-    , m_bufferAlignment(BufferAlignment)
-{
-    InitializeListHead(&m_freeBufferList);
-    InitializeListHead(&m_usedBufferList);
 
-    NT_FRE_ASSERT(m_bufferAlignment > 0);
-    NT_FRE_ASSERT((m_bufferAlignment & (m_bufferAlignment - 1)) == 0);
-    NT_FRE_ASSERT(m_bufferAlignment <= PAGE_SIZE);
-}
-
-_Use_decl_annotations_
-BufferPool2::~BufferPool2(
-    void
-)
-{
-    NT_FRE_ASSERTMSG(
-        "Buffer leak detected",
-        IsListEmpty(&m_usedBufferList));
-}
-
-_Use_decl_annotations_
-NTSTATUS
-BufferPool2::Initialize(
-    IBufferVectorAllocator * Allocator,
-    size_t InitialNumberOfBuffers
-)
-{
-    // Ensure user buffer start address is correctly aligned
-    size_t const headerSize = RTL_NUM_ALIGN_UP(sizeof(BufferHeader), m_bufferAlignment);
-
-    // Always allocate a multiple of PAGE_SIZE, such that if we have to map this memory to user
-    // mode address space we don't accidentally expose unrelated kernel data. This has the side
-    // effect of making the largest possible alignment a client can request be PAGE_SIZE
-    size_t const allocationSize = RTL_NUM_ALIGN_UP(headerSize + m_bufferSize, PAGE_SIZE);
-
-    // Calculate how much space will be left unused at the end of the buffer
-    size_t const bufferPaddingOffset = headerSize + m_bufferSize;
-    size_t const bufferPaddingSize = allocationSize - bufferPaddingOffset;
-
-    wistd::unique_ptr<IBufferVector> bufferVector
-    {
-        Allocator->AllocateVector(
-            InitialNumberOfBuffers,
-            allocationSize,
-            0,
-            MM_ANY_NODE_OK)
-    };
-
-    CX_RETURN_NTSTATUS_IF(
-        STATUS_INSUFFICIENT_RESOURCES,
-        !bufferVector);
-
-    for (size_t i = 0; i < InitialNumberOfBuffers; i++)
-    {
-        NET_DATA_HEADER header;
-        bufferVector->GetEntryByIndex(i, &header);
-
-        auto allocation = new (header.VirtualAddress) BufferHeader(
-            &m_freeBufferList,
-            &m_usedBufferList,
-            header.LogicalAddress,
-            m_bufferSize,
-            headerSize,
-            bufferPaddingSize);
-
-        CX_RETURN_IF_NOT_NT_SUCCESS(allocation->Initialize());
-    }
-
-    m_bufferVector = wistd::move(bufferVector);
-
-    return STATUS_SUCCESS;
-}
-
-_Use_decl_annotations_
-BufferHeader *
-BufferPool2::Allocate(
-    void
-)
-{
-    if (IsListEmpty(&m_freeBufferList))
-    {
-        return nullptr;
-    }
-
-    auto buffer = BufferHeader::FromListEntry(
-        RemoveHeadList(&m_freeBufferList));
-
-    buffer->MarkAsUsed();
-
-    return buffer;
-}

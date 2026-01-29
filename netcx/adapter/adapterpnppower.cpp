@@ -2,6 +2,8 @@
 #include "Nx.hpp"
 #include "AdapterPnpPower.hpp"
 #include "NxAdapter.hpp"
+#include "ndisminiport/NxNdisMiniport.hpp"
+#include "ndisminiport/NxNdisPnpPower.hpp"
 #include "NxPrivateGlobals.hpp"
 
 #include "AdapterPnpPower.tmh"
@@ -46,10 +48,7 @@ AdapterPnpPower::~AdapterPnpPower(
 
     if (ndisHandle != nullptr)
     {
-        auto const ntStatus = NdisWdfPnpPowerEventHandler(
-            ndisHandle,
-            NdisWdfActionPnpRemove,
-            NdisWdfActionPowerNone);
+        auto const ntStatus = m_adapter.m_ndisMiniport->RemoveNdisMiniport();
 
         NT_FRE_ASSERT(ntStatus == STATUS_SUCCESS);
     }
@@ -62,7 +61,16 @@ AdapterPnpPower::Initialize(
 )
 {
 #ifdef _KERNEL_MODE
-    StateMachineEngineConfig smConfig(WdfDeviceWdmGetDeviceObject(m_adapter.GetDevice()), SMENGINE_TAG);
+    DEVICE_OBJECT * wdmDeviceObject = nullptr;
+    if (m_adapter.IsDevicelessAdapter())
+    {
+        wdmDeviceObject = reinterpret_cast<DEVICE_OBJECT *>(WdfDriverWdmGetDriverObject(WdfGetDriver()));
+    }
+    else
+    {
+        wdmDeviceObject = WdfDeviceWdmGetDeviceObject(m_adapter.GetDevice());
+    }
+    StateMachineEngineConfig smConfig(wdmDeviceObject, SMENGINE_TAG);
 #else
     StateMachineEngineConfig smConfig;
 #endif
@@ -75,19 +83,22 @@ AdapterPnpPower::Initialize(
     // PnP/Power or user events queued in the state machine
     WdfObjectReferenceWithTag(m_adapter.GetFxObject(), this);
 
-    WDF_TIMER_CONFIG timerConfig;
-    WDF_TIMER_CONFIG_INIT(&timerConfig, EvtInitializePowerManagement);
+    if (!m_adapter.IsDevicelessAdapter())
+    {
+        WDF_TIMER_CONFIG timerConfig;
+        WDF_TIMER_CONFIG_INIT(&timerConfig, EvtInitializePowerManagement);
 
-    WDF_OBJECT_ATTRIBUTES timerAttributes;
-    WDF_OBJECT_ATTRIBUTES_INIT(&timerAttributes);
-    timerAttributes.ParentObject = m_adapter.GetFxObject();
-    timerAttributes.ExecutionLevel = WdfExecutionLevelPassive;
+        WDF_OBJECT_ATTRIBUTES timerAttributes;
+        WDF_OBJECT_ATTRIBUTES_INIT(&timerAttributes);
+        timerAttributes.ParentObject = m_adapter.GetFxObject();
+        timerAttributes.ExecutionLevel = WdfExecutionLevelPassive;
 
-    CX_RETURN_IF_NOT_NT_SUCCESS(
-        WdfTimerCreate(
-            &timerConfig,
-            &timerAttributes,
-            &m_initializePowerManagementTimer));
+        CX_RETURN_IF_NOT_NT_SUCCESS(
+            WdfTimerCreate(
+                &timerConfig,
+                &timerAttributes,
+                &m_initializePowerManagementTimer));
+    }
 
     auto const ownerGlobals = m_adapter.GetPrivateGlobals();
     size_t numberOfAllowedRequestorDrivers = 2;
@@ -224,6 +235,15 @@ AdapterPnpPower::IoStart(
 
 _Use_decl_annotations_
 void
+AdapterPnpPower::IoStartNoWait(
+    void
+)
+{
+    EnqueueEvent(Event::IoStart);
+}
+
+_Use_decl_annotations_
+void
 AdapterPnpPower::IoStop(
     WDF_POWER_DEVICE_STATE TargetPowerState
 )
@@ -252,12 +272,26 @@ AdapterPnpPower::IoStop(
 
 _Use_decl_annotations_
 void
+AdapterPnpPower::IoStopNoWait(
+    void
+)
+{
+    EnqueueEvent(Event::IoStopD3Final);
+}
+
+
+_Use_decl_annotations_
+void
 AdapterPnpPower::IoInterfaceArrived(
     void
 )
 {
+    //
+    // This method can only be invoked by NetInterfaceChangeNotification
+    // for PnP device backed NETADAPTER.
+    //
     EnqueueEvent(Event::IoInterfaceArrival);
-    NdisWdfNotifyWmiAdapterArrival(m_adapter.GetNdisHandle());
+    m_adapter.m_ndisPnpPower->NotifyWmiNdisMiniportArrival();
 }
 
 _Use_decl_annotations_
@@ -351,10 +385,25 @@ AdapterPnpPower::StartNetworkInterface(
 
     m_adapter.m_packetMonitor.RegisterAdapter();
 
-    ntStatus = NdisWdfPnpPowerEventHandler(
-        m_adapter.GetNdisHandle(),
-        NdisWdfActionPnpStart,
-        NdisWdfActionPowerNone);
+#if NETCX_UMDF
+    NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES datapathCapabilities{};
+    m_adapter.GetDatapathCapabilities(&datapathCapabilities);
+
+    BridgeToKernel & redirector = m_adapter.GetBridgeToKernel();
+    ntStatus = redirector.SetDatapathCapabilities(datapathCapabilities);
+
+    if (ntStatus != STATUS_SUCCESS)
+    {
+        LogInfo(
+            FLAG_ADAPTER,
+            "Failed to cache datapath capabilities on kernel redirector. NETADAPTER %p",
+            m_adapter.GetFxObject());
+
+        return Event::Fail;
+    }
+#endif
+
+    ntStatus = m_adapter.m_ndisMiniport->StartNdisMiniport();
 
     if (ntStatus != STATUS_SUCCESS)
     {
@@ -370,18 +419,19 @@ AdapterPnpPower::StopNetworkInterface(
     void
 )
 {
-    NdisWdfPnpPowerEventHandler(
-        m_adapter.GetNdisHandle(),
-        NdisWdfActionPnpStop,
-        NdisWdfActionPowerNone);
-
-    WdfTimerStop(m_initializePowerManagementTimer, TRUE);
-
+    m_adapter.m_ndisMiniport->StopNdisMiniport();
     m_adapter.m_packetMonitor.UnregisterAdapter();
+
+    if (m_initializePowerManagementTimer != WDF_NO_HANDLE)
+    {
+        WdfTimerStop(m_initializePowerManagementTimer, TRUE);
+    }
 
     // At this point no NDIS initiated IO is possible. Drop the power reference
     // acquired during initialization
     m_adapter.ReleaseOutstandingPowerReferences();
+
+    m_areBindingsAllowed = false;
 }
 
 _Use_decl_annotations_
@@ -401,7 +451,7 @@ AdapterPnpPower::StartIo(
     m_adapter.EnqueueEvent(NxAdapter::Event::DatapathCreate);
     m_adapter.m_transitionComplete.Wait();
 
-    NdisWdfMiniportDataPathStart(m_adapter.GetNdisHandle());
+    m_adapter.m_ndisMiniport->StartNdisMiniportDataPath();
 }
 
 _Use_decl_annotations_
@@ -413,10 +463,7 @@ AdapterPnpPower::StartIoD0(
     m_adapter.EnqueueEvent(NxAdapter::Event::DatapathCreate);
     m_adapter.m_transitionComplete.Wait();
 
-    NdisWdfMiniportSetPower(
-        m_adapter.GetNdisHandle(),
-        WdfDeviceGetSystemPowerAction(m_adapter.GetDevice()),
-        PowerDeviceD0);
+    m_adapter.m_ndisPnpPower->SetNdisMiniportPower(PowerDeviceD0);
 }
 
 _Use_decl_annotations_
@@ -434,10 +481,7 @@ AdapterPnpPower::StopIoD1(
     void
 )
 {
-    NdisWdfMiniportSetPower(
-        m_adapter.GetNdisHandle(),
-        WdfDeviceGetSystemPowerAction(m_adapter.GetDevice()),
-        PowerDeviceD1);
+    m_adapter.m_ndisPnpPower->SetNdisMiniportPower(PowerDeviceD1);
 
     m_adapter.EnqueueEvent(NxAdapter::Event::DatapathDestroy);
     m_adapter.m_transitionComplete.Wait();
@@ -449,10 +493,7 @@ AdapterPnpPower::StopIoD2(
     void
 )
 {
-    NdisWdfMiniportSetPower(
-        m_adapter.GetNdisHandle(),
-        WdfDeviceGetSystemPowerAction(m_adapter.GetDevice()),
-        PowerDeviceD2);
+    m_adapter.m_ndisPnpPower->SetNdisMiniportPower(PowerDeviceD2);
 
     m_adapter.EnqueueEvent(NxAdapter::Event::DatapathDestroy);
     m_adapter.m_transitionComplete.Wait();
@@ -464,10 +505,7 @@ AdapterPnpPower::StopIoD3(
     void
 )
 {
-    NdisWdfMiniportSetPower(
-        m_adapter.GetNdisHandle(),
-        WdfDeviceGetSystemPowerAction(m_adapter.GetDevice()),
-        PowerDeviceD3);
+    m_adapter.m_ndisPnpPower->SetNdisMiniportPower(PowerDeviceD3);
 
     m_adapter.EnqueueEvent(NxAdapter::Event::DatapathDestroy);
     m_adapter.m_transitionComplete.Wait();
@@ -489,8 +527,24 @@ AdapterPnpPower::AllowBindings(
     void
 )
 {
+    //
+    // IoInterfaceArrival event can only be enqueued by NetInterfaceChangeNotification
+    // for PnP device backed NETADAPTER. This is sent following NetAdapterStart and
+    // after resume from Sx. Only want to handle the first IoInterfaceArrival after NetAdapterStart.
+    //
+    if (m_areBindingsAllowed)
+    {
+        LogInfo(FLAG_DEVICE, "%!FUNC! Bindings already allowed on NETADAPTER: %p.", m_adapter.GetFxObject());
+        // Already allowed, no-op
+        return;
+    }
+    m_areBindingsAllowed = true;
+
+    LogInfo(FLAG_DEVICE, "%!FUNC! Allowing bindings on NETADAPTER: %p", m_adapter.GetFxObject());
+
     WdfTimerStart(m_initializePowerManagementTimer, WDF_REL_TIMEOUT_IN_SEC(1));
-    NdisWdfMiniportStarted(m_adapter.GetNdisHandle());
+
+    m_adapter.m_ndisPnpPower->NdisMiniportDeviceStarted();
 }
 
 _Use_decl_annotations_
@@ -499,10 +553,7 @@ AdapterPnpPower::ReportSurpriseRemoval(
     void
 )
 {
-    NdisWdfPnpPowerEventHandler(
-        m_adapter.GetNdisHandle(),
-        NdisWdfActionPnpSurpriseRemove,
-        NdisWdfActionPowerNone);
+    m_adapter.m_ndisPnpPower->ReportNdisMiniportSurpriseRemove();
 }
 
 _Use_decl_annotations_

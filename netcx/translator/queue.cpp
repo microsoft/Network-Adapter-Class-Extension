@@ -146,3 +146,40 @@ Queue::Stop(
     m_started = false;
     m_stopping = false;
 }
+
+_Use_decl_annotations_
+bool
+Queue::IsAffinitized(
+    void
+) const
+{
+    return m_affinitySet;
+}
+
+_Use_decl_annotations_
+void
+Queue::SetAffinity(
+    PROCESSOR_NUMBER const & Affinity
+)
+{
+    m_executionContextDispatch->SetAffinity(m_executionContext, &Affinity);
+    m_affinitySet = true;
+}
+
+_Use_decl_annotations_
+bool
+Queue::IsMapped(
+    void
+) const
+{
+    return m_mapped;
+}
+
+_Use_decl_annotations_
+void
+Queue::SetMapped(
+    bool IsMapped
+)
+{
+    m_mapped = IsMapped;
+}

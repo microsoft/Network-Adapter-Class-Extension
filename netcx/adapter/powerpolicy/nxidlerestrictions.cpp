@@ -47,9 +47,10 @@ NTSTATUS
 NxIdleRestrictions::SetCurrentIdleCondition(NDIS_IDLE_CONDITION idleCondition)
 {
     LogInfo(FLAG_POWER,
-        "%!FUNC! Setting Idle Condition from %!NdisIdleCondition! to %!NdisIdleCondition!",
+        "%!FUNC! Setting Idle Condition from %!NdisIdleCondition! to %!NdisIdleCondition! NETADAPTER %p",
         m_currentIdleCondition,
-        idleCondition);
+        idleCondition,
+        m_adapter);
 
     m_currentIdleCondition = idleCondition;
 
@@ -122,8 +123,6 @@ NxIdleRestrictions::RestrictS0IdleByIdleCondition()
     return status;
 }
 
-#ifdef _KERNEL_MODE
-
 _Use_decl_annotations_
 NTSTATUS
 NxIdleRestrictions::AcquirePowerReference()
@@ -185,23 +184,3 @@ NxIdleRestrictions::ReleasePowerReference()
         m_adapter);
 }
 
-#endif
-
-#ifndef _KERNEL_MODE
-
-// -------------- Stubs -------------------
-_Use_decl_annotations_
-NTSTATUS
-NxIdleRestrictions::AcquirePowerReference()
-{
-    return STATUS_SUCCESS;
-}
-
-_Use_decl_annotations_
-void
-NxIdleRestrictions::ReleasePowerReference()
-{
-    return;
-}
-
-#endif

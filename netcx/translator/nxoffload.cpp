@@ -28,6 +28,11 @@ NxTaskOffload::Initialize(
     void
 )
 {
+    auto properties = m_app.GetProperties();
+    m_encapsulation = properties.MediaType == NdisMediumWirelessWan ? 
+        NDIS_ENCAPSULATION_IEEE_LLC_SNAP_ROUTED :
+        NDIS_ENCAPSULATION_IEEE_802_3;
+
     if (IsChecksumOffloadV1Used())
     {
         InitializeChecksumV1();
@@ -75,6 +80,12 @@ NxTaskOffload::TranslateHardwareCapabilities(
         m_softwareRscCapabilities,
         ndisRscCapabilities);
 
+    NDIS_UDP_RSC_OFFLOAD ndisUdpRscCapabilities = {};
+
+    TranslateUdpRscCapabilities(
+        m_softwareRscCapabilities,
+        ndisUdpRscCapabilities);
+
     if (IsChecksumOffloadV1Used())
     {
         HardwareCapabilities = {
@@ -95,7 +106,7 @@ NxTaskOffload::TranslateHardwareCapabilities(
             {},
             {},
             {},
-            ndisUsoCapabilities
+            ndisUsoCapabilities,
         };
     }
     else
@@ -103,8 +114,8 @@ NxTaskOffload::TranslateHardwareCapabilities(
         HardwareCapabilities = {
             {
                 NDIS_OBJECT_TYPE_OFFLOAD,
-                NDIS_OFFLOAD_REVISION_6,
-                NDIS_SIZEOF_NDIS_OFFLOAD_REVISION_6
+                NDIS_OFFLOAD_REVISION_8,
+                NDIS_SIZEOF_NDIS_OFFLOAD_REVISION_8
             },
             TranslateChecksumCapabilities(
                 m_softwareTxChecksumCapabilities,
@@ -121,7 +132,8 @@ NxTaskOffload::TranslateHardwareCapabilities(
             {},
             {},
             {},
-            ndisUsoCapabilities
+            ndisUsoCapabilities,
+            ndisUdpRscCapabilities
         };
     }
 }
@@ -151,6 +163,12 @@ NxTaskOffload::TranslateActiveCapabilities(
         m_activeRscCapabilities,
         ndisRscCapabilities);
 
+    NDIS_UDP_RSC_OFFLOAD ndisUdpRscCapabilities = {};
+
+    TranslateUdpRscCapabilities(
+        m_softwareRscCapabilities,
+        ndisUdpRscCapabilities);
+
     if (IsChecksumOffloadV1Used())
     {
         ActiveCapabilities = {
@@ -171,7 +189,7 @@ NxTaskOffload::TranslateActiveCapabilities(
             {},
             {},
             {},
-            ndisUsoCapabilities
+            ndisUsoCapabilities,
         };
     }
     else
@@ -179,8 +197,8 @@ NxTaskOffload::TranslateActiveCapabilities(
         ActiveCapabilities = {
             {
                 NDIS_OBJECT_TYPE_OFFLOAD,
-                NDIS_OFFLOAD_REVISION_6,
-                NDIS_SIZEOF_NDIS_OFFLOAD_REVISION_6
+                NDIS_OFFLOAD_REVISION_8,
+                NDIS_SIZEOF_NDIS_OFFLOAD_REVISION_8
             },
             TranslateChecksumCapabilities(
                 m_activeTxIPv4ChecksumCapabilities,
@@ -197,7 +215,8 @@ NxTaskOffload::TranslateActiveCapabilities(
             {},
             {},
             {},
-            ndisUsoCapabilities
+            ndisUsoCapabilities,
+            ndisUdpRscCapabilities
         };
     }
 }
@@ -545,6 +564,12 @@ NxTaskOffload::CheckActiveRscCapabilities(
         return STATUS_NOT_SUPPORTED;
     }
 
+    if (rscCapabilities.Udp == FALSE &&
+        OffloadParameters.UdpRsc.Enabled == NDIS_OFFLOAD_PARAMETERS_UDP_RSC_ENABLED)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
     return STATUS_SUCCESS;
 }
 
@@ -566,7 +591,8 @@ NxTaskOffload::SetActiveCapabilities(
 
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         CheckActiveCapabilities(*parameters),
-        "OID_TCP_OFFLOAD_PARAMETERS is trying to change capabilities to be inconsistent with the hardware and registry capabilities");
+        "OID_TCP_OFFLOAD_PARAMETERS is trying to change capabilities to be "
+        "inconsistent with the hardware and registry capabilities");
 
     if (IsChecksumOffloadV1Used())
     {
@@ -576,27 +602,25 @@ NxTaskOffload::SetActiveCapabilities(
             TranslateUsoCapabilities(*parameters),
             TranslateRscCapabilities(*parameters));
     }
-    else
-    {
-        NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES txIPv4ChecksumCapabilities = {};
-        NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES txTcpChecksumCapabilities = {};
-        NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES txUdpChecksumCapabilities = {};
-        NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES rxChecksumCapabilities = {};
 
-        TranslateChecksumCapabilities(*parameters,
-            &txIPv4ChecksumCapabilities,
-            &txTcpChecksumCapabilities,
-            &txUdpChecksumCapabilities,
-            &rxChecksumCapabilities);
+    NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES txIPv4ChecksumCapabilities = {};
+    NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES txTcpChecksumCapabilities = {};
+    NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES txUdpChecksumCapabilities = {};
+    NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES rxChecksumCapabilities = {};
 
-        return SetActiveCapabilities(txIPv4ChecksumCapabilities,
-            txTcpChecksumCapabilities,
-            txUdpChecksumCapabilities,
-            rxChecksumCapabilities,
-            TranslateLsoCapabilities(*parameters),
-            TranslateUsoCapabilities(*parameters),
-            TranslateRscCapabilities(*parameters));
-    }
+    TranslateChecksumCapabilities(*parameters,
+        &txIPv4ChecksumCapabilities,
+        &txTcpChecksumCapabilities,
+        &txUdpChecksumCapabilities,
+        &rxChecksumCapabilities);
+
+    return SetActiveCapabilities(txIPv4ChecksumCapabilities,
+        txTcpChecksumCapabilities,
+        txUdpChecksumCapabilities,
+        rxChecksumCapabilities,
+        TranslateLsoCapabilities(*parameters),
+        TranslateUsoCapabilities(*parameters),
+        TranslateRscCapabilities(*parameters));
 }
 
 _Use_decl_annotations_
@@ -872,7 +896,7 @@ NxTaskOffload::TranslateChecksumCapabilities(
 {
     NDIS_TCP_IP_CHECKSUM_OFFLOAD translatedCapabilties = {};
 
-    const ULONG encapsulation = NDIS_ENCAPSULATION_IEEE_802_3;
+    const ULONG encapsulation = m_encapsulation;
 
     translatedCapabilties.IPv4Transmit.Encapsulation = encapsulation;
     translatedCapabilties.IPv4Receive.Encapsulation = encapsulation;
@@ -1048,7 +1072,7 @@ NxTaskOffload::TranslateLsoCapabilities(
     NDIS_TCP_LARGE_SEND_OFFLOAD_V2 &NdisLsoV2Capabilities
 ) const
 {
-    const ULONG encapsulation = NDIS_ENCAPSULATION_IEEE_802_3;
+    const ULONG encapsulation = m_encapsulation;
 
     if (WI_IsFlagSet(Capabilities.Layer4Flags, NetClientAdapterOffloadLayer4FlagTcpNoOptions) &&
         WI_IsFlagSet(Capabilities.Layer3Flags, NetClientAdapterOffloadLayer3FlagIPv4NoOptions))
@@ -1098,7 +1122,7 @@ NxTaskOffload::TranslateUsoCapabilities(
     NDIS_UDP_SEGMENTATION_OFFLOAD &NdisUsoCapabilties
 ) const
 {
-    const ULONG encapsulation = NDIS_ENCAPSULATION_IEEE_802_3;
+    const ULONG encapsulation = m_encapsulation;
 
     if (WI_IsFlagSet(Capabilities.Layer4Flags, NetClientAdapterOffloadLayer4FlagUdp) &&
         WI_IsFlagSet(Capabilities.Layer3Flags, NetClientAdapterOffloadLayer3FlagIPv4NoOptions))
@@ -1139,6 +1163,11 @@ NxTaskOffload::TranslateRscCapabilities(
         translatedCapabilities.IPv6 = OffloadParameters.RscIPv6 == NDIS_OFFLOAD_PARAMETERS_RSC_ENABLED;
     }
 
+    if (OffloadParameters.UdpRsc.Enabled != NDIS_OFFLOAD_PARAMETERS_UDP_RSC_NO_CHANGE)
+    {
+        translatedCapabilities.Udp = OffloadParameters.UdpRsc.Enabled == NDIS_OFFLOAD_PARAMETERS_UDP_RSC_ENABLED;
+    }
+
     return translatedCapabilities;
 }
 
@@ -1151,6 +1180,16 @@ NxTaskOffload::TranslateRscCapabilities(
 {
     NdisRscCapabilities.IPv4.Enabled = Capabilities.IPv4;
     NdisRscCapabilities.IPv6.Enabled = Capabilities.IPv6;
+}
+
+_Use_decl_annotations_
+void
+NxTaskOffload::TranslateUdpRscCapabilities(
+    NET_CLIENT_OFFLOAD_RSC_CAPABILITIES const &Capabilities,
+    NDIS_UDP_RSC_OFFLOAD &NdisUdpRscCapabilities
+) const
+{
+    NdisUdpRscCapabilities.Enabled = Capabilities.Udp;
 }
 
 _Use_decl_annotations_
@@ -1288,6 +1327,11 @@ NxTaskOffload::SetActiveRscCapabilities(
     if (rscCapabilitiesToDispatch.IPv6)
     {
         rscCapabilitiesToDispatch.IPv6 = RscCapabilities.IPv6;
+    }
+
+    if (rscCapabilitiesToDispatch.Udp)
+    {
+        rscCapabilitiesToDispatch.Udp = RscCapabilities.Udp;
     }
 
     m_dispatch.SetRscActiveCapabilities(m_app.GetAdapter(), &rscCapabilitiesToDispatch);
@@ -1481,16 +1525,21 @@ NxTaskOffload::SetActiveCapabilities(
         ndisUsoCapabilities);
 
     NDIS_TCP_RECV_SEG_COALESCE_OFFLOAD ndisRscCapabilities = {};
+    NDIS_UDP_RSC_OFFLOAD ndisUdpRscCapabilities = {};
 
     TranslateRscCapabilities(
         m_activeRscCapabilities,
         ndisRscCapabilities);
 
+    TranslateUdpRscCapabilities(
+        m_activeRscCapabilities,
+        ndisUdpRscCapabilities);
+
     NDIS_OFFLOAD offloadCapabilties = {
         {
             NDIS_OBJECT_TYPE_OFFLOAD,
-            NDIS_OFFLOAD_REVISION_6,
-            NDIS_SIZEOF_NDIS_OFFLOAD_REVISION_6
+            NDIS_OFFLOAD_REVISION_8,
+            NDIS_SIZEOF_NDIS_OFFLOAD_REVISION_8
         },
         TranslateChecksumCapabilities(TxIPv4ChecksumCapabilities,
             TxTcpChecksumCapabilities,
@@ -1506,7 +1555,8 @@ NxTaskOffload::SetActiveCapabilities(
         {},
         {},
         {},
-        ndisUsoCapabilities
+        ndisUsoCapabilities,
+        ndisUdpRscCapabilities
     };
 
     return SendNdisTaskOffloadStatusIndication(offloadCapabilties, false);
@@ -1558,8 +1608,8 @@ NxTaskOffload::PauseOffloadCapabilities(
     NDIS_OFFLOAD offloadCapabilities = {
         {
             NDIS_OBJECT_TYPE_OFFLOAD,
-            NDIS_OFFLOAD_REVISION_6,
-            NDIS_SIZEOF_NDIS_OFFLOAD_REVISION_6
+            NDIS_OFFLOAD_REVISION_8,
+            NDIS_SIZEOF_NDIS_OFFLOAD_REVISION_8
         }
     };
 
@@ -1641,4 +1691,13 @@ NxTaskOffload::IsActiveRscIPv6Enabled(
 ) const
 {
     return m_activeRscCapabilities.IPv6;
+}
+
+_Use_decl_annotations_
+bool
+NxTaskOffload::IsActiveUdpRscEnabled(
+        void
+) const
+{
+    return m_activeRscCapabilities.Udp;
 }

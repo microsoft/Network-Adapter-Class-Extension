@@ -28,7 +28,9 @@ DevicePnpPower::DevicePnpPower(
     : m_adapterCollection(AdapterCollection)
 {
     InitializeListHead(&m_newAdaptersList);
+#ifdef _KERNEL_MODE
     InitializeListHead(&m_newBufferQueueList);
+#endif
 }
 
 _Use_decl_annotations_
@@ -88,6 +90,7 @@ DevicePnpPower::AdapterDeleted(
     m_adapterCollection.Remove(Adapter);
 }
 
+#ifdef _KERNEL_MODE
 _Use_decl_annotations_
 void
 DevicePnpPower::BufferQueueCreated(
@@ -111,6 +114,7 @@ DevicePnpPower::BufferQueueDestroyed(
 {
     m_bufferQueueCollection.Remove(BufferQueue);
 }
+#endif
 
 _Use_decl_annotations_
 void
@@ -139,6 +143,7 @@ DevicePnpPower::ProcessNewAdapters(
     }
 }
 
+#ifdef _KERNEL_MODE
 _Use_decl_annotations_
 void
 DevicePnpPower::ProcessNewBufferQueues(
@@ -166,6 +171,7 @@ DevicePnpPower::ProcessNewBufferQueues(
         lock.Acquire();
     }
 }
+#endif
 
 //
 // Below are the implementations for state machine entry functions. To understand
@@ -252,7 +258,9 @@ DevicePnpPower::AdapterCreatedNoEventsToPlay(
 )
 {
     ProcessNewAdapters();
+#ifdef _KERNEL_MODE
     ProcessNewBufferQueues();
+#endif
 }
 
 _Use_decl_annotations_
@@ -261,7 +269,9 @@ DevicePnpPower::AdapterCreatedPlayPowerUp(
     void
 )
 {
+#ifdef _KERNEL_MODE
     ProcessNewBufferQueues(&NxBufferQueue::IoStart);
+#endif
     ProcessNewAdapters(&AdapterPnpPower::IoStart);
 }
 
@@ -272,7 +282,9 @@ DevicePnpPower::AdapterCreatedPlaySurpriseRemove(
 )
 {
     ProcessNewAdapters(&AdapterPnpPower::SurpriseRemoved);
+#ifdef _KERNEL_MODE
     ProcessNewBufferQueues();
+#endif
 }
 
 _Use_decl_annotations_
@@ -281,10 +293,12 @@ DevicePnpPower::PoweringUp(
     void
 )
 {
+#ifdef _KERNEL_MODE
     m_bufferQueueCollection.ForEach([](NxBufferQueue & bufferQueue)
     {
         bufferQueue.IoStart();
     });
+#endif
 
     m_adapterCollection.ForEach([](NxAdapter & adapter)
     {
@@ -303,10 +317,12 @@ DevicePnpPower::PoweringDownD1(
         adapter.PnpPower.IoStop(WdfPowerDeviceD1);
     });
 
+#ifdef _KERNEL_MODE
     m_bufferQueueCollection.ForEach([](NxBufferQueue & bufferQueue)
     {
         bufferQueue.IoStop();
     });
+#endif
 }
 
 _Use_decl_annotations_
@@ -320,10 +336,12 @@ DevicePnpPower::PoweringDownD2(
         adapter.PnpPower.IoStop(WdfPowerDeviceD2);
     });
 
+#ifdef _KERNEL_MODE
     m_bufferQueueCollection.ForEach([](NxBufferQueue & bufferQueue)
     {
         bufferQueue.IoStop();
     });
+#endif
 }
 
 _Use_decl_annotations_
@@ -337,10 +355,12 @@ DevicePnpPower::PoweringDownD3(
         adapter.PnpPower.IoStop(WdfPowerDeviceD3);
     });
 
+#ifdef _KERNEL_MODE
     m_bufferQueueCollection.ForEach([](NxBufferQueue & bufferQueue)
     {
         bufferQueue.IoStop();
     });
+#endif
 }
 
 _Use_decl_annotations_
@@ -354,10 +374,12 @@ DevicePnpPower::PoweringDownD3Final(
         adapter.PnpPower.IoStop(WdfPowerDeviceD3Final);
     });
 
+#ifdef _KERNEL_MODE
     m_bufferQueueCollection.ForEach([](NxBufferQueue & bufferQueue)
     {
         bufferQueue.IoStop();
     });
+#endif
 }
 
 _Use_decl_annotations_
@@ -371,10 +393,12 @@ DevicePnpPower::Stopping(
         adapter.PnpPower.NetAdapterStop(WdfGetDriver());
     });
 
+#ifdef _KERNEL_MODE
     m_bufferQueueCollection.ForEach([](NxBufferQueue & bufferQueue)
     {
         bufferQueue.IoFlush();
     });
+#endif
 }
 
 _Use_decl_annotations_

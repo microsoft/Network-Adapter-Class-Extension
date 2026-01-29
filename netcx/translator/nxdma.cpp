@@ -55,7 +55,7 @@ NxDmaTransfer::~NxDmaTransfer(
     void
 )
 {
-    if (m_valid)
+    if ((m_valid) && (this->GetTransferContext().ScatterGatherList))
     {
         m_dmaAdapter.FreeAdapterObject();
     }
@@ -193,7 +193,6 @@ NxDmaAdapter::InitializeDmaTransfer(
 {
     auto& dmaContext = GetDmaContextForPacket(Packet);
 
-    NT_ASSERT(dmaContext.UnmapMdlChain == false);
     NT_ASSERT(dmaContext.MdlChain == nullptr);
     NT_ASSERT(dmaContext.ScatterGatherList == nullptr);
 
@@ -354,19 +353,6 @@ NxDmaAdapter::CleanupNetPacket(
 
     auto& dmaContext = GetDmaContextForPacket(Packet);
 
-    if (dmaContext.UnmapMdlChain)
-    {
-        for (auto& mdl : dmaContext.MdlChain)
-        {
-            NT_ASSERT(mdl.MdlFlags & MDL_MAPPED_TO_SYSTEM_VA);
-
-            MmUnmapLockedPages(
-                mdl.MappedSystemVa,
-                &mdl);
-        }
-    }
-
-    dmaContext.UnmapMdlChain = false;
     dmaContext.MdlChain = nullptr;
 
     if (dmaContext.ScatterGatherList != nullptr)

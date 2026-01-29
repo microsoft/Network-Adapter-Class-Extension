@@ -25,7 +25,6 @@ NxOffloadBase::NxOffloadBase(
 {
 }
 
-_Use_decl_annotations_
 OffloadType
 NxOffloadBase::GetOffloadType(
     void
@@ -34,8 +33,8 @@ NxOffloadBase::GetOffloadType(
     return this->m_offloadType;
 }
 
-_Use_decl_annotations_
 template <typename T>
+_Use_decl_annotations_
 NxOffload<T>::NxOffload(
     OffloadType OffloadType,
     T const &DefaultHardwareCapabilities
@@ -44,8 +43,8 @@ NxOffload<T>::NxOffload(
     RtlCopyMemory(&m_hardwareCapabilities, &DefaultHardwareCapabilities, sizeof(DefaultHardwareCapabilities));
 }
 
-_Use_decl_annotations_
 template <typename T>
+_Use_decl_annotations_
 void
 NxOffload<T>::SetHardwareCapabilities(
     T const * HardwareCapabilities,
@@ -63,8 +62,8 @@ NxOffload<T>::SetHardwareCapabilities(
     m_hardwareSupport = true;
 }
 
-_Use_decl_annotations_
 template <typename T>
+_Use_decl_annotations_
 void
 NxOffload<T>::SetOffloadCallback(
     NxOffloadCallBack<T> OffloadCallback
@@ -80,8 +79,8 @@ NxOffload<T>::SetOffloadCallback(
     m_hardwareSupport = true;
 }
 
-_Use_decl_annotations_
 template <typename T>
+_Use_decl_annotations_
 NxOffloadCallBack<T>
 NxOffload<T>::GetOffloadCallback(
     void
@@ -90,8 +89,8 @@ NxOffload<T>::GetOffloadCallback(
     return m_offloadCallback;
 }
 
-_Use_decl_annotations_
 template <typename T>
+_Use_decl_annotations_
 T const *
 NxOffload<T>::GetHardwareCapabilities(
     void
@@ -100,8 +99,8 @@ NxOffload<T>::GetHardwareCapabilities(
     return &m_hardwareCapabilities;
 }
 
-_Use_decl_annotations_
 template <typename T>
+_Use_decl_annotations_
 bool
 NxOffload<T>::HasHardwareSupport(
     void
@@ -124,28 +123,46 @@ NxOffloadFacade::QueryStandardizedKeywordSetting(
     PULONG Value
 )
 {
-    NxConfiguration *nxConfiguration;
-    NTSTATUS status = NxConfiguration::_Create<WDFDEVICE>(
-        m_adapter.GetPrivateGlobals(),
-        m_adapter.GetDevice(),
-        NULL,
-        &nxConfiguration);
+    NxConfiguration* nxConfiguration;
+    NTSTATUS status;
+
+    if (m_adapter.IsDevicelessAdapter())
+    {
+        status = NxConfiguration::_Create(
+            m_adapter.GetPrivateGlobals(),
+            m_adapter.GetFxObject(),
+            NULL,
+            &nxConfiguration
+        );
+    }
+    else
+    {
+        status = NxConfiguration::_Create(
+            m_adapter.GetPrivateGlobals(),
+            m_adapter.GetDevice(),
+            NULL,
+            &nxConfiguration
+        );
+    }
 
     if (!NT_SUCCESS(status))
     {
         return status;
     }
+
+    auto closeConfiguration = wil::scope_exit([nxConfiguration]()
+    {
+        nxConfiguration->Close();
+    });
 
     status = nxConfiguration->Open();
 
     if (!NT_SUCCESS(status))
     {
-        nxConfiguration->Close();
         return status;
     }
 
     status = nxConfiguration->QueryUlong(NET_CONFIGURATION_QUERY_ULONG_NO_FLAGS, Keyword, Value);
-    nxConfiguration->Close();
 
     return status;
 }
@@ -181,8 +198,8 @@ NxOffloadFacade::RegisterExtension(
 
     case OffloadType::Rsc:
         extensionPrivate.Name = NET_PACKET_EXTENSION_RSC_NAME;
-        extensionPrivate.Size = NET_PACKET_EXTENSION_RSC_VERSION_1_SIZE;
-        extensionPrivate.Version = NET_PACKET_EXTENSION_RSC_VERSION_1;
+        extensionPrivate.Size = NET_PACKET_EXTENSION_RSC_VERSION_2_SIZE;
+        extensionPrivate.Version = NET_PACKET_EXTENSION_RSC_VERSION_2;
         extensionPrivate.NonWdfStyleAlignment = alignof(NET_PACKET_RSC);
         extensionPrivate.Type = NetExtensionTypePacket;
 
@@ -206,7 +223,6 @@ NxOffloadFacade::RegisterExtension(
     return m_adapter.RegisterExtension(extensionPrivate);
 }
 
-_Use_decl_annotations_
 NETADAPTER
 NxOffloadFacade::GetNetAdapter(
     void
@@ -223,7 +239,6 @@ NxOffloadManager::NxOffloadManager(
     m_offloadFacade = wistd::unique_ptr<INxOffloadFacade>{NxOffloadFacade};
 }
 
-_Use_decl_annotations_
 NTSTATUS
 NxOffloadManager::Initialize(
     void
@@ -288,13 +303,12 @@ NxOffloadManager::Initialize(
     return STATUS_SUCCESS;
 }
 
-_Use_decl_annotations_
 template <typename T>
 void
 NxOffloadManager::SetHardwareCapabilities(
-    T const * HardwareCapabilities,
-    OffloadType OffloadType,
-    NxOffloadCallBack<T> OffloadCallback
+    _In_ T const * HardwareCapabilities,
+    _In_ OffloadType OffloadType,
+    _In_ NxOffloadCallBack<T> OffloadCallback
 )
 {
     auto nxOffload = static_cast<NxOffload<T> *>(FindNxOffload(OffloadType));
@@ -302,11 +316,10 @@ NxOffloadManager::SetHardwareCapabilities(
     nxOffload->SetHardwareCapabilities(HardwareCapabilities, OffloadCallback);
 }
 
-_Use_decl_annotations_
 template <typename T>
 T const *
 NxOffloadManager::GetHardwareCapabilities(
-    OffloadType OffloadType
+    _In_ OffloadType OffloadType
 ) const
 {
     auto nxOffload = static_cast<NxOffload<T> *>(FindNxOffload(OffloadType));
@@ -314,12 +327,11 @@ NxOffloadManager::GetHardwareCapabilities(
     return nxOffload->GetHardwareCapabilities();
 }
 
-_Use_decl_annotations_
 template <typename T>
 void
 NxOffloadManager::SetActiveCapabilities(
-    T const & ActiveCapabilities,
-    OffloadType OffloadType
+    _In_ T const & ActiveCapabilities,
+    _In_ OffloadType OffloadType
 )
 {
     auto nxOffload = FindNxOffload(OffloadType);
@@ -362,12 +374,11 @@ NxOffloadManager::SetActiveCapabilities(
     }
 }
 
-_Use_decl_annotations_
 template <typename T>
 void
 NxOffloadManager::SetOffloadCallback(
-    OffloadType OffloadType,
-    NxOffloadCallBack<T> OffloadCallback
+    _In_ OffloadType OffloadType,
+    _In_ NxOffloadCallBack<T> OffloadCallback
 )
 {
     auto nxOffload = static_cast<NxOffload<T> *>(FindNxOffload(OffloadType));
@@ -421,7 +432,7 @@ NxOffloadManager::IsKeywordPresent(
     ULONG value = 0;
     NTSTATUS status = m_offloadFacade->QueryStandardizedKeywordSetting(&Keyword, &value);
 
-    if (status == STATUS_OBJECT_NAME_NOT_FOUND)
+    if (status == STATUS_OBJECT_NAME_NOT_FOUND || status == STATUS_NO_SUCH_FILE)
     {
         return false;
     }
@@ -445,6 +456,7 @@ NxOffloadManager::GetStandardizedKeywordSetting(
     return value;
 }
 
+#ifdef _KERNEL_MODE
 _Use_decl_annotations_
 void
 NxOffloadManager::SetChecksumHardwareCapabilities(
@@ -453,6 +465,7 @@ NxOffloadManager::SetChecksumHardwareCapabilities(
 {
     SetHardwareCapabilities(hardwareCapabilities, OffloadType::Checksum, hardwareCapabilities->EvtAdapterOffloadSetChecksum);
 }
+#endif
 
 _Use_decl_annotations_
 void
@@ -794,6 +807,8 @@ NxOffloadManager::GetRxChecksumHardwareCapabilities(
 {
     auto nxOffload = FindNxOffload(OffloadType::RxChecksum);
 
+    HardwareCapabilities->Size = sizeof(NET_CLIENT_OFFLOAD_CHECKSUM_CAPABILITIES);
+
     if (nxOffload->HasHardwareSupport() == true)
     {
         // If rx checksum capabilities are registered, we assume that the driver can perform all checksum offloads
@@ -1074,7 +1089,6 @@ NxOffloadManager::IsUsoSoftwareFallbackEnabled(
     return false;
 }
 
-_Use_decl_annotations_
 NTSTATUS
 NxOffloadManager::RegisterExtensions(
     void
@@ -1130,6 +1144,7 @@ NxOffloadManager::GetRscHardwareCapabilities(
     HardwareCapabilities->Size = sizeof(NET_CLIENT_OFFLOAD_RSC_CAPABILITIES);
     HardwareCapabilities->IPv4 = WI_IsFlagSet(capabilities->Layer3Flags, NetAdapterOffloadLayer3FlagIPv4NoOptions);
     HardwareCapabilities->IPv6 = WI_IsFlagSet(capabilities->Layer3Flags, NetAdapterOffloadLayer3FlagIPv6NoExtensions);
+    HardwareCapabilities->Udp = WI_IsFlagSet(capabilities->Layer4Flags, NetAdapterOffloadLayer4FlagUdp);
     HardwareCapabilities->TcpTimestampOption = capabilities->TcpTimestampOption;
 }
 
@@ -1148,6 +1163,10 @@ NxOffloadManager::GetRscSoftwareCapabilities(
         SoftwareCapabilities->IPv4 = TRUE;
         SoftwareCapabilities->IPv6 = TRUE;
         SoftwareCapabilities->TcpTimestampOption = TRUE;
+    }
+    if (IsUdpRscSoftwareFallbackEnabled())
+    {
+        SoftwareCapabilities->Udp = TRUE;
     }
 }
 
@@ -1168,6 +1187,9 @@ NxOffloadManager::GetRscDefaultCapabilities(
 
     DECLARE_CONST_UNICODE_STRING(rscIpv6, L"*RscIPv6");
     DefaultCapabilities->IPv6 = DefaultCapabilities->IPv6 && !IsKeywordSettingDisabled(rscIpv6);
+
+    DECLARE_CONST_UNICODE_STRING(udpRsc, L"*UdpRsc");
+    DefaultCapabilities->Udp = DefaultCapabilities->Udp && !IsKeywordSettingDisabled(udpRsc);
 
     DECLARE_CONST_UNICODE_STRING(rscTimestamp, L"*RscTimestamp");
     DefaultCapabilities->TcpTimestampOption = DefaultCapabilities->TcpTimestampOption && !IsKeywordSettingDisabled(rscTimestamp);
@@ -1196,6 +1218,11 @@ NxOffloadManager::SetRscActiveCapabilities(
         netAdapterCapabilities.Layer4Flags |= NetAdapterOffloadLayer4FlagTcpNoOptions;
     }
 
+    if (ActiveCapabilities->Udp)
+    {
+        netAdapterCapabilities.Layer4Flags |= NetAdapterOffloadLayer4FlagUdp;
+    }
+
     SetActiveCapabilities(netAdapterCapabilities, OffloadType::Rsc);
 }
 
@@ -1209,6 +1236,21 @@ NxOffloadManager::IsRscSoftwareFallbackEnabled(
 
     if (IsKeywordPresent(rscIpv4) ||
         IsKeywordPresent(rscIpv6))
+    {
+        return true;
+    }
+
+    return false;
+}
+
+bool
+NxOffloadManager::IsUdpRscSoftwareFallbackEnabled(
+    void
+) const
+{
+    DECLARE_CONST_UNICODE_STRING(udpRsc, L"*UdpRsc");
+
+    if (IsKeywordPresent(udpRsc))
     {
         return true;
     }

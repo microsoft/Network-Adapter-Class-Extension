@@ -13,25 +13,24 @@
 #include "PollReserved.hpp"
 #include "KMemoryAccess.h"
 #include "EcEvents.h"
+#include "DispatcherSubsystem.hpp"
 
 GUID g_staticEcClientIdentier = { 0 };
-
-EXECUTION_CONTEXT_RUNTIME_KNOBS g_staticEcKnobs = {
-    /*.Size = */                    sizeof(g_staticEcKnobs),
-    /*.Flags = */                   ExecutionContextFlagRunDpcForFirstLoop,
-    /*.MaxTimeAtDispatch = */       0,
-    /*.DispatchTimeWarning = */     0,
-    /*.DpcWatchdogTimerThreshold =*/80,
-    /*.WorkerThreadPriority = */    8,
-    /*.MaxPacketsSend = */          64,
-    /*.MaxPacketsSendComplete = */  64,
-    /*.MaxPacketsReceive = */       64,
-    /*.MaxPacketsReceiveComplete =*/64
-};
 
 DECLARE_CONST_UNICODE_STRING(
     DefaultFriendlyName,
     L"Execution Context");
+
+PassiveLevelKnobs passivelLevelKnobs;
+
+bool
+operator==(
+    PROCESSOR_NUMBER const & P1,
+    PROCESSOR_NUMBER const & P2
+)
+{
+    return P1.Group == P2.Group && P1.Number == P2.Number;
+}
 
 _Use_decl_annotations_
 void
@@ -66,106 +65,102 @@ UnregisterNotificationTaskCallback(
 _Use_decl_annotations_
 PAGEDX
 ExecutionContext::ExecutionContext(
-    _In_ GUID const * ClientIdentifier,
-    _In_ EXECUTION_CONTEXT_RUNTIME_KNOBS const * RuntimeMutableKnobs
-)
-    : m_clientIdentifier(*ClientIdentifier)
-    , m_activityTracker(*ClientIdentifier)
-    , m_notifyDpc(NotifyDpcRoutine, this)
-    , m_pollDpc(PollDpcRoutine, this)
-    , m_runtimeKnobs(RuntimeMutableKnobs)
-    , m_warningLogger(*ClientIdentifier, RuntimeMutableKnobs->DispatchTimeWarningInterval)
-    , m_setWorkerThreadAffinityTask(this, EvtSetWorkerThreadAffinity, false)
-    , m_terminateWorkerThreadTask(this, EvtTerminateWorkerThread, false)
+    _In_ GUID const* ClientIdentifier,
+    _In_ wistd::unique_ptr<Dispatcher> dispatcher,
+    _In_ KPoolPtr<UNICODE_STRING> clientFriendlyName
+) noexcept :
+    m_dispatcher(wistd::move(dispatcher)),
+    m_clientFriendlyName(wistd::move(clientFriendlyName)),
+    m_clientIdentifier(*ClientIdentifier),
+    m_activityTracker(*ClientIdentifier),
+    m_notifyDpc(*this),
+    m_taskWorker{*m_dispatcher, DispatchHighPriority, TaskWorkerEntry},
+    m_pollWorker{*m_dispatcher, DispatchNormalPriority, PollWorkerEntry, PollWorkerStart, PollWorkerStop},
+    m_setAffinityWorker{*m_dispatcher, DispatchHighPriority, SetAffinityWorker}
 {
     PAGED_CODE();
     InitializeGlobalEcStatistic();
-    GetGlobalEcStatistics().AddHistogramReference(m_dpcHistogram);
-    DECLARE_CONST_UNICODE_STRING(dpcHistogramName, L"DpcDuration");
-    m_dpcHistogram.SetName(dpcHistogramName);
-
-    auto const dispatchTimeWarning = mem::ReadNoFence(&m_runtimeKnobs->DispatchTimeWarning);
-    m_warningLogger.SetWatermark(dispatchTimeWarning);
-
-    NT_FRE_ASSERT(m_runtimeKnobs);
 
     InitializeListHead(&m_taskQueue);
     InitializeListHead(&m_pollList);
     InitializeListHead(&m_notificationList);
+
+    m_notifyDpc.SetImportance(DpcImportance::MediumHigh);
+    m_taskWorker.Flags.NeedsPassiveLevel = 1;
+    m_taskWorker.DebugData = reinterpret_cast<ULONG_PTR>(this);
+    m_pollWorker.DebugData = reinterpret_cast<ULONG_PTR>(this);
+    InitializeListHead(&m_taskWorker.Entry);
+    InitializeListHead(&m_pollWorker.Entry);
+
+    m_activityTracker.Initialize(m_clientFriendlyName.get());
+    m_taskWorker.SetTargetDispatcher(*m_dispatcher);
+    m_pollWorker.SetTargetDispatcher(*m_dispatcher);
+    m_setAffinityWorker.SetTargetDispatcher(*m_dispatcher);
 }
 
-_IRQL_requires_(PASSIVE_LEVEL)
+_Use_decl_annotations_
 PAGEDX
 ExecutionContext::~ExecutionContext(
     void
 )
 {
     PAGED_CODE();
-    GetGlobalEcStatistics().RemoveHistogramReference(m_dpcHistogram);
 
     Destroy();
 
-    NT_FRE_ASSERT(!m_workerThreadRequested.Test());
     NT_FRE_ASSERT(IsListEmpty(&m_taskQueue));
 }
 
 _Use_decl_annotations_
 PAGEDX
 NTSTATUS
-ExecutionContext::InitializeFriendlyName(
-    UNICODE_STRING const * FriendlyName
-)
+ExecutionContext::Create(
+    _In_opt_ UNICODE_STRING const* ClientFriendlyName,
+    _In_opt_ GUID const* ClientIdentifier,
+    _Out_ wistd::unique_ptr<ExecutionContext>& ExecutionContext)
 {
-    PAGED_CODE();
+    auto dispatcher = wil::make_unique_nothrow<Dispatcher>(passivelLevelKnobs);
 
-    auto const & sourceString = FriendlyName != nullptr && FriendlyName->Length > 0
-        ? *FriendlyName
-        : DefaultFriendlyName;
-
-    m_clientFriendlyName = Rtl::DuplicateUnicodeString(
-        sourceString,
-        'aNCE');
-
-    if (!m_clientFriendlyName)
+    if (!dispatcher)
     {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    return STATUS_SUCCESS;
-}
-
-_Use_decl_annotations_
-PAGEDX
-NTSTATUS
-ExecutionContext::Initialize(
-    UNICODE_STRING const * clientFriendlyName
-)
-{
-    PAGED_CODE();
-
-    auto ntStatus = InitializeFriendlyName(clientFriendlyName);
-    m_warningLogger.SetFriendlyName(m_clientFriendlyName.get());
-    m_activityTracker.Initialize(m_clientFriendlyName.get());
+    auto ntStatus = dispatcher->Initialize();
 
     if (ntStatus != STATUS_SUCCESS)
     {
         return ntStatus;
     }
 
-    ntStatus = EcThreadCreate(
-        ExecutionContext::Thread,
-        this,
-        m_workerThreadObject);
+    auto const sourceString = ClientFriendlyName != nullptr && ClientFriendlyName->Length > 0
+        ? *ClientFriendlyName
+        : DefaultFriendlyName;
 
-    if (ntStatus != STATUS_SUCCESS)
+    KPoolPtr<UNICODE_STRING> clientFriendlyName =
+        Rtl::DuplicateUnicodeString(
+            sourceString,
+            'aNCE'
+        );
+
+    if (!clientFriendlyName)
     {
-        return ntStatus;
+        return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    EcThreadSetPriority(m_workerThreadObject, m_runtimeKnobs->WorkerThreadPriority);
-    SetWorkerThreadDescription(*m_clientFriendlyName);
+    auto executionContext = wil::make_unique_nothrow<::ExecutionContext>(
+        ClientIdentifier != nullptr ? ClientIdentifier : &g_staticEcClientIdentier,
+        wistd::move(dispatcher),
+        wistd::move(clientFriendlyName)
+    );
 
-    m_workerThreadReady.Wait();
+    if (!executionContext)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    ExecutionContext = wistd::move(executionContext);
+
     return STATUS_SUCCESS;
 }
 
@@ -174,22 +169,6 @@ void
 ExecutionContext::Destroy(
 )
 {
-    // This is a scenario when EC has failed to initialize
-    if (!m_workerThreadObject)
-    {
-        return;
-    }
-
-    {
-        KAcquireSpinLock lock{ m_lock };
-        if (m_affinityChanged)
-        {
-            m_workerThreadAffinity = m_originalWorkerThreadAffinity;
-            lock.Release();
-            QueueTask(m_setWorkerThreadAffinityTask, ExecutionContextEvent::QueueSetWorkerThreadAffinityTask);
-        }
-    }
-
     struct
     {
         LIST_ENTRY *notificationsList;
@@ -222,12 +201,12 @@ ExecutionContext::Destroy(
     localContext.notificationsList = &m_notificationList;
     localContext.pollList = &m_pollList;
 
-    ExecutionContextTask unregisterEverythingTask { &localContext, unregisterEverything };
-    QueueTask(unregisterEverythingTask, ExecutionContextEvent::QueueUnregisterEverything);
-    QueueTask(m_terminateWorkerThreadTask, ExecutionContextEvent::QueueTerminationTask);
+    KWaitTask unregisterEverythingTask{&localContext, unregisterEverything};
+    QueueTask(unregisterEverythingTask.GetTask(), ExecutionContextEvent::QueueUnregisterEverything);
 
-    // we don't have to wait for other tasks explicitly, because EC gurantees first come - first serve serialization
-    EcThreadWaitForTermination(m_workerThreadObject);
+    unregisterEverythingTask.WaitForCompletion();
+    m_pollWorker.Rundown();
+    m_taskWorker.Rundown();
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -316,9 +295,9 @@ ExecutionContext::RegisterPoll(
     addContext.Ec = this;
     addContext.EcPoll = Poll;
 
-    ExecutionContextTask task{ &addContext, taskFn };
+    KWaitTask task{&addContext, taskFn};
 
-    QueueTask(task, ExecutionContextEvent::QueueRegisterPollTask);
+    QueueTask(task.GetTask(), ExecutionContextEvent::QueueRegisterPollTask);
     task.WaitForCompletion();
 }
 
@@ -350,8 +329,8 @@ ExecutionContext::UnregisterPoll(
 {
     PAGED_CODE();
 
-    ExecutionContextTask task{ &Poll->Link, UnregisterPollTaskCallback };
-    QueueTask(task, ExecutionContextEvent::QueueUnregisterPollTask);
+    KWaitTask task{&Poll->Link, UnregisterPollTaskCallback};
+    QueueTask(task.GetTask(), ExecutionContextEvent::QueueUnregisterPollTask);
     task.WaitForCompletion();
 }
 
@@ -401,9 +380,8 @@ ExecutionContext::ChangePollFunction(
         *changeContext->TargetPointer = changeContext->NewPollFn;
     };
 
-    ExecutionContextTask changePollTask { &context, changePollFn };
-
-    QueueTask(changePollTask, ExecutionContextEvent::QueueChangePollFunctionTask);
+    KWaitTask changePollTask{&context, changePollFn};
+    QueueTask(changePollTask.GetTask(), ExecutionContextEvent::QueueChangePollFunctionTask);
     changePollTask.WaitForCompletion();
 }
 
@@ -435,9 +413,8 @@ ExecutionContext::RegisterNotification(
     addContext.ListHead = &m_notificationList;
     addContext.Entry = &Notification->Link;
 
-    ExecutionContextTask task{ &addContext, taskFn };
-
-    QueueTask(task, ExecutionContextEvent::QueueRegisterNotificationTask);
+    KWaitTask task{&addContext, taskFn};
+    QueueTask(task.GetTask(), ExecutionContextEvent::QueueRegisterNotificationTask);
     task.WaitForCompletion();
 }
 
@@ -465,8 +442,8 @@ ExecutionContext::UnregisterNotification(
 {
     PAGED_CODE();
 
-    ExecutionContextTask task{ &Notification->Link, UnregisterNotificationTaskCallback };
-    QueueTask(task, ExecutionContextEvent::QueueUnregisterNotificationTask);
+    KWaitTask task{&Notification->Link, UnregisterNotificationTaskCallback};
+    QueueTask(task.GetTask(), ExecutionContextEvent::QueueUnregisterNotificationTask);
     task.WaitForCompletion();
 }
 
@@ -498,6 +475,7 @@ ExecutionContext::ChangeStateLockHeld(
             NT_FRE_ASSERT(
                 TargetState == ExecutionContextState::WaitingWorkerThread ||
                 TargetState == ExecutionContextState::WaitingWorkerDpc ||
+                TargetState == ExecutionContextState::WaitingDispatcher ||
                 TargetState == ExecutionContextState::Running);
 
             break;
@@ -514,12 +492,19 @@ ExecutionContext::ChangeStateLockHeld(
 
             break;
 
+        case ExecutionContextState::WaitingDispatcher:
+
+            NT_FRE_ASSERT(TargetState == ExecutionContextState::Running);
+
+            break;
+
         case ExecutionContextState::Running:
 
             NT_FRE_ASSERT(
                 TargetState == ExecutionContextState::Stopped ||
                 TargetState == ExecutionContextState::WaitingWorkerThread ||
-                TargetState == ExecutionContextState::WaitingWorkerDpc);
+                TargetState == ExecutionContextState::WaitingWorkerDpc ||
+                TargetState == ExecutionContextState::WaitingDispatcher);
 
             break;
     }
@@ -527,7 +512,7 @@ ExecutionContext::ChangeStateLockHeld(
     auto const previousState = m_state;
     m_state = TargetState;
 
-    m_activityTracker.LogStateChange(Reason, previousState, TargetState);
+    m_activityTracker.LogStateChange(Reason, previousState, TargetState, m_pollWorker.CurrentDispatcher);
 }
 
 _Use_decl_annotations_
@@ -536,7 +521,19 @@ ExecutionContext::Notify(
     void
 )
 {
-    auto const isIrqlAboveDispatch = KeGetCurrentIrql() > DISPATCH_LEVEL;
+    EXECUTION_CONTEXT_NOTIFY_PARAMETERS parameters;
+    INITIALIZE_EXECUTION_CONTEXT_NOTIFY_PARAMETERS(&parameters);
+
+    NotifyEx(&parameters);
+}
+
+_Use_decl_annotations_
+void
+ExecutionContext::NotifyEx(
+    EXECUTION_CONTEXT_NOTIFY_PARAMETERS * Parameters
+)
+{
+    auto const isIrqlAboveDispatch = Parameters->Irql > DISPATCH_LEVEL;
 
     if (isIrqlAboveDispatch)
     {
@@ -546,7 +543,7 @@ ExecutionContext::Notify(
         return;
     }
 
-    NotifyCommon(NotifyContext::ArbitraryContext);
+    NotifyCommon(NotifyContext::ArbitraryContext, Parameters);
 }
 
 _Use_decl_annotations_
@@ -555,51 +552,32 @@ ExecutionContext::NotifyDpc(
     void
 )
 {
-    NotifyCommon(NotifyContext::NotifyDpc);
+    EXECUTION_CONTEXT_NOTIFY_PARAMETERS parameters;
+    INITIALIZE_EXECUTION_CONTEXT_NOTIFY_PARAMETERS_WITH_IRQL(&parameters, DISPATCH_LEVEL);
+
+    NotifyCommon(NotifyContext::NotifyDpc, &parameters);
 }
 
 _Use_decl_annotations_
 void
 ExecutionContext::NotifyCommon(
-    NotifyContext Context
+    NotifyContext Context,
+    EXECUTION_CONTEXT_NOTIFY_PARAMETERS * Parameters
 )
 {
+    UNREFERENCED_PARAMETER((Context, Parameters));
+
     KAcquireSpinLock lock{ m_lock };
-
     m_activityTracker.LogEvent(ExecutionContextEvent::Notify);
+    lock.Release();
 
-    m_hasPollWork = true;
-
-    if (m_state != ExecutionContextState::Stopped)
-    {
-        // EC is already running in a different context, the poll work will be picked up by it
-        return;
-    }
-
-    if (ShouldRunInDpc())
-    {
-        if (Context == NotifyContext::NotifyDpc)
-        {
-            // The EC is configured to run in DPC and we are already using one of our own, we can just start polling
-            RunLockHeld(lock, RunContext::NotifyDpc);
-        }
-        else
-        {
-            // This Notify call is coming from an arbitrary context, switch to our own DPC
-            QueueWorkerDpc(ExecutionContextStateChangeReason::NotifyNeedsDpc);
-        }
-    }
-    else
-    {
-        // We cannot run in DPC, switch to the worker thread
-        QueueWorkerThread(ExecutionContextStateChangeReason::NotifyNeedsWorkerThread);
-    }
+    m_pollWorker.Insert();
 }
 
 _Use_decl_annotations_
 void
 ExecutionContext::QueueTask(
-    ExecutionContextTask & Task
+    EXECUTION_CONTEXT_TASK * Task
 )
 {
     QueueTask(Task, ExecutionContextEvent::QueueTask);
@@ -608,7 +586,7 @@ ExecutionContext::QueueTask(
 _Use_decl_annotations_
 void
 ExecutionContext::QueueTask(
-    ExecutionContextTask & Task,
+    EXECUTION_CONTEXT_TASK * Task,
     ExecutionContextEvent Event
 )
 {
@@ -616,82 +594,10 @@ ExecutionContext::QueueTask(
 
     m_activityTracker.LogEvent(Event);
 
-    auto const queued = Task.AddToList(&m_taskQueue);
+    InsertTailList(&m_taskQueue, &Task->Linkage);
+    lock.Release();
 
-    if (queued && m_state == ExecutionContextState::Stopped)
-    {
-        QueueWorkerThread(ExecutionContextStateChangeReason::TaskQueuedWhileStopped);
-    }
-}
-
-_Use_decl_annotations_
-PAGEDX
-EC_RETURN
-ExecutionContext::Thread(
-    void * Context
-)
-{
-    PAGED_CODE();
-
-    auto executionContext = static_cast<ExecutionContext *>(Context);
-    executionContext->WorkerThreadRoutine();
-
-    return EC_RETURN();
-}
-
-_Use_decl_annotations_
-void
-ExecutionContext::NotifyDpcRoutine(
-    ExecutionContext * ExecutionContext
-)
-{
-    ExecutionContext->NotifyDpc();
-}
-
-_Use_decl_annotations_
-void
-ExecutionContext::PollDpcRoutine(
-    ExecutionContext * ExecutionContext
-)
-{
-    ExecutionContext->PollDpc();
-}
-
-_Use_decl_annotations_
-void
-ExecutionContext::PollDpc(
-    void
-)
-{
-    RunLockNotHeld(RunContext::WorkerDpc);
-}
-
-_Use_decl_annotations_
-void
-ExecutionContext::WorkerThreadRoutine(
-    void
-)
-{
-    m_workerThreadReady.Set();
-
-    while (true)
-    {
-        m_workerThreadRequested.Wait();
-
-        RunLockNotHeld(RunContext::WorkerThread);
-
-        if (m_terminateWorkerThread)
-        {
-            // If we are terminating the worker thread we must not have any registered poll callbacks nor notification callbacks
-            NT_FRE_ASSERT(IsListEmpty(&m_pollList));
-            NT_FRE_ASSERT(IsListEmpty(&m_notificationList));
-
-            KAcquireSpinLock lock{ m_lock };
-            NT_FRE_ASSERT(IsListEmpty(&m_taskQueue));
-
-            return;
-        }
-    }
+    m_taskWorker.Insert();
 }
 
 _Use_decl_annotations_
@@ -700,29 +606,20 @@ ExecutionContext::ProcessTaskQueue(
     KAcquireSpinLock & Lock
 )
 {
-    NT_FRE_ASSERT(m_state == ExecutionContextState::Running);
-
     while (!IsListEmpty(&m_taskQueue))
     {
         m_activityTracker.LogTask();
 
-        auto task = ExecutionContextTask::FromLink(
-            RemoveHeadList(&m_taskQueue));
+        auto task = CONTAINING_RECORD(
+            RemoveHeadList(&m_taskQueue),
+            EXECUTION_CONTEXT_TASK,
+            Linkage);
 
-        InitializeListHead(&task->m_linkage);
+        InitializeListHead(&task->Linkage);
 
         Lock.Release();
 
-        auto const signalCompletion = task->m_signalCompletion;
-
-        task->m_taskFn(task->m_context);
-
-        // After this point it is not safe to touch the task memory, unless if the user
-        // asked us to signal the internal event
-        if (signalCompletion)
-        {
-            task->m_completed.Set();
-        }
+        task->TaskFn(task->Context);
 
         Lock.Acquire();
     }
@@ -739,6 +636,8 @@ ExecutionContext::EnableNotifications(
         auto notificationReserved = NotificationReserved::FromNotificationEntry(link);
         notificationReserved->Enable();
     }
+
+    m_armed = true;
 }
 
 _Use_decl_annotations_
@@ -752,6 +651,8 @@ ExecutionContext::DisableNotifications(
         auto notificationReserved = NotificationReserved::FromNotificationEntry(link);
         notificationReserved->Disable();
     }
+
+    m_armed = false;
 }
 
 _Use_decl_annotations_
@@ -780,359 +681,137 @@ ExecutionContext::PollClients(
 }
 
 _Use_decl_annotations_
-ExecutionContext::PollExitReason
-ExecutionContext::Poll(
-    KIRQL Irql
-)
-{
-    const Statistics::Timer timer { &m_dpcHistogram, Irql == DISPATCH_LEVEL };
-    m_pollingThread = EcGetCurrentThread();
-    auto pollingScopeGuard = wil::scope_exit([this](){ m_pollingThread = EC_THREAD_INVALID; });
-
-    DisableNotifications();
-    bool armed = false;
-
-    auto const maxTimeInDispatch = mem::ReadNoFence(&m_runtimeKnobs->MaxTimeAtDispatch);
-    auto const flags = mem::ReadNoFence(&m_runtimeKnobs->Flags);
-    auto const dpcWatchdogThreshold = mem::ReadNoFence(&m_runtimeKnobs->DpcWatchdogTimerThreshold);
-
-    TimeBudget timeBudget {
-        maxTimeInDispatch,
-        WI_IsFlagSet(flags, ExecutionContextFlagTryExtendMaxTimeAtDispatch),
-        dpcWatchdogThreshold,
-        Irql
-    };
-
-    timeBudget.Reset();
-
-    while (true)
-    {
-        // when clients did some work, we assume there might be more work to do
-        auto const workCounter = PollClients(Irql);
-        auto const workDone = workCounter > 0;
-
-        m_activityTracker.LogIteration(workCounter);
-
-        if (!workDone && !armed)
-        {
-            // No work was done and notifications are currently not armed, arm them
-            EnableNotifications();
-            armed = true;
-        }
-        else if (!workDone && armed)
-        {
-            // No work was done and notifications were already enabled, exit the polling loop
-            break;
-        }
-        else if (workDone && armed)
-        {
-            // We had armed notifications but had activity before exiting the polling loop, disarm notifications
-            DisableNotifications();
-            armed = false;
-        }
-
-        {
-            KAcquireSpinLock lock{ m_lock };
-
-            if (!IsListEmpty(&m_taskQueue))
-            {
-                return PollExitReason::TaskPending;
-            }
-        }
-
-        if (Irql == DISPATCH_LEVEL)
-        {
-            m_warningLogger.LogWarningIfOvertime(timeBudget);
-        }
-
-        // Always false at PASSIVE_LEVEL
-        if (timeBudget.IsOutOfBudget() && !m_terminateWorkerThread)
-        {
-            return PollExitReason::OutOfDpcBudget;
-        }
-    }
-
-    return PollExitReason::NoMoreWork;
-}
-
-_Use_decl_annotations_
-bool
-ExecutionContext::ShouldRunInDpc(
-    void
-) const
-{
-    auto const flags = mem::ReadNoFence(&m_runtimeKnobs->Flags);
-    return WI_IsFlagSet(flags, ExecutionContextFlagRunDpcForFirstLoop);
-}
-
-_Use_decl_annotations_
-EC_THREAD_PRIORITY
-ExecutionContext::GetWorkerThreadPriority(
-    void
-)
-{
-    if (!m_workerThreadObject)
-    {
-        return EC_INVALID_THREAD_PRIORITY;
-    }
-
-    return EcThreadGetPriority(m_workerThreadObject);
-}
-
-_Use_decl_annotations_
 void
-ExecutionContext::SetWorkerThreadAffinity(
-    const GROUP_AFFINITY & GroupAffinity
-)
-{
-    {
-        KAcquireSpinLock lock{ m_lock };
-        m_workerThreadAffinity = GroupAffinity;
-    }
-
-    // If the task is already queued this is a no-op, the new value we set last will be used
-    // If the task is currenlty running it might or might not pick up the new value right
-    // away, but we are guaranteed to queue the task
-    QueueTask(m_setWorkerThreadAffinityTask, ExecutionContextEvent::QueueSetWorkerThreadAffinityTask);
-}
-
-_Use_decl_annotations_
-void
-ExecutionContext::SetDpcTargetProcessor(
-    _In_ const PROCESSOR_NUMBER & ProcessorNumber
+ExecutionContext::SetAffinity(
+    _In_ const PROCESSOR_NUMBER & Processor
 )
 {
     static_assert(sizeof(PROCESSOR_NUMBER) == sizeof(ULONG));
-    WriteULongRelease(reinterpret_cast<ULONG *>(&m_dpcAffinity), reinterpret_cast<const ULONG &>(ProcessorNumber));
+    WriteULongRelease(reinterpret_cast<ULONG *>(&m_affinity), reinterpret_cast<const ULONG &>(Processor));
+    m_setAffinityWorker.Insert();
 }
 
-_Use_decl_annotations_
-void
-ExecutionContext::SetWorkerThreadDescription(
-    const UNICODE_STRING & Description
+WorkerExitStatus
+TaskWorkerEntry(
+    DispatcherWorker * Worker,
+    KIRQL Irql
 )
 {
-    if (Description.Length == 0 || Description.Buffer == nullptr)
-    {
-        return;
-    }
-
-    EcThreadSetDescription(m_workerThreadObject, Description);
+    auto executionContext = CONTAINING_RECORD(Worker, ExecutionContext, m_taskWorker);
+    return executionContext->TaskWorker(Irql);
 }
 
-_Use_decl_annotations_
-void
-ExecutionContext::RunLockNotHeld(
-    RunContext Context
-)
+WorkerExitStatus
+ExecutionContext::TaskWorker(KIRQL Irql)
 {
-    KAcquireSpinLock lock { m_lock };
-    RunLockHeld(lock, Context);
-}
+    NT_FRE_ASSERT(Irql == PASSIVE_LEVEL);
 
-_Use_decl_annotations_
-void
-ExecutionContext::RunLockHeld(
-    KAcquireSpinLock & Lock,
-    RunContext Context
-)
-{
-    ExecutionContextStateChangeReason reason{};
-
-    switch (Context)
-    {
-        case RunContext::NotifyDpc:
-
-            reason = ExecutionContextStateChangeReason::NotifyDpcScheduledWhileStopped;
-            break;
-
-        case RunContext::WorkerDpc:
-
-            reason = ExecutionContextStateChangeReason::WorkerDpcScheduled;
-            break;
-
-        case RunContext::WorkerThread:
-
-            reason = ExecutionContextStateChangeReason::WorkerThreadScheduled;
-            break;
-
-        default:
-
-            NT_FRE_ASSERTMSG(
-                "Invalid RunContext passed to RunLockHeld",
-                false);
-            break;
-    }
-
-    ChangeStateLockHeld(reason, ExecutionContextState::Running);
-
-    //
-    // Tasks have priority over polling
-    //
-
-    if (!IsListEmpty(&m_taskQueue))
-    {
-        if (Context != RunContext::WorkerThread)
-        {
-            // If we're running at DPC we must switch to the worker thread
-            QueueWorkerThread(ExecutionContextStateChangeReason::TaskQueuedWhileRunningFromDpc);
-            return;
-        }
-
-        ProcessTaskQueue(Lock);
-    }
-
-    if (m_hasPollWork)
-    {
-        m_hasPollWork = false;
-        Lock.Release();
-
-        // Use a new scope for IrqlController, otherwise it might cause an IRQL mismatch next time we release the spin lock
-        PollExitReason exitReason;
-        {
-            auto const flags = mem::ReadNoFence(&m_runtimeKnobs->Flags);
-            auto const raiseToDispatch = Context == RunContext::WorkerThread && WI_IsFlagSet(flags, ExecutionContextFlagRunWorkerThreadAtDispatch);
-            IrqlController irqlController { raiseToDispatch };
-
-            KIRQL irql{};
-
-            switch (Context)
-            {
-                case RunContext::NotifyDpc:
-
-                    [[fallthrough]];
-
-                case RunContext::WorkerDpc:
-
-                    irql = DISPATCH_LEVEL;
-                    break;
-
-                case RunContext::WorkerThread:
-
-                    irql = irqlController.WasRaised()
-                        ? DISPATCH_LEVEL
-                        : PASSIVE_LEVEL;
-
-                    break;
-            }
-
-            exitReason = Poll(irql);
-        }
-
-        Lock.Acquire();
-
-        if (exitReason != PollExitReason::NoMoreWork)
-        {
-            // ExecutionContext::Poll had to return before the poll clients went idle to let us schedule our worker
-            // thread. Make sure we go back to polling when we get rescheduled
-            m_hasPollWork = true;
-
-            QueueWorkerThread(
-                exitReason == PollExitReason::OutOfDpcBudget
-                    ? ExecutionContextStateChangeReason::OutOfDpcBudget
-                    : ExecutionContextStateChangeReason::TaskPreemptedPolling);
-
-            return;
-        }
-    }
-
-    // Before changing the state back to stopped we need to check if new work was scheduled
-    if (!IsListEmpty(&m_taskQueue))
-    {
-        QueueWorkerThread(ExecutionContextStateChangeReason::TaskQueuedWhileExitingWorker);
-    }
-    else if (m_hasPollWork)
-    {
-        if (ShouldRunInDpc())
-        {
-            QueueWorkerDpc(ExecutionContextStateChangeReason::NotifyWhileExitingWorker);
-        }
-        else
-        {
-            QueueWorkerThread(ExecutionContextStateChangeReason::NotifyWhileExitingWorker);
-        }
-    }
-    else
-    {
-        ChangeStateLockHeld(ExecutionContextStateChangeReason::NoMoreWork, ExecutionContextState::Stopped);
-    }
-}
-
-_Use_decl_annotations_
-void
-ExecutionContext::QueueWorkerThread(
-    ExecutionContextStateChangeReason Reason
-)
-{
-    ChangeStateLockHeld(Reason, ExecutionContextState::WaitingWorkerThread);
-    m_workerThreadRequested.Set();
-}
-
-_Use_decl_annotations_
-void
-ExecutionContext::QueueWorkerDpc(
-    ExecutionContextStateChangeReason Reason
-)
-{
-    ChangeStateLockHeld(Reason, ExecutionContextState::WaitingWorkerDpc);
-
-    auto processorNumberAsUlong = ReadULongAcquire(reinterpret_cast<ULONG *>(&m_dpcAffinity));
-    auto processorNumber = reinterpret_cast<PROCESSOR_NUMBER &>(processorNumberAsUlong);
-
-    if (processorNumber.Number != MAXIMUM_PROC_PER_GROUP)
-    {
-        m_pollDpc.SetTargetProcessorDpcEx(&processorNumber);
-    }
-
-    m_pollDpc.InsertQueueDpc();
-}
-
-_Use_decl_annotations_
-void
-ExecutionContext::EvtSetWorkerThreadAffinity(
-    void * Context
-)
-{
-    auto executionContext = static_cast<ExecutionContext *>(Context);
-    executionContext->SetWorkerThreadAffinityTask();
-}
-
-_Use_decl_annotations_
-void
-ExecutionContext::SetWorkerThreadAffinityTask(
-    void
-)
-{
     KAcquireSpinLock lock{ m_lock };
-    if (!m_affinityChanged)
-    {
-        EcThreadSetAffinity(&m_workerThreadAffinity, &m_originalWorkerThreadAffinity);
-        m_affinityChanged = true;
-    }
-    else
-    {
-        EcThreadSetAffinity(&m_workerThreadAffinity, nullptr);
-    }
+    ProcessTaskQueue(lock);
+
+    return WorkerExitStatus::Remove;
 }
 
-_Use_decl_annotations_
 void
-ExecutionContext::EvtTerminateWorkerThread(
-    void * Context
+PollWorkerStart(
+    DispatcherWorker * Worker
 )
 {
-    auto executionContext = static_cast<ExecutionContext *>(Context);
-    executionContext->TerminateWorkerThreadTask();
+    auto executionContext = CONTAINING_RECORD(Worker, ExecutionContext, m_pollWorker);
+    executionContext->PollStart();
 }
 
-_Use_decl_annotations_
 void
-ExecutionContext::TerminateWorkerThreadTask(
+ExecutionContext::PollStart(
     void
 )
 {
-    //Worker thread termination should be requested only once
-    NT_FRE_ASSERT(!m_terminateWorkerThread);
+    ChangeStateLockNotHeld(ExecutionContextStateChangeReason::PollWorkerEntry, ExecutionContextState::Running);
+    DisableNotifications();
+}
 
-    m_terminateWorkerThread = true;
+void
+PollWorkerStop(
+    DispatcherWorker * Worker
+)
+{
+    auto executionContext = CONTAINING_RECORD(Worker, ExecutionContext, m_pollWorker);
+    executionContext->PollStop();
+}
+
+void
+ExecutionContext::PollStop(
+    void
+)
+{
+    ChangeStateLockNotHeld(ExecutionContextStateChangeReason::PollWorkerExit, ExecutionContextState::Stopped);
+}
+
+WorkerExitStatus
+PollWorkerEntry(
+    DispatcherWorker * Worker,
+    KIRQL Irql
+)
+{
+    auto executionContext = CONTAINING_RECORD(Worker, ExecutionContext, m_pollWorker);
+    return executionContext->PollWorker(Irql);
+}
+
+WorkerExitStatus
+ExecutionContext::PollWorker(KIRQL Irql)
+{
+    auto const workCounter = PollClients(Irql);
+    auto const workDone = workCounter > 0;
+
+    m_activityTracker.LogIteration(workCounter);
+
+    if (!workDone && !m_armed)
+    {
+        // No work was done and notifications are currently not armed, arm them
+        EnableNotifications();
+    }
+    else if (workDone && m_armed)
+    {
+        // We had armed notifications but had activity before exiting the polling loop, disarm notifications
+        DisableNotifications();
+    }
+    else if (!workDone && m_armed)
+    {
+        return WorkerExitStatus::Remove;
+    }
+
+    return WorkerExitStatus::Yield;
+}
+
+WorkerExitStatus
+SetAffinityWorker(
+    DispatcherWorker * Worker,
+    KIRQL Irql
+)
+{
+    UNREFERENCED_PARAMETER(Irql);
+
+    auto executionContext = CONTAINING_RECORD(
+        Worker,
+        ExecutionContext,
+        m_setAffinityWorker);
+
+    executionContext->SetAffinityWorkerInner();
+
+    return WorkerExitStatus::Remove;
+}
+
+_Use_decl_annotations_
+void
+ExecutionContext::SetAffinityWorkerInner(
+    void
+)
+{
+    auto processorNumberAsUlong = ReadULongAcquire(reinterpret_cast<ULONG *>(&m_affinity));
+    auto processorNumber = reinterpret_cast<PROCESSOR_NUMBER &>(processorNumberAsUlong);
+    auto & newDispatcher = GetProcessorDispatcher(processorNumber);
+
+    m_taskWorker.SetTargetDispatcher(newDispatcher);
+    m_pollWorker.SetTargetDispatcher(newDispatcher);
+    m_setAffinityWorker.SetTargetDispatcher(newDispatcher);
 }

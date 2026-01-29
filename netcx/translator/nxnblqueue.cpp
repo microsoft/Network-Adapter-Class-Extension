@@ -43,14 +43,16 @@ NxNblQueue::Enqueue(_Inout_ NBL_COUNTED_QUEUE *queue)
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
-void
+ULONG64
 NxNblQueue::DequeueAll(
     _Out_ NBL_QUEUE *destination)
 {
     KAcquireSpinLock lock(m_SpinLock);
     NdisInitializeNblQueue(destination);
     NdisAppendNblQueueToNblQueueFast(destination, &m_nblQueue.Queue);
+    auto nblCount = m_nblQueue.NblCount;
     m_nblQueue.NblCount = 0;
+    return nblCount;
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)

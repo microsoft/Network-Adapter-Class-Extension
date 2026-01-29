@@ -11,7 +11,9 @@
 #include "extension/NxExtensionLayout.hpp"
 #include "queue/Queue.hpp"
 
-#include "ExecutionContext.hpp"
+#include "ExecutionContextWrapper.hpp"
+#include "KWaitTask.hpp"
+#include "KObjectTask.hpp"
 
 struct NX_PRIVATE_GLOBALS;
 class NxAdapter;
@@ -53,8 +55,11 @@ struct QUEUE_CREATION_CONTEXT
     unique_packet_queue
         CreatedQueueObject;
 
-    ExecutionContext *
+    ExecutionContextWrapper *
         ExecutionContext = nullptr;
+
+    BOOLEAN
+        CreateReturnContextRing = FALSE;
 };
 
 class NxQueue
@@ -85,7 +90,7 @@ public:
     );
 
     _IRQL_requires_(PASSIVE_LEVEL)
-    ExecutionContext *
+    ExecutionContextWrapper *
     GetExecutionContext(
         void
     );
@@ -120,6 +125,13 @@ public:
         NxQueueVerifier & Verifier
     );
 
+#ifdef NETCX_UMDF
+    void
+    Advance(
+        EXECUTION_CONTEXT_POLL_PARAMETERS * Poll
+    );
+#endif
+
     void
     Cancel(
         void
@@ -144,6 +156,17 @@ public:
     GetWdfObject(
         void
     );
+
+#ifdef NETCX_UMDF
+    void
+    GetCallbacks(
+        _Out_ EXECUTION_CONTEXT_POLL * Advance,
+        _Out_ EXECUTION_CONTEXT_TASK * Start,
+        _Out_ EXECUTION_CONTEXT_TASK * Cancel,
+        _Out_ EXECUTION_CONTEXT_TASK * Stop,
+        _Out_ EXECUTION_CONTEXT_NOTIFICATION * SetNotification
+    );
+#endif
 
     ULONG const
         m_queueId;
@@ -170,6 +193,15 @@ private:
     NET_PACKET_QUEUE_CONFIG
         m_packetQueueConfig = {};
 
+    NET_CLIENT_QUEUE_TX_DEMUX_PROPERTY
+        m_demuxPeerAddressProperty = {};
+
+    NET_CLIENT_QUEUE_TX_DEMUX_PROPERTY
+        m_demuxWmmProperty = {};
+
+    NET_CLIENT_QUEUE_TX_DEMUX_PROPERTY
+        m_demux8021pProperty = {};
+
     NETPACKETQUEUE const
         m_queue;
 
@@ -177,14 +209,28 @@ private:
         m_parent;
 
     // Used when client driver does not provide their own execution context
-    wistd::unique_ptr<ExecutionContext>
+    wistd::unique_ptr<ExecutionContextWrapper>
         m_frameworkExecutionContext;
 
-    ExecutionContext *
+    ExecutionContextWrapper *
         m_executionContext = nullptr;
 
     EXECUTION_CONTEXT_NOTIFICATION
         m_driverNotification = {};
+
+#ifdef NETCX_UMDF
+    EXECUTION_CONTEXT_POLL
+        m_poll{};
+
+    KObjectTask<NxQueue, &NxQueue::Start>
+        m_startTask;
+
+    KObjectTask<NxQueue, &NxQueue::Cancel>
+        m_cancelTask;
+
+    KObjectTask<NxQueue, &NxQueue::Stop>
+        m_stopTask;
+#endif
 };
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxQueue, GetNxQueueFromHandle);

@@ -33,7 +33,7 @@ class GenericSegmentationOffload
 public:
 
     _IRQL_requires_(PASSIVE_LEVEL)
-    GenericSegmentationOffload::GenericSegmentationOffload(
+    GenericSegmentationOffload(
         void
     );
 

@@ -56,13 +56,21 @@ NxConfiguration::ReadConfiguration(
     _In_  NDIS_PARAMETER_TYPE            ParameterType)
 {
     NDIS_STATUS ndisStatus;
+#if NETCX_KMDF
     NdisWdfReadConfiguration(
         &ndisStatus,
         ParameterValue,
         m_ndisConfigurationHandle,
         (PNDIS_STRING)Keyword,
         ParameterType);
-
+#else
+    m_adapter->GetBridgeToKernel().ReadConfiguration(
+        &ndisStatus,
+        ParameterValue,
+        m_ndisConfigurationHandle,
+        (PNDIS_STRING)Keyword,
+        ParameterType);
+#endif
 
 
 
@@ -114,10 +122,15 @@ Routine Description:
 {
     auto nxConfiguration = GetNxConfigurationFromHandle((NETCONFIGURATION)Configuration);
     if (nxConfiguration->m_ndisConfigurationHandle) {
+#if NETCX_KMDF
         //
         // Close Ndis Configuration
         //
         NdisCloseConfiguration(nxConfiguration->m_ndisConfigurationHandle);
+#else
+        nxConfiguration->m_adapter->GetBridgeToKernel().CloseConfiguration(
+            nxConfiguration->m_ndisConfigurationHandle);
+#endif
         nxConfiguration->m_ndisConfigurationHandle = NULL;
     }
 
@@ -138,9 +151,16 @@ Routine Description:
 
     if (m_isDeviceConfig)
     {
+        auto const requestedAccess =
+#ifdef NETCX_KMDF
+            KEY_READ | KEY_WRITE;
+#else
+            KEY_READ;
+#endif
+
         NTSTATUS status = WdfDeviceOpenRegistryKey(m_device->GetFxObject(),
             PLUGPLAY_REGKEY_DRIVER,
-            KEY_READ | KEY_WRITE,
+            requestedAccess,
             WDF_NO_OBJECT_ATTRIBUTES,
             &m_key);
 
@@ -152,6 +172,7 @@ Routine Description:
     // Opaque Handle for the Ndis Adapter Configuration given by ndis.sys
     NDIS_HANDLE               ndisConfigurationHandle;
 
+#if NETCX_KMDF
     NDIS_CONFIGURATION_OBJECT configObject;
 
     //
@@ -167,6 +188,11 @@ Routine Description:
 
     ndisStatus = NdisOpenConfigurationEx(&configObject,
                                          &ndisConfigurationHandle);
+
+#else
+    ndisStatus = m_adapter->GetBridgeToKernel().OpenConfigurationEx(
+        &ndisConfigurationHandle);
+#endif
 
     if (ndisStatus != NDIS_STATUS_SUCCESS) {
         LogError(FLAG_CONFIGURATION,
@@ -207,11 +233,17 @@ Routine Description:
     NDIS_HANDLE               ndisConfigurationHandle;
 
     NT_ASSERT(m_parentNxConfiguration);
-
+#if NETCX_KMDF
     NdisOpenConfigurationKeyByName(&ndisStatus,
                                    m_parentNxConfiguration->m_ndisConfigurationHandle,
                                    (PNDIS_STRING)SubConfigurationName,
                                    &ndisConfigurationHandle);
+#else
+    ndisStatus = m_adapter->GetBridgeToKernel().OpenConfigurationKeyByName(
+        m_parentNxConfiguration->m_ndisConfigurationHandle,
+        SubConfigurationName,
+        &ndisConfigurationHandle);
+#endif
 
     if (ndisStatus != NDIS_STATUS_SUCCESS) {
         LogError(FLAG_CONFIGURATION,
@@ -298,7 +330,16 @@ Arguments:
 
                 // If the ValueName is not ULONG, it may be a string. So read it as
                 // a string and convert it to ULONG.
-                CX_RETURN_NTSTATUS_IF(status, status != STATUS_OBJECT_TYPE_MISMATCH);
+                if (status != STATUS_OBJECT_TYPE_MISMATCH)
+                {
+                    LogError(
+                        FLAG_CONFIGURATION,
+                        "Returning %!STATUS!",
+                        status);
+
+                    return status;
+                }
+
                 base = 10;
                 __fallthrough;
 
@@ -646,10 +687,18 @@ Returns:
     void * networkAddressBuffer;
     UINT resultLength;
 
+#if NETCX_KMDF
     NdisReadNetworkAddress(&ndisStatus,
                            &networkAddressBuffer,
                            &resultLength,
                            m_ndisConfigurationHandle);
+#else
+    m_adapter->GetBridgeToKernel().ReadAddress(
+        &ndisStatus,
+        &networkAddressBuffer,
+        &resultLength,
+        m_ndisConfigurationHandle);
+#endif
 
     status = NdisConvertNdisStatusToNtStatus(ndisStatus);
 
@@ -714,10 +763,18 @@ Arguments:
     ndisConfigurationParam.ParameterType = NdisParameterInteger;
     ndisConfigurationParam.ParameterData.IntegerData = Value;
 
+#if NETCX_KMDF
     NdisWriteConfiguration(&ndisStatus,
                            m_ndisConfigurationHandle,
                            (PNDIS_STRING)ValueName,
                            &ndisConfigurationParam);
+#else
+    m_adapter->GetBridgeToKernel().WriteConfiguration(
+        &ndisStatus,
+        m_ndisConfigurationHandle,
+        (PNDIS_STRING)ValueName,
+        &ndisConfigurationParam);
+#endif
 
     status = NdisConvertNdisStatusToNtStatus(ndisStatus);
 
@@ -768,10 +825,18 @@ Arguments:
     ndisConfigurationParam.ParameterData.StringData.Length = Value->Length;
     ndisConfigurationParam.ParameterData.StringData.MaximumLength = Value->MaximumLength;
 
+#if NETCX_KMDF
     NdisWriteConfiguration(&ndisStatus,
                            m_ndisConfigurationHandle,
                            (PNDIS_STRING)ValueName,
                            &ndisConfigurationParam);
+#else
+    m_adapter->GetBridgeToKernel().WriteConfiguration(
+        &ndisStatus,
+        m_ndisConfigurationHandle,
+        (PNDIS_STRING)ValueName,
+        &ndisConfigurationParam);
+#endif
 
     status = NdisConvertNdisStatusToNtStatus(ndisStatus);
 
@@ -841,10 +906,18 @@ Arguments:
     ndisConfigurationParam.ParameterData.BinaryData.Buffer = Buffer;
     ndisConfigurationParam.ParameterData.BinaryData.Length = (USHORT)BufferLength;
 
+#if NETCX_KMDF
     NdisWriteConfiguration(&ndisStatus,
                            m_ndisConfigurationHandle,
                            (PNDIS_STRING)ValueName,
                            &ndisConfigurationParam);
+#else
+    m_adapter->GetBridgeToKernel().WriteConfiguration(
+        &ndisStatus,
+        m_ndisConfigurationHandle,
+        (PNDIS_STRING)ValueName,
+        &ndisConfigurationParam);
+#endif
 
     status = NdisConvertNdisStatusToNtStatus(ndisStatus);
 
@@ -968,9 +1041,9 @@ Comments:
 
     strBufferLength = cbLength;
 
-    strBuffer = (PUCHAR)ExAllocatePoolWithTag(NonPagedPoolNx,
-                                              strBufferLength,
-                                              NETADAPTERCX_TAG);
+    strBuffer = (PUCHAR)ExAllocatePool2(POOL_FLAG_NON_PAGED,
+                                        strBufferLength,
+                                        NETADAPTERCX_TAG);
 
     if (strBuffer == NULL) {
         LogError(FLAG_CONFIGURATION,
@@ -1002,13 +1075,6 @@ Comments:
         WdfStringGetUnicodeString(wdfstring, &unicodeString);
 
         if (cbLength + unicodeString.Length + sizeof(WCHAR) >= strBufferLength) {
-            //
-            // Something Nasty Happened. The buffer we allocated
-            // to generate the multi string is not sufficient anymore.
-            // Maybe the client changed the collection
-            // contents while we were processing this function, or there is
-            // but in this function
-            //
             LogError(FLAG_CONFIGURATION,
                      "Buffer length (%d) that we allocated was not sufficient", strBufferLength);
             status = STATUS_BUFFER_OVERFLOW;
@@ -1063,10 +1129,18 @@ Comments:
     ndisConfigurationParam.ParameterData.StringData.Length = (USHORT)cbLength;
     ndisConfigurationParam.ParameterData.StringData.MaximumLength = (USHORT)cbLength;
 
+#if NETCX_KMDF
     NdisWriteConfiguration(&ndisStatus,
                            m_ndisConfigurationHandle,
                            (PNDIS_STRING)ValueName,
                            &ndisConfigurationParam);
+#else
+    m_adapter->GetBridgeToKernel().WriteConfiguration(
+        &ndisStatus,
+        m_ndisConfigurationHandle,
+        (PNDIS_STRING)ValueName,
+        &ndisConfigurationParam);
+#endif
 
     status = NdisConvertNdisStatusToNtStatus(ndisStatus);
 

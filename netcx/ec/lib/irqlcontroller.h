@@ -1,6 +1,8 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
 #pragma once
 
+#include "ExecutionContext.hpp"
+
 class IrqlController
 {
 public:
@@ -8,7 +10,8 @@ public:
     _IRQL_requires_max_(DISPATCH_LEVEL)
     explicit
     IrqlController(
-        _In_ bool RaiseToDispatch
+        _In_ ExecutionContext::RunContext Context,
+        _In_ bool RunWorkerThreadAtDispatch
     );
 
     IrqlController(
@@ -26,21 +29,18 @@ public:
     );
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
-    bool
-    WasRaised(
-        void
-    ) const;
-
-    _IRQL_requires_max_(DISPATCH_LEVEL)
-    void
-    Lower(
+    KIRQL
+    GetIrql(
         void
     ) const;
 
 private:
 
     KIRQL
-        m_prevIrql {};
+        m_originalIrql{};
+
+    KIRQL
+        m_effectiveIrql{};
 
     bool const
         m_raiseToDispatchRequested;

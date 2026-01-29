@@ -9,3 +9,32 @@ EVT_EXECUTION_CONTEXT_TASK(
 );
 
 typedef EVT_EXECUTION_CONTEXT_TASK *PFN_EXECUTION_CONTEXT_TASK;
+
+typedef struct _EXECUTION_CONTEXT_TASK
+{
+    void *
+        Context;
+
+    PFN_EXECUTION_CONTEXT_TASK
+        TaskFn;
+
+    LIST_ENTRY
+        Linkage;
+
+    _Reserved_ void * 
+        Reserved[4];
+} EXECUTION_CONTEXT_TASK;
+
+inline
+void
+INITIALIZE_EXECUTION_CONTEXT_TASK(
+    _Out_ EXECUTION_CONTEXT_TASK * Task,
+    _In_ void * TaskContext,
+    _In_ PFN_EXECUTION_CONTEXT_TASK TaskFn
+)
+{
+    RtlZeroMemory(Task, sizeof(*Task));
+    Task->Context = TaskContext;
+    Task->TaskFn = TaskFn;
+    InitializeListHead(&Task->Linkage);
+}

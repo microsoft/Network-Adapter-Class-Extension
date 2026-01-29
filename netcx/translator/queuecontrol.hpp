@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include <KWorkItem.h>
+#include <IoWorkItem.hpp>
 #include <KLockHolder.h>
 
 #include "NxRxXlat.hpp"
@@ -36,6 +36,13 @@ public:
         _In_ NET_CLIENT_ADAPTER_DISPATCH const * AdapterDispatch,
         _In_ Rtl::KArray<wistd::unique_ptr<NxTxXlat>, NonPagedPoolNx> & TxQueues,
         _In_ Rtl::KArray<wistd::unique_ptr<NxRxXlat>, NonPagedPoolNx> & RxQueues
+    ) noexcept;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    PAGEDX
+    NTSTATUS
+    Initialize(
+        void
     ) noexcept;
 
     _IRQL_requires_(PASSIVE_LEVEL)
@@ -109,16 +116,29 @@ public:
     ) override;
 
     _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    DestroyOnDemandQueuesByPeerDemux(
+        size_t PeerDemux
+    );
+
+private:
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    _Requires_lock_held_(m_workSyncLock)
     PAGEDX
     void
     DestroyOnDemandQueue(
         size_t Index
     );
 
-private:
-
     enum class DatapathState : LONG {
         Started,
+        Stopping,
+        Stopped,
+    };
+
+    enum class SynchronizationLoop : LONG {
+        Running,
         Stopping,
         Stopped,
     };
@@ -130,7 +150,6 @@ private:
     );
 
     _IRQL_requires_(PASSIVE_LEVEL)
-    PAGEDX
     void
     SynchronizeDatapathWork(
         void
@@ -146,6 +165,12 @@ private:
     _IRQL_requires_(PASSIVE_LEVEL)
     bool
     IsDatapathStateSynchronized(
+        void
+    );
+
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    void
+    TryQueueWorkItem(
         void
     );
 
@@ -169,7 +194,7 @@ private:
     KPushLock
         m_workSyncLock;
 
-    KCoalescingWorkItem<QueueControl>
+    IoWorkItem<QueueControl, &QueueControl::SynchronizeDatapathWork, DRIVER_OBJECT>
         m_work;
 
     KSpinLock
@@ -184,5 +209,10 @@ private:
     Rtl::KArray<wistd::unique_ptr<NxRxXlat>, NonPagedPoolNx> &
         m_rxQueues;
 
+    bool
+        m_queueControlCriticalFailure = false;
+
+    SynchronizationLoop
+        m_loopState{ SynchronizationLoop::Stopped };
 };
 

@@ -104,7 +104,8 @@ public:
         NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES & txChecksumHardwareCapabilities,
         NET_CLIENT_OFFLOAD_GSO_CAPABILITIES & GsoHardwareCapabilities,
         PKTMON_LOWEREDGE_HANDLE PktMonEdgeContext,
-        PKTMON_COMPONENT_HANDLE PktMonComponentContext
+        PKTMON_COMPONENT_HANDLE PktMonComponentContext,
+        UINT32 MaxPackets
     );
 
     NxNblTranslationStatus
@@ -204,6 +205,9 @@ private:
 
     PKTMON_COMPONENT_CONTEXT const *
         m_pktmonComponentContext = nullptr;
+
+    UINT32
+        m_maxPackets{1};
 
     bool
     TranslateLayout(

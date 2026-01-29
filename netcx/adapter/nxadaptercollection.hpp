@@ -3,12 +3,11 @@
 #pragma once
 
 #include "netadaptercx_triage.h"
+#include "ndisminiport/MiniportReference.hpp"
 
 #include <NxCollection.hpp>
 
 class NxAdapter;
-
-using unique_miniport_reference = wil::unique_any<NDIS_HANDLE, decltype(NdisWdfMiniportDereference), NdisWdfMiniportDereference>;
 
 class NxAdapterCollection
     : public NxCollection<NxAdapter>
@@ -29,5 +28,10 @@ public:
     NxAdapter *
     FindAndReferenceAdapterByBaseName(
         _In_ UNICODE_STRING const * BaseName
+    ) const;
+
+    NTSTATUS
+    GetAllAdapters(
+        _Out_ Rtl::KArray<unique_wdf_reference<NETADAPTER>> & AdaptersArray
     ) const;
 };

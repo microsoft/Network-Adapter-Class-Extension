@@ -133,7 +133,7 @@ NxTaskOffload::TranslateChecksumCapabilities(
 {
     NDIS_TCP_IP_CHECKSUM_OFFLOAD translatedCapabilties = {};
 
-    const ULONG encapsulation = NDIS_ENCAPSULATION_IEEE_802_3;
+    const ULONG encapsulation = m_encapsulation;
 
     translatedCapabilties.IPv4Transmit.Encapsulation = encapsulation;
     translatedCapabilties.IPv4Receive.Encapsulation = encapsulation;
@@ -242,7 +242,7 @@ NxTaskOffload::SetActiveCapabilities(
         {},
         {},
         {},
-        ndisUsoCapabilities
+        ndisUsoCapabilities,
     };
 
     return SendNdisTaskOffloadStatusIndication(offloadCapabilities, false);

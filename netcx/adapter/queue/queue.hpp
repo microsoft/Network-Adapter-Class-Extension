@@ -25,8 +25,7 @@ public:
         _In_ Rtl::KArray<NET_EXTENSION_PRIVATE> & Extensions,
         _In_ UINT32 NumberOfPackets,
         _In_ UINT32 NumberOfFragments,
-        _In_ UINT32 NumberOfDataBuffers,
-        _In_ BufferPool * BufferPool
+        _In_ BOOLEAN CreateReturnContextRing
     );
 
     void
@@ -34,6 +33,16 @@ public:
         _In_ const NET_EXTENSION_PRIVATE * ExtensionToQuery,
         _Out_ NET_EXTENSION* Extension
     ) const;
+
+#ifdef NETCX_UMDF
+    void
+    GetAllExtensions(
+        _Out_ NET_EXTENSION_PRIVATE ** PacketExtensions,
+        _Out_ size_t * PacketExtensionsCount,
+        _Out_ NET_EXTENSION_PRIVATE ** FragmentExtensions,
+        _Out_ size_t * FragmentExtensionsCount
+    );
+#endif
 
     NET_RING_COLLECTION const *
     GetRingCollection(
@@ -49,32 +58,6 @@ private:
         _In_ NET_RING_TYPE RingType
     );
 
-    static
-    void
-    EnumerateCallback(
-        _In_ PVOID Context,
-        _In_ SIZE_T Index,
-        _In_ UINT64 LogicalAddress,
-        _In_ PVOID VirtualAddress
-    );
-
-protected:
-
-    void
-    PreAdvancePostDataBuffer(
-        void
-    );
-
-    void
-    PostAdvanceRefCounting(
-        void
-    );
-
-    void
-    PostStopReclaimDataBuffers(
-        void
-    );
-
 protected:
 
     NxExtensionLayout
@@ -84,7 +67,7 @@ protected:
         m_fragmentLayout;
 
     NxExtensionLayout
-        m_bufferLayout;
+        m_netFragmentReturnContextLayout;
 
     KPoolPtr<NET_RING>
         m_rings[NetRingTypeDataBuffer + 1];
@@ -94,29 +77,8 @@ protected:
 
 private:
 
-    NET_RING
-        m_shadowRings[NetRingTypeDataBuffer + 1];
-
-    BufferPool *
-        m_bufferPool = nullptr;
-
-    KPoolPtrNP<BYTE>
-        m_laLookupTable;
-
-    KPoolPtrNP<BYTE>
-        m_vaLookupTable;
-
-    NET_EXTENSION
-        m_fragmentDataBufferExt;
-
     NET_EXTENSION
         m_fragmentVaExt;
-
-    NET_EXTENSION
-        m_bufferVaExt;
-
-    NET_EXTENSION
-        m_bufferLaExt;
 };
 
 } // namespace NetCx::Core

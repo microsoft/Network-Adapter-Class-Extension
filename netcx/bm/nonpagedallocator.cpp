@@ -7,6 +7,7 @@
 #include "NonPagedAllocator.hpp"
 #include "NonPagedAllocator.tmh"
 
+
 _Use_decl_annotations_
 IBufferVector *
 NonPagedAllocator::AllocateVector(
@@ -16,17 +17,9 @@ NonPagedAllocator::AllocateVector(
     NODE_REQUIREMENT
 )
 {
-    auto bufferVector = wil::make_unique_nothrow<NonPagedBufferVector>(
-        BufferCount,
-        BufferSize,
-        BufferOffset);
+    Rtl::KArray<KPoolPtrNP<void>, NonPagedPoolBaseCacheAligned> nonPagedBufferVector;
 
-    if (!bufferVector)
-    {
-        return nullptr;
-    }
-
-    if (!bufferVector->m_NonPagedBufferVector.resize(BufferCount))
+    if (!nonPagedBufferVector.resize(BufferCount))
     {
         return nullptr;
     }
@@ -42,22 +35,18 @@ NonPagedAllocator::AllocateVector(
             return nullptr;
         }
 
-        auto const mdlSize = MmSizeOfMdl(
-            memory.get(),
-            BufferSize);
+        nonPagedBufferVector[i] = wistd::move(memory);
+    }
 
-        auto mdl = MakeSizedPoolPtrNP<MDL>(BUFFER_MANAGER_POOL_TAG, mdlSize);
+    auto bufferVector = wil::make_unique_nothrow<NonPagedBufferVector>(
+        BufferCount,
+        BufferSize,
+        BufferOffset,
+        wistd::move(nonPagedBufferVector));
 
-        if (!mdl)
-        {
-            return nullptr;
-        }
-
-        MmInitializeMdl(mdl.get(), memory.get(), BufferSize);
-        MmBuildMdlForNonPagedPool(mdl.get());
-
-        bufferVector->m_NonPagedBufferVector[i].VirtualAddress = memory.release();
-        bufferVector->m_NonPagedBufferVector[i].Mdl = mdl.release();
+    if (!bufferVector)
+    {
+        return nullptr;
     }
 
     return bufferVector.release();

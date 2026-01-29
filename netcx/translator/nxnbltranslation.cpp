@@ -73,7 +73,8 @@ NxNblTranslator::NxNblTranslator(
     NET_CLIENT_OFFLOAD_TX_CHECKSUM_CAPABILITIES & TxChecksumHardwareCapabilities,
     NET_CLIENT_OFFLOAD_GSO_CAPABILITIES & GsoHardwareCapabilities,
     PKTMON_LOWEREDGE_HANDLE PktMonLowerEdgeContext,
-    PKTMON_COMPONENT_HANDLE PktMonComponentContext
+    PKTMON_COMPONENT_HANDLE PktMonComponentContext,
+    UINT32 MaxPackets
 )
     : m_currentNetBufferList(CurrentNetBufferList)
     , m_currentNetBuffer(CurrentNetBuffer)
@@ -93,7 +94,8 @@ NxNblTranslator::NxNblTranslator(
     , m_txChecksumHardwareCapabilities(TxChecksumHardwareCapabilities)
     , m_gsoHardwareCapabilities(GsoHardwareCapabilities)
     , m_pktmonLowerEdgeContext(reinterpret_cast<PKTMON_EDGE_CONTEXT const *>(PktMonLowerEdgeContext))
-    , m_pktmonComponentContext(reinterpret_cast<PKTMON_COMPONENT_CONTEXT const *>(PktMonComponentContext))
+    , m_pktmonComponentContext(reinterpret_cast<PKTMON_COMPONENT_CONTEXT const*>(PktMonComponentContext))
+    , m_maxPackets(MaxPackets)
 {
     //
     // The maximum number of fragments per packet is either the maximum number
@@ -269,6 +271,10 @@ NxNblTranslator::TranslateNetBufferToNetPacket(
             return NxNblTranslationStatus::CannotTranslate;
         }
     }
+
+#ifdef NETCX_REDIRECTOR
+    return NxNblTranslationStatus::BounceRequired;
+#endif
 
     auto backfill = static_cast<ULONG>(m_datapathCapabilities.TxPayloadBackfill);
 
@@ -726,6 +732,7 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeUseHal(
     SCATTER_GATHER_LIST * sgl;
 
     // Build the scatter/gather list using HAL
+    // HAL takes care of skipping MDL of length 0 when building scatter gather list
     NTSTATUS const buildSglStatus = m_dmaAdapter->BuildScatterGatherListEx(
         DmaTransfer,
         &Mdl,
@@ -798,11 +805,7 @@ NxNblTranslator::TranslateMdlChainToDmaMappedFragmentRangeUseHal(
         // The physical pages are locked.
         MdlOffset = 0;
 
-        if (MapMdlChainToSystemVA(*mappedMdl))
-        {
-            dmaContext.UnmapMdlChain = true;
-        }
-        else
+        if (!MapMdlChainToSystemVA(*mappedMdl))
         {
             return { NxNblTranslationStatus::BounceRequired };
         }
@@ -1264,15 +1267,13 @@ NxNblTranslator::TranslateNetBuffer(
             {
                 // It was not possible to bounce the NET_BUFFER because we're
                 // out of some resource. Try again later.
-                InterlockedIncrementNoFence64(
-                    reinterpret_cast<LONG64 *>(&m_statistics.Packet.BounceFailure));
+                m_statistics.Packet.BounceFailure++;
 
                 return false;
             }
         }
 
-        InterlockedIncrementNoFence64(
-            reinterpret_cast<LONG64 *>(&m_statistics.Packet.BounceSuccess));
+        m_statistics.Packet.BounceSuccess++;
 
         __fallthrough;
 
@@ -1362,12 +1363,10 @@ NxNblTranslator::TranslateNbls(
         {
             // This is the final NB in the NBL, so let's bundle the NBL
             // up with the NET_PACKET.  We'll find it later when completing packets.
-
-            PKTMON_LOG_NBL(
+            
+            PKTMON_LOG_NBL_NDIS(
                 const_cast<PKTMON_EDGE_CONTEXT *>(m_pktmonLowerEdgeContext),
                 m_currentNetBufferList,
-                PktMonPayload_Ethernet,
-                true,
                 PktMonDir_Out);
 
             context.NetBufferListToComplete = m_currentNetBufferList;
@@ -1406,7 +1405,7 @@ NxNblTranslator::CompletePackets(
     auto pr = NetRingCollectionGetPacketRing(m_rings);
     auto const osreserved0 = pr->OSReserved0;
 
-    for (; ((pr->OSReserved0 != pr->BeginIndex) && (result.NumCompletedNbls < NBL_SEND_COMPLETION_BATCH_SIZE));
+    for (; ((pr->OSReserved0 != pr->BeginIndex) && (result.NumCompletedNbls < m_maxPackets));
         pr->OSReserved0 = NetRingIncrementIndex(pr, pr->OSReserved0))
     {
         auto packet = NetRingGetPacketAtIndex(pr, pr->OSReserved0);

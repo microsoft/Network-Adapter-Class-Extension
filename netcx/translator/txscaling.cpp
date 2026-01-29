@@ -74,6 +74,10 @@ TxScaling::GetNumberOfQueues(
     void
 ) const
 {
+    //
+    // This is the maximum number of Tx queues that can ever be created on the underlying adapter
+    //
+
     return m_numberOfQueues;
 }
 
@@ -164,4 +168,3 @@ TxScaling::SendNetBufferLists(
         }
     }
 }
-

@@ -5,7 +5,18 @@
 #include <KArray.h>
 
 #include <netadapteroffload.h>
-#include <preview/netadapteroffload.h>
+
+#ifndef _KERNEL_MODE
+// This type is not generated in UMDF headers, but we still use it internally
+typedef struct _NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES
+{
+    ULONG Size;
+    BOOLEAN IPv4;
+    BOOLEAN Tcp;
+    BOOLEAN Udp;
+    void *EvtAdapterOffloadSetChecksum;
+} NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES;
+#endif
 
 enum class OffloadType {
     Checksum,
@@ -251,10 +262,12 @@ public:
         void
     );
 
+#ifdef _KERNEL_MODE
     void
     SetChecksumHardwareCapabilities(
         _In_ NET_ADAPTER_OFFLOAD_CHECKSUM_CAPABILITIES const * HardwareCapabilities
     );
+#endif
 
     void
     GetChecksumHardwareCapabilities(
@@ -406,6 +419,11 @@ public:
 
     bool
     IsRscSoftwareFallbackEnabled(
+        void
+    ) const;
+
+    bool
+    IsUdpRscSoftwareFallbackEnabled(
         void
     ) const;
 };

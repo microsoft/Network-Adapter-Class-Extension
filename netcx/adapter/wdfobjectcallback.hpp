@@ -166,25 +166,13 @@ struct idle_state_machine_proxy<NETADAPTER>
 
 template <typename PFn, typename WDFTYPE, typename... Args>
 typename wistd::result_of<PFn(WDFTYPE, Args...)>::type
-InvokePoweredCallback(
+InvokeCallback(
     PFn Callback,
     WDFTYPE Object,
     Args... args
 )
 {
     using returnType = typename wistd::result_of<PFn(WDFTYPE, Args...)>::type;
-
-    static_assert(
-        idle_state_machine_proxy<WDFTYPE>::is_handle_supported,
-        "It is not possible to find the idle state machine from the callback's first parameter.");
-
-    // Find the idle state machine from the callback's first parameter
-    auto idleStateMachine = idle_state_machine_proxy<WDFTYPE>::GetIdleStateMachine(Object);
-
-    // Acquire a synchronous power referene, use the callback address as the tag
-    auto powerReference = idleStateMachine->StopIdle(
-        true,
-        Callback);
 
     LogVerbose(FLAG_OBJECT_CALLBACK, "Driver callback entry. Callback=%p", Callback);
 
@@ -207,5 +195,35 @@ InvokePoweredCallback(
         }
 
         return r;
+    }
+}
+
+template <typename PFn, typename WDFTYPE, typename... Args>
+typename wistd::result_of<PFn(WDFTYPE, Args...)>::type
+InvokePoweredCallback(
+    PFn Callback,
+    WDFTYPE Object,
+    Args... args
+)
+{
+    static_assert(
+        idle_state_machine_proxy<WDFTYPE>::is_handle_supported,
+        "It is not possible to find the idle state machine from the callback's first parameter.");
+
+    // Find the idle state machine from the callback's first parameter
+    auto idleStateMachine = idle_state_machine_proxy<WDFTYPE>::GetIdleStateMachine(Object);
+
+    if (idleStateMachine != nullptr)
+    {
+        // Acquire a synchronous power referene, use the callback address as the tag
+        auto powerReference = idleStateMachine->StopIdle(
+            true,
+            Callback);
+
+        return InvokeCallback(Callback, Object, args...);
+    }
+    else
+    {
+        return InvokeCallback(Callback, Object, args...);
     }
 }

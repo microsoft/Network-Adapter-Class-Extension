@@ -35,11 +35,15 @@ NxExecutionContextTask::NxExecutionContextTask(
     NETEXECUTIONCONTEXT NetExecutionContextHandle,
     PFN_NET_EXECUTION_CONTEXT_TASK EvtTask
 )
-    : ExecutionContextTask(this, EvtExecutionContextTask, false)
-    , m_handle(static_cast<NETEXECUTIONCONTEXTTASK>(WdfObjectContextGetObject(this)))
+    : m_handle(static_cast<NETEXECUTIONCONTEXTTASK>(WdfObjectContextGetObject(this)))
     , m_callback(EvtTask)
     , m_executionContext(NetExecutionContextHandle)
 {
+    INITIALIZE_EXECUTION_CONTEXT_TASK(
+        &m_task,
+        this,
+        EvtExecutionContextTask);
+
     // These references are taken away when the task object is being deleted, after it is run down
     WdfObjectReferenceWithTag(m_handle, this);
     WdfObjectReferenceWithTag(m_executionContext, this);
@@ -180,7 +184,7 @@ NxExecutionContextTask::Enqueue(
     lock.Release();
 
     auto ec = GetExecutionContextFromHandle(m_executionContext);
-    ec->QueueTask(*this);
+    ec->QueueTask(&m_task);
 }
 
 _Use_decl_annotations_

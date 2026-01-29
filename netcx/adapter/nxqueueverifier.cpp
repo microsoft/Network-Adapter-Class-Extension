@@ -69,7 +69,7 @@ NxQueueVerifier::Initialize(
 {
     auto pr = NetRingCollectionGetPacketRing(Rings);
     auto fr = NetRingCollectionGetFragmentRing(Rings);
-    auto br = NetRingCollectionGetDataBufferRing(Rings);
+    auto br = NetRingCollectionGetFragmentReturnContextRing(Rings);
 
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         CreateRing(
@@ -145,7 +145,7 @@ NxQueueVerifier::PreAdvance(
 {
     auto const pr = NetRingCollectionGetPacketRing(Rings);
     auto const fr = NetRingCollectionGetFragmentRing(Rings);
-    auto const br = NetRingCollectionGetDataBufferRing(Rings);
+    auto const br = NetRingCollectionGetFragmentReturnContextRing(Rings);
 
     if (m_queue->m_queueType == Queue::Type::Rx)
     {
@@ -259,7 +259,7 @@ NxQueueVerifier::PostAdvance(
 
     auto const pr = NetRingCollectionGetPacketRing(Rings);
     auto const fr = NetRingCollectionGetFragmentRing(Rings);
-    auto const br = NetRingCollectionGetDataBufferRing(Rings);
+    auto const br = NetRingCollectionGetFragmentReturnContextRing(Rings);
 
     Verifier_VerifyRingImmutable(
         m_privateGlobals,
@@ -290,24 +290,6 @@ NxQueueVerifier::PostAdvance(
         m_privateGlobals,
         *m_verifiedRings[NetRingTypeFragment].get(),
         *fr);
-
-    if (br)
-    {
-        Verifier_VerifyRingImmutable(
-            m_privateGlobals,
-            *m_verifiedRings[NetRingTypeDataBuffer].get(),
-            *br);
-
-        Verifier_VerifyRingBeginIndex(
-            m_privateGlobals,
-            *m_verifiedRings[NetRingTypeDataBuffer].get(),
-            *br);
-
-        Verifier_VerifyRingImmutableFrameworkElements(
-            m_privateGlobals,
-            *m_verifiedRings[NetRingTypeDataBuffer].get(),
-            *br);
-    }
 
     switch (m_queue->m_queueType)
     {
@@ -336,6 +318,21 @@ NxQueueVerifier::PostAdvance(
 
         if (br)
         {
+            Verifier_VerifyRingImmutable(
+                m_privateGlobals,
+                *m_verifiedRings[NetRingTypeDataBuffer].get(),
+                *br);
+
+            Verifier_VerifyRingBeginIndex(
+                m_privateGlobals,
+                *m_verifiedRings[NetRingTypeDataBuffer].get(),
+                *br);
+
+            Verifier_VerifyRingImmutableFrameworkElements(
+                m_privateGlobals,
+                *m_verifiedRings[NetRingTypeDataBuffer].get(),
+                *br);
+
             Verifier_VerifyRingImmutableDriverRx(
                 m_privateGlobals,
                 *m_verifiedRings[NetRingTypeDataBuffer].get(),

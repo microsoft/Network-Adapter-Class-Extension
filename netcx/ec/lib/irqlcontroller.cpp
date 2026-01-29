@@ -4,19 +4,61 @@
 
 _Use_decl_annotations_
 IrqlController::IrqlController(
-    bool RaiseToDispatch
+    ExecutionContext::RunContext Context,
+    bool RunWorkerThreadAtDispatch
 )
-    : m_raiseToDispatchRequested(RaiseToDispatch)
+    : m_raiseToDispatchRequested(
+        RunWorkerThreadAtDispatch &&
+        Context == ExecutionContext::RunContext::WorkerThread)
 {
-#ifdef _KERNEL_MODE
-    m_prevIrql = KeGetCurrentIrql();
-    if (m_prevIrql < DISPATCH_LEVEL && m_raiseToDispatchRequested)
+    switch (Context)
     {
-        m_prevIrql = KeRaiseIrqlToDpcLevel();
+        case ExecutionContext::RunContext::ArbitraryContextAtDispatch:
+
+            [[fallthrough]];
+
+        case ExecutionContext::RunContext::NotifyDpc:
+
+            [[fallthrough]];
+
+        case ExecutionContext::RunContext::WorkerDpc:
+
+            m_originalIrql = DISPATCH_LEVEL;
+            break;
+
+        case ExecutionContext::RunContext::ArbitraryContextAtPassive:
+
+            [[fallthrough]];
+
+        case ExecutionContext::RunContext::WorkerThread:
+
+            m_originalIrql = PASSIVE_LEVEL;
+            break;
+
+        case ExecutionContext::RunContext::ArbitraryContextAtApc:
+
+            m_originalIrql = APC_LEVEL;
+            break;
+
+        default:
+
+            NT_FRE_ASSERTMSG(
+                "Invalid RunContext passed to IrqlController",
+                false);
+
+            break;
     }
-#else
-    UNREFERENCED_PARAMETER(RaiseToDispatch);
-#endif
+
+    if (m_originalIrql < DISPATCH_LEVEL && m_raiseToDispatchRequested)
+    {
+        auto const previousIrql = KeRaiseIrqlToDpcLevel();
+        NT_FRE_ASSERT(previousIrql == m_originalIrql);
+        m_effectiveIrql = DISPATCH_LEVEL;
+    }
+    else
+    {
+        m_effectiveIrql = m_originalIrql;
+    }
 }
 
 _Use_decl_annotations_
@@ -24,32 +66,17 @@ IrqlController::~IrqlController(
     void
 )
 {
-    Lower();
-}
-
-_Use_decl_annotations_
-bool
-IrqlController::WasRaised(
-    void
-) const
-{
-#ifdef _KERNEL_MODE
-    return m_prevIrql < DISPATCH_LEVEL && m_raiseToDispatchRequested;
-#else
-    return false;
-#endif
-}
-
-_Use_decl_annotations_
-void
-IrqlController::Lower(
-    void
-) const
-{
-#ifdef _KERNEL_MODE
-    if (m_prevIrql < DISPATCH_LEVEL && m_raiseToDispatchRequested)
+    if (m_effectiveIrql != m_originalIrql)
     {
-        KeLowerIrql(m_prevIrql);
+        KeLowerIrql(m_originalIrql);
     }
-#endif
+}
+
+_Use_decl_annotations_
+KIRQL
+IrqlController::GetIrql(
+    void
+) const
+{
+    return m_effectiveIrql;
 }

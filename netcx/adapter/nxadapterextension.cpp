@@ -16,6 +16,7 @@ MediaExtensionTypeFromClientGlobals(
     auto const & driverName = ClientDriverGlobals->DriverName;
     auto const maxClientNameCch = ARRAYSIZE(driverName);
 
+#ifdef NETCX_KMDF
     if (_strnicmp(&driverName[0], "mbbcx", maxClientNameCch) == 0)
     {
         return MediaExtensionType::Mbb;
@@ -24,6 +25,12 @@ MediaExtensionTypeFromClientGlobals(
     {
         return MediaExtensionType::Wifi;
     }
+#else
+    if(_strnicmp(&driverName[0], "wificx", ARRAYSIZE("wificx") - 1) == 0)
+    {
+        return MediaExtensionType::Wifi;
+    }
+#endif
 
     return MediaExtensionType::None;
 }
@@ -63,6 +70,38 @@ NxAdapterExtension::GetPrivateGlobals(
 ) const
 {
     return m_extensionGlobals;
+}
+
+void
+NxAdapterExtension::SetNdisPmCapabilities(
+    NET_ADAPTER_NDIS_PM_CAPABILITIES const * Capabilities
+)
+{
+    RtlCopyMemory(
+        &m_ndisPmCapabilities,
+        Capabilities,
+        Capabilities->Size);
+}
+
+NET_ADAPTER_NDIS_PM_CAPABILITIES const &
+NxAdapterExtension::GetNdisPmCapabilities(
+    void
+) const
+{
+    return m_ndisPmCapabilities;
+}
+
+_Use_decl_annotations_
+void
+NxAdapterExtension::UpdateNdisPmParameters(
+    NETADAPTER Adapter,
+    NDIS_PM_PARAMETERS * PmParameters
+) const
+{
+    if (m_powerPolicyCallbacks.EvtUpdateNdisPmParameters != nullptr)
+    {
+        m_powerPolicyCallbacks.EvtUpdateNdisPmParameters(Adapter, PmParameters);
+    }
 }
 
 _Use_decl_annotations_
@@ -108,36 +147,4 @@ NxAdapterExtension::InvokeDirectOidPreprocessCallback(
 
     auto nxAdapter = GetNxAdapterFromHandle(Adapter);
     return nxAdapter->DispatchDirectOidRequest(Request, Context);
-}
-
-void
-NxAdapterExtension::SetNdisPmCapabilities(
-    NET_ADAPTER_NDIS_PM_CAPABILITIES const * Capabilities
-)
-{
-    RtlCopyMemory(
-        &m_ndisPmCapabilities,
-        Capabilities,
-        Capabilities->Size);
-}
-
-NET_ADAPTER_NDIS_PM_CAPABILITIES const &
-NxAdapterExtension::GetNdisPmCapabilities(
-    void
-) const
-{
-    return m_ndisPmCapabilities;
-}
-
-_Use_decl_annotations_
-void
-NxAdapterExtension::UpdateNdisPmParameters(
-    NETADAPTER Adapter,
-    NDIS_PM_PARAMETERS * PmParameters
-) const
-{
-    if (m_powerPolicyCallbacks.EvtUpdateNdisPmParameters != nullptr)
-    {
-        m_powerPolicyCallbacks.EvtUpdateNdisPmParameters(Adapter, PmParameters);
-    }
 }

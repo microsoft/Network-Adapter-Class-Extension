@@ -14,6 +14,7 @@
 
 #include "NxQueueApi.tmh"
 
+
 _Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)
 WDFAPI
@@ -345,14 +346,11 @@ NETEXPORT(NetTxQueueGetDemuxWmmInfo)(
     return property->Property.WmmInfo;
 }
 
-_IRQL_requires_max_(PASSIVE_LEVEL)
-WDFAPI
 NET_EUI48_ADDRESS
-NTAPI
-NETEXPORT(NetTxQueueGetDemuxPeerAddress)(
+NetTxQueueGetDemuxPeerAddressCommon(
     _In_ NET_DRIVER_GLOBALS * DriverGlobals,
     _In_ NETPACKETQUEUE Queue
-    )
+)
 {
     auto const privateGlobals = GetPrivateGlobals(DriverGlobals);
 
@@ -376,4 +374,29 @@ NETEXPORT(NetTxQueueGetDemuxPeerAddress)(
     }
 
     return *reinterpret_cast<NET_EUI48_ADDRESS const *>(&property->Property.PeerAddress);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+NET_EUI48_ADDRESS
+NTAPI
+NETEXPORT(NetTxQueueGetDemuxPeerAddress)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETPACKETQUEUE Queue
+    )
+{
+    return NetTxQueueGetDemuxPeerAddressCommon(DriverGlobals, Queue);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+WDFAPI
+void
+NTAPI
+NETEXPORT(NetTxQueueGetDemuxPeerAddressV2)(
+    _In_ NET_DRIVER_GLOBALS * DriverGlobals,
+    _In_ NETPACKETQUEUE Queue,
+    _Out_ NET_EUI48_ADDRESS * Address
+    )
+{
+    *Address = NetTxQueueGetDemuxPeerAddressCommon(DriverGlobals, Queue);
 }

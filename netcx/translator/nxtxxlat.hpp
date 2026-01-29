@@ -116,11 +116,6 @@ public:
         _In_ NET_BUFFER_LIST * NetBufferList
     );
 
-    const NxTxCounters &
-    GetStatistics(
-        void
-    ) const;
-
     void
     DropQueuedNetBufferLists(
         void
@@ -221,6 +216,9 @@ private:
     NET_CLIENT_OFFLOAD_GSO_CAPABILITIES
         m_gsoHardwareCapabilities = {};
 
+    UINT32
+        m_maxPackets{1};
+
     // The high level operations of the NBL Tx translation
     void
     PollNetBufferLists(
@@ -242,11 +240,6 @@ private:
         void
     );
 
-    void
-    UpdatePerfCounter(
-        void
-    );
-
     // These operations are used exclusively while
     // winding down the Tx path
     void
@@ -260,5 +253,8 @@ private:
         void
     );
 
+    void
+    UpdateMaxPacketsFromKnobs(
+        KIRQL Irql
+    );
 };
-

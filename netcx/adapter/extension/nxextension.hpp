@@ -24,5 +24,8 @@ struct NET_EXTENSION_PRIVATE
     /// measured from the start of the NET_PACKET.  Or, zero if no offset
     /// has been assigned yet.
     SIZE_T AssignedOffset = 0;
+
+    /// This field is only used when NET_EXTENSION_PRIVATE is being sent via ALPC message
+    SIZE_T SerializedExtensionNameLength;
 };
 

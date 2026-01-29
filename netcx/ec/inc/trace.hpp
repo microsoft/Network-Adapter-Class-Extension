@@ -36,6 +36,32 @@
 #define WPP_RECORDER_COMPNAME_LEVEL_NTEXPR_ARGS(comp, level, ntexpr) WPP_RECORDER_LEVEL_FLAGS_ARGS(level, comp)
 
 //
+// WPP Macros: LOG_IF_NOT_NT_SUCCESS_MSG
+//
+// begin_wpp config
+// FUNC LOG_IF_NOT_NT_SUCCESS_MSG{COMPNAME=FLAG_GENERAL,LEVEL=TRACE_LEVEL_WARNING}(NTEXPR2,MSG,...);
+// USESUFFIX (LOG_IF_NOT_NT_SUCCESS_MSG, " [status=%!STATUS!]", nt__wpp);
+// end_wpp
+
+#define WPP_COMPNAME_LEVEL_NTEXPR2_PRE(comp,level,ntexpr) MACRO_START NTSTATUS nt__wpp = (ntexpr); if (!NT_SUCCESS(nt__wpp)) {
+#define WPP_COMPNAME_LEVEL_NTEXPR2_POST(comp,level,ntexpr) ; } MACRO_END
+#define WPP_RECORDER_COMPNAME_LEVEL_NTEXPR2_FILTER(comp,level,ntexpr) WPP_RECORDER_LEVEL_FLAGS_FILTER(level, comp)
+#define WPP_RECORDER_COMPNAME_LEVEL_NTEXPR2_ARGS(comp,level,ntexpr) WPP_RECORDER_LEVEL_FLAGS_ARGS(level, comp)
+
+//
+// WPP Macros: RETURN_NTSTATUS_IF_MSG
+//
+// begin_wpp config
+// FUNC RETURN_NTSTATUS_IF_MSG{COMPNAME=FLAG_GENERAL,LEVEL=TRACE_LEVEL_ERROR}(NTCODE1,CNDTN1,MSG,...);
+// USESUFFIX (RETURN_NTSTATUS_IF_MSG, " [status=%!s!], (%!s! is true).", #NTCODE1, #CNDTN1);
+// end_wpp
+
+#define WPP_COMPNAME_LEVEL_NTCODE1_CNDTN1_PRE(comp,level,status,condition) MACRO_START if ((condition)) {
+    #define WPP_COMPNAME_LEVEL_NTCODE1_CNDTN1_POST(comp,level,status,condition) ; return status; } MACRO_END
+    #define WPP_RECORDER_COMPNAME_LEVEL_NTCODE1_CNDTN1_FILTER(comp,level,status,condition) WPP_RECORDER_LEVEL_FLAGS_FILTER(level, comp)
+    #define WPP_RECORDER_COMPNAME_LEVEL_NTCODE1_CNDTN1_ARGS(comp,level,status,condition) WPP_RECORDER_LEVEL_FLAGS_ARGS(level, comp)
+
+//
 // This can be made reg. configurable.
 //
 #define DEFAULT_WPP_TOTAL_BUFFER_SIZE (PAGE_SIZE)

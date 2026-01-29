@@ -19,6 +19,7 @@ Abstract:
 #include "NxStatistics.hpp"
 #include "NxCollection.hpp"
 #include "TxScaling.hpp"
+#include "TxPeerDemuxTable.hpp"
 #include "QueueControl.hpp"
 
 #include "NxNblDatapath.hpp"
@@ -149,11 +150,41 @@ public:
         _Inout_ NDIS_OID_REQUEST & Request
     );
 
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    Rtl::KArray<size_t, NonPagedPoolNx> const &
+    ReceiveScalingGetIndirectionTable(
+        void
+    ) const;
+
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
     TxScalingInitialize(
         void
     );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    TxPeerDemuxTableInitialize(
+        _In_ size_t MaxPeers
+    ) override;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    TxPeerDemuxTableAddPeer(
+        NET_CLIENT_EUI48_ADDRESS const * Address
+    ) override;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    TxPeerDemuxTableRemovePeer(
+        NET_CLIENT_EUI48_ADDRESS const * Address
+    ) override;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    SetUseWiFiCxDemuxCallback(
+        _In_ bool UseDemuxCallback
+    ) override;
 
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
@@ -222,17 +253,10 @@ public:
         _In_ NDIS_OID_REQUEST const & Request
     );
 
-    _IRQL_requires_max_(APC_LEVEL)
-    void
-    FillPerfCounter(
-        _In_ HANDLE PcwInfo,
-        _In_ ULONG InstanceId
-    ) const;
-
     _IRQL_requires_(PASSIVE_LEVEL)
     NTSTATUS
     SetPacketFilter(
-        _In_ NDIS_OID_REQUEST const & Request
+        _In_ NDIS_OID_REQUEST & Request
     );
 
     _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -289,30 +313,6 @@ public:
         void
     ) const;
 
-    _IRQL_requires_(PASSIVE_LEVEL)
-    NxRxCounters
-    GetRxCounters(
-        void
-    ) const;
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    NxTxCounters
-    GetTxCounters(
-        void
-    ) const;
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    void
-    UpdateRxCounters(
-        void
-    );
-
-    _IRQL_requires_(PASSIVE_LEVEL)
-    void
-    UpdateTxCounters(
-        void
-    );
-
     _IRQL_requires_max_(DISPATCH_LEVEL)
     bool
     IsActiveRscIPv4Enabled(
@@ -322,6 +322,12 @@ public:
     _IRQL_requires_max_(DISPATCH_LEVEL)
     bool
     IsActiveRscIPv6Enabled(
+        void
+    ) const;
+
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    bool
+    IsActiveUdpRscEnabled(
         void
     ) const;
 
@@ -357,6 +363,13 @@ private:
     wistd::unique_ptr<TxScaling>
         m_txScaling;
 
+    TxPeerDemuxTable
+        m_txPeerDemuxTable;
+
+    bool
+        m_useWiFiCxDemuxCallback = false;
+
+    _Guarded_by_(m_lock)
     bool
         m_datapathCreated = false;
 
@@ -365,9 +378,6 @@ private:
 
     NxTaskOffload
         m_offload;
-
-    NxStatistics
-        m_statistics = {};
 
     LIST_ENTRY
         m_linkage = {};

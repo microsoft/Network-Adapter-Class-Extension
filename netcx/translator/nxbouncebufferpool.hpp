@@ -22,6 +22,7 @@ public:
 
     NTSTATUS
     Initialize(
+        _In_ PEPROCESS AssociatedProcess,
         _In_ NET_CLIENT_DISPATCH const &ClientDispatch,
         _In_ NET_CLIENT_ADAPTER_DATAPATH_CAPABILITIES &DatapathCapabilities,
         _In_ size_t NumberOfBuffers
@@ -60,4 +61,3 @@ private:
     size_t m_bufferSize = 0;
     size_t m_txPayloadBackfill = 0;
 };
-

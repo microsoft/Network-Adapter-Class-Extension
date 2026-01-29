@@ -48,6 +48,12 @@ public:
         void
     ) const;
 
+    _IRQL_requires_max_(DISPATCH_LEVEL)
+    bool
+    IsActiveUdpRscEnabled(
+        void
+    ) const;
+
     _IRQL_requires_(PASSIVE_LEVEL)
     void
     PauseOffloadCapabilities(
@@ -121,6 +127,9 @@ private:
 
     NET_CLIENT_OFFLOAD_RSC_CAPABILITIES
         m_softwareRscCapabilities = {};
+
+    ULONG
+        m_encapsulation = NDIS_ENCAPSULATION_NOT_SUPPORTED;
 
     _IRQL_requires_(PASSIVE_LEVEL)
     void
@@ -232,6 +241,13 @@ private:
     TranslateRscCapabilities(
         _In_ NET_CLIENT_OFFLOAD_RSC_CAPABILITIES const &Capabilities,
         _Out_ NDIS_TCP_RECV_SEG_COALESCE_OFFLOAD &NdisRscCapabilities
+    ) const;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    TranslateUdpRscCapabilities(
+        _In_ NET_CLIENT_OFFLOAD_RSC_CAPABILITIES const &Capabilities,
+        _Out_ NDIS_UDP_RSC_OFFLOAD &NdisUdpRscCapabilities
     ) const;
 
     _IRQL_requires_(PASSIVE_LEVEL)

@@ -2,20 +2,6 @@
 
 #pragma once
 
-#ifndef _KERNEL_MODE
-
-#include <windows.h>
-
-#include <wdf.h>
-#include <wdfcx.h>
-#include <wdfcxbase.h>
-
-#include <WppRecorder.h>
-
-#include "NdisUm.h"
-
-#endif // _KERNEL_MODE
-
 #include <KWaitEvent.h>
 #include <wmistr.h>
 #include <smfx.h>
@@ -26,16 +12,19 @@
 #include "NxAdapterCollection.hpp"
 #include "powerpolicy/NxPowerPolicy.hpp"
 #include "idle/IdleStateMachine.hpp"
+#include "irphandler/IrpHandler.hpp"
 #include "NxUtility.hpp"
 #include "NxQueue.hpp"
-#include "ExecutionContext.hpp"
+#include "ExecutionContextWrapper.hpp"
 #include "netadaptercx_triage.h"
+#include "ResetInterface.hpp"
 
 struct NX_PRIVATE_GLOBALS;
 class NxDriver;
 
 NTSTATUS
-WdfCxDeviceInitAssignPreprocessorRoutines(
+AssignCxPreprocessorRoutines(
+    _Inout_ WDFDEVICE_INIT * DeviceInit,
     _Inout_ WDFCXDEVICE_INIT * CxDeviceInit
     );
 
@@ -48,19 +37,6 @@ void
 SetCxPowerPolicyCallbacks(
     _Inout_ WDFCXDEVICE_INIT * CxDeviceInit
 );
-
-typedef struct _FUNCTION_LEVEL_RESET_PARAMETERS
-{
-    FUNCTION_LEVEL_DEVICE_RESET_PARAMETERS
-        CompletionParameters;
-
-    KEVENT
-        Event;
-
-    NTSTATUS
-        Status;
-
-} FUNCTION_LEVEL_RESET_PARAMETERS;
 
 typedef union _DeviceFlags
 {
@@ -115,6 +91,9 @@ private:
     NxAdapterCollection
         m_adapterCollection;
 
+    IrpHandler
+        m_irpHandler;
+
     //
     // Device Bus Address, indicating the bus slot this device belongs to
     // This value is used for telemetry and test purpose.
@@ -144,8 +123,8 @@ private:
     //
     // Used to track the device reset interface
     //
-    DEVICE_RESET_INTERFACE_STANDARD
-        m_resetInterface = {};
+    ResetInterface
+        m_resetInterface;
 
     //
     // Track whether we are the failing device that will be used
@@ -176,10 +155,17 @@ private:
         m_pldrRequested = false;
 
     //
-    // Prevent unloading driver after PLDR is requested
+    // Block EvtDevicePrePrepareHardware/IRP_MN_REMOVE_DEVICE to ensure
+    // both client driver and NetCx can safely access WDFDEVICE
     //
     KAutoEvent
-        m_pldrComplete;
+        m_pldrCompletion;
+
+    //
+    // Block EvtDeviceCleanup to prevent WDF/PnP from unloading NetCx
+    //
+    KAutoEvent
+        m_deviceSmDestroyed;
 
     //
     // Only valid when client driver is handling
@@ -238,16 +224,15 @@ private:
         _In_ WDFDEVICE Device
     );
 
-    _IRQL_requires_(PASSIVE_LEVEL)
-    void
-    QueryDeviceResetInterface(
-        void
-    );
-
 public:
 
     NxDevice(
         _In_ NX_PRIVATE_GLOBALS * NxPrivateGlobals
+    );
+
+    IrpHandler &
+    GetIrpHandler(
+        void
     );
 
     UINT32
@@ -274,6 +259,11 @@ public:
 
     NxDriver *
     GetNxDriver(
+        void
+    ) const;
+
+    wchar_t const *
+    GetPnpInstanceId(
         void
     ) const;
 
@@ -402,7 +392,8 @@ public:
 
     NTSTATUS
     WdmPnPIrpPreProcess(
-        _Inout_ IRP * Irp
+        _Inout_ IRP * Irp,
+        _In_ WDFCONTEXT DispatchContext
     );
 
     bool
@@ -440,11 +431,6 @@ public:
     SetFailingDeviceRequestingResetFlag(
         void
     );
-
-    bool
-    DeviceResetTypeSupported(
-        _In_ DEVICE_RESET_TYPE ResetType
-    ) const;
 
     bool
     GetSupportedDeviceResetType(
@@ -496,7 +482,13 @@ public:
 
     _IRQL_requires_(PASSIVE_LEVEL)
     void
-    WaitDeviceResetFinishIfRequested(
+    WaitPldrCompletion(
+        void
+    );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    void
+    WaitDeviceStateMachineDestroyed(
         void
     );
 
@@ -542,7 +534,7 @@ public:
         void
     );
 
-    void
+    NTSTATUS
     UpdatePowerPolicyParameters(
         void
     );
@@ -561,6 +553,24 @@ public:
     NTSTATUS
     PostD0Entry(
         WDF_POWER_DEVICE_STATE PreviousState
+    );
+
+    _IRQL_requires_max_(PASSIVE_LEVEL)
+    void
+    ResetWakeReason(
+        void
+    );
+
+    _IRQL_requires_max_(PASSIVE_LEVEL)
+    void
+    SetWakeReasonDevice(
+        void
+    );
+
+    _IRQL_requires_max_(PASSIVE_LEVEL)
+    void
+    LogWakeReason(
+        void
     );
 };
 

@@ -13,18 +13,26 @@ public:
         _In_ DMA_ADAPTER * DmaAdapter,
         _In_ size_t BufferCount,
         _In_ size_t BufferSize,
-        _In_ size_t BufferOffset
+        _In_ size_t BufferOffset,
+        _In_ PDMA_COMMON_BUFFER_VECTOR CommonBufferVector,
+        _In_ Rtl::KArray<void*, NonPagedPoolNx> && KernelModeAddress,
+        _In_ Rtl::KArray<ULONG64, NonPagedPoolNx> && LogicalAddress
     );
 
     ~CommonBufferVector(
         void
     );
 
-    NONPAGED
-    void
-    GetEntryByIndex(
-        _In_ size_t Index,
-        _Out_ NET_DATA_HEADER * NetDataHeader
+    virtual
+    void *
+    GetKernelModeVirtualAddress(
+        _In_ size_t Index
+    ) const override;
+
+    virtual
+    ULONG64
+    GetLogicalAddress(
+        _In_ size_t Index
     ) const override;
 
 private:
@@ -37,4 +45,10 @@ private:
 
     size_t
         m_BufferOffset = 0;
+
+    Rtl::KArray<void *, NonPagedPoolNx>
+        m_kernelModeAddress;
+
+    Rtl::KArray<ULONG64, NonPagedPoolNx>
+        m_logicalAddress;
 };

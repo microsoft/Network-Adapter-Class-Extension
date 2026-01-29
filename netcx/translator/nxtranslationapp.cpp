@@ -12,6 +12,7 @@ Abstract:
 #include "NxXlatPrecomp.hpp"
 #include "NxXlatCommon.hpp"
 
+
 #include <ndis/oidrequest.h>
 #include <ntddndis_p.h>
 
@@ -20,8 +21,9 @@ Abstract:
 #include "NxXlat.hpp"
 #include "NxTranslationApp.hpp"
 #include "NxPerfTuner.hpp"
-
 #include "NxNblDatapath.hpp"
+
+#include "framelayout/Layer3Layout.hpp"
 
 TRACELOGGING_DEFINE_PROVIDER(
     g_hNetAdapterCxXlatProvider,
@@ -29,51 +31,6 @@ TRACELOGGING_DEFINE_PROVIDER(
     // {32723328-9a9f-5889-a637-bcc3f77c1324}
     (0x32723328, 0x9a9f, 0x5889, 0xa6, 0x37, 0xbc, 0xc3, 0xf7, 0x7c, 0x13, 0x24));
 
-#ifdef _KERNEL_MODE
-
-#include <pcwdata.h>
-#include "NetAdapterCxPc.h"
-
-_IRQL_requires_max_(APC_LEVEL)
-NTSTATUS NTAPI
-NetAdapterCxQueueCounterSetCallback(
-    _In_ PCW_CALLBACK_TYPE PcwType,
-    _In_ PPCW_CALLBACK_INFORMATION PcwInfo,
-    _In_opt_ PVOID)
-{
-    NTSTATUS Status = STATUS_SUCCESS;
-
-    switch (PcwType)
-    {
-    case PcwCallbackAddCounter:
-    case PcwCallbackRemoveCounter:
-        break;
-
-    case PcwCallbackEnumerateInstances:
-
-        NxTranslationApp::s_AppCollection->ForEach(
-            [PcwInfo](const NxTranslationApp& app)
-            {
-                app.FillPerfCounter(PcwInfo, PCW_ANY_INSTANCE_ID);
-            });
-
-        break;
-
-    case PcwCallbackCollectData:
-
-        NxTranslationApp::s_AppCollection->ForEach(
-            [PcwInfo](const NxTranslationApp& app)
-            {
-                app.FillPerfCounter(PcwInfo, PcwInfo->CollectData.InstanceId);
-            });
-
-        break;
-    }; // switch(PcwType)
-
-    return Status;
-}
-
-#endif
 
 _IRQL_requires_(PASSIVE_LEVEL)
 static
@@ -291,7 +248,7 @@ NetClientAdapterNdisOidRequestHandler(
 
     case NdisRequestMethod:
 
-        switch (Request->DATA.SET_INFORMATION.Oid)
+        switch (Request->DATA.METHOD_INFORMATION.Oid)
         {
 
         case OID_GEN_RSS_SET_INDIRECTION_TABLE_ENTRIES:
@@ -315,7 +272,6 @@ NetClientAdapterOffloadInitialize(
     return reinterpret_cast<NxTranslationApp *>(ClientContext)->OffloadInitialize();
 }
 
-
 static const NET_CLIENT_CONTROL_DISPATCH ControlDispatch =
 {
     sizeof(NET_CLIENT_CONTROL_DISPATCH),
@@ -329,7 +285,7 @@ static const NET_CLIENT_CONTROL_DISPATCH ControlDispatch =
     &NetClientAdapterOffloadInitialize,
     &NetClientAdapterWifiDestroyPeerAddressDatapath,
     &NetClientAdapterPauseOffloadCapabilities,
-    &NetClientAdapterResumeOffloadCapabilities
+    &NetClientAdapterResumeOffloadCapabilities,
 };
 
 _Use_decl_annotations_
@@ -343,10 +299,6 @@ NxTranslationAppFactory::~NxTranslationAppFactory(
     }
 
     NxPerfTunerCleanup();
-
-#ifdef _KERNEL_MODE
-    UnregisterNetAdapterCxQueueCounterSet();
-#endif
 
     TraceLoggingUnregister(g_hNetAdapterCxXlatProvider);
 }
@@ -365,7 +317,7 @@ NxTranslationAppFactory::Initialize(
     if (NT_SUCCESS(status))
     {
         PVOID memory =
-            ExAllocatePoolWithTag(PagedPool, sizeof(NxCollection<NxTranslationApp>), 'pAxN');
+            ExAllocatePool2(POOL_FLAG_PAGED, sizeof(NxCollection<NxTranslationApp>), 'pAxN');
 
         if (memory)
         {
@@ -381,15 +333,6 @@ NxTranslationAppFactory::Initialize(
     {
         TraceLoggingUnregister(g_hNetAdapterCxXlatProvider);
     }
-
-#ifdef _KERNEL_MODE
-
-    status = RegisterNetAdapterCxQueueCounterSet(
-                NetAdapterCxQueueCounterSetCallback,
-                nullptr);
-    NT_FRE_ASSERT(NT_SUCCESS(status));
-
-#endif
 
     return status;
 }
@@ -461,6 +404,9 @@ NxTranslationApp::Initialize(
     CX_RETURN_NTSTATUS_IF(
         STATUS_INSUFFICIENT_RESOURCES,
         ! queueControl);
+
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        queueControl->Initialize());
 
     m_queueControl = wistd::move(queueControl);
 
@@ -550,17 +496,24 @@ NxTranslationApp::ReceiveScalingInitialize(
         CX_RETURN_STATUS_SUCCESS_MSG("Rss has already been initalized");
     }
 
+    CX_RETURN_NTSTATUS_IF_MSG(
+        STATUS_NDIS_NO_QUEUES,
+        ! m_datapathCreated,
+        "Datapath has not been created yet");
+
     auto rxScaling = wil::make_unique_nothrow<RxScaling>(
         *this,
         this->m_rxQueues,
         this->m_adapterDispatch->ReceiveScalingDispatch);
 
-    CX_RETURN_NTSTATUS_IF(
+    CX_RETURN_NTSTATUS_IF_MSG(
         STATUS_INSUFFICIENT_RESOURCES,
-        ! rxScaling);
+        ! rxScaling,
+        "Failed to allocate RxScaling object");
 
-    CX_RETURN_IF_NOT_NT_SUCCESS(
-        rxScaling->Initialize());
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        rxScaling->Initialize(),
+        "Failed to initialize RxScaling");
 
     m_rxScaling = wistd::move(rxScaling);
 
@@ -568,6 +521,7 @@ NxTranslationApp::ReceiveScalingInitialize(
 
     if (status != STATUS_SUCCESS)
     {
+        LogError(FLAG_TRANSLATOR, "Failed to create Rx scaling queues");
         m_rxScaling.reset();
         return status;
     }
@@ -600,7 +554,19 @@ NxTranslationApp::ReceiveScalingSetIndirectionEntries(
         STATUS_NOT_SUPPORTED,
         ! m_rxScaling);
 
-    return m_rxScaling->SetIndirectionEntries(Request);
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        m_rxScaling->SetIndirectionEntries(Request));
+
+    return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+Rtl::KArray<size_t, NonPagedPoolNx> const &
+NxTranslationApp::ReceiveScalingGetIndirectionTable(
+    void
+) const
+{
+    return m_rxScaling->GetIndirectionTable();
 }
 
 _Use_decl_annotations_
@@ -640,12 +606,62 @@ NxTranslationApp::TxScalingInitialize(
 }
 
 _Use_decl_annotations_
+NTSTATUS
+NxTranslationApp::TxPeerDemuxTableInitialize(
+    size_t MaxPeers
+)
+{
+    if (MaxPeers > 0)
+    {
+        return m_txPeerDemuxTable.Initialize(MaxPeers);
+    }
+    return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+void
+NxTranslationApp::TxPeerDemuxTableAddPeer(
+    NET_CLIENT_EUI48_ADDRESS const * Address
+)
+{
+    m_txPeerDemuxTable.Insert(Address);
+}
+
+_Use_decl_annotations_
+void
+NxTranslationApp::TxPeerDemuxTableRemovePeer(
+    NET_CLIENT_EUI48_ADDRESS const * Address
+)
+{
+    size_t demux = m_txPeerDemuxTable.Remove(Address);
+    WifiDestroyPeerAddressDatapath(demux);
+}
+
+_Use_decl_annotations_
 PAGEDX
 void
 NxTranslationApp::StartDatapath(
     void
 )
 {
+    LogInfo(
+        FLAG_TRANSLATOR,
+        "Starting datapath NET_CLIENT_ADAPTER %p",
+        m_adapter);
+
+    KLockThisShared lock(m_lock);
+
+    if (!m_datapathCreated)
+    {
+        LogWarning(
+            FLAG_TRANSLATOR,
+            "Datapath was not created successfully, will ignore StartDatapath");
+
+        return;
+    }
+
+    lock.Release();
+
     m_nblDatapath->SetRxHandler(&m_rxBufferReturn);
     m_nblDatapath->SetTxHandler(m_txScaling.get());
     m_queueControl->StartQueues();
@@ -653,9 +669,11 @@ NxTranslationApp::StartDatapath(
     CX_RETURN_MSG(
         "Datapath Started"
         " Tx Queues %Iu"
-        " Rx Queues %Iu",
+        " Rx Queues %Iu"
+        " NET_CLIENT_ADAPTER %p",
         m_txQueues.count(),
-        m_rxQueues.count());
+        m_rxQueues.count(),
+        m_adapter);
 }
 
 _Use_decl_annotations_
@@ -665,6 +683,22 @@ NxTranslationApp::StopDatapath(
     void
 )
 {
+    LogInfo(
+        FLAG_TRANSLATOR,
+        "Stopping datapath NET_CLIENT_ADAPTER %p",
+        m_adapter);
+
+    KLockThisShared lock(m_lock);
+    if (!m_datapathCreated)
+    {
+        LogWarning(
+            FLAG_TRANSLATOR,
+            "Datapath was not created successfully, will ignore StopDatapath");
+
+        return;
+    }
+    lock.Release();
+
     m_nblDatapath->SetRxHandler(nullptr);
     m_nblDatapath->CloseTxHandler();
     m_queueControl->CancelQueues();
@@ -674,9 +708,11 @@ NxTranslationApp::StopDatapath(
     CX_RETURN_MSG(
         "Datapath Stopped"
         " Tx Queues %Iu"
-        " Rx Queues %Iu",
+        " Rx Queues %Iu"
+        " NET_CLIENT_ADAPTER %p",
         m_txQueues.count(),
-        m_rxQueues.count());
+        m_rxQueues.count(),
+        m_adapter);
 }
 
 _Use_decl_annotations_
@@ -686,6 +722,11 @@ NxTranslationApp::CreateDatapath(
     void
 )
 {
+    LogInfo(
+        FLAG_TRANSLATOR,
+        "Creating datapath NET_CLIENT_ADAPTER %p",
+        m_adapter);
+
     KLockThisExclusive lock(m_lock);
 
     NET_CLIENT_ADAPTER_PROPERTIES adapterProperties = {};
@@ -701,7 +742,9 @@ NxTranslationApp::CreateDatapath(
     auto const numberOfTxQueues = m_txScaling->GetNumberOfQueues() > 1 ? 0U : 1U;
 
     CX_RETURN_IF_NOT_NT_SUCCESS(
-        m_queueControl->CreateQueues(numberOfTxQueues, 1U));
+        m_queueControl->CreateQueues(
+            numberOfTxQueues,
+            1U));
 
     CX_RETURN_IF_NOT_NT_SUCCESS(
         m_queueControl->ProvisionOnDemandQueues(m_txScaling->GetNumberOfQueues()));
@@ -714,9 +757,11 @@ NxTranslationApp::CreateDatapath(
     CX_RETURN_STATUS_SUCCESS_MSG(
         "Datapath Created"
         " Tx Queues %Iu"
-        " Rx Queues %Iu",
+        " Rx Queues %Iu"
+        " NET_CLIENT_ADAPTER %p",
         m_txQueues.count(),
-        m_rxQueues.count());
+        m_rxQueues.count(),
+        m_adapter);
 }
 
 _Use_decl_annotations_
@@ -726,19 +771,27 @@ NxTranslationApp::DestroyDatapath(
     void
 )
 {
+    LogInfo(
+        FLAG_TRANSLATOR,
+        "Destroying datapath NET_CLIENT_ADAPTER %p",
+        m_adapter);
+
+    KLockThisExclusive lock(m_lock);
     m_datapathCreated = false;
+    lock.Release();
 
     m_txScaling.reset();
-    UpdateTxCounters();
-    UpdateRxCounters();
+
     m_queueControl->DestroyQueues();
 
     CX_RETURN_MSG(
         "Datapath Destroyed"
         " Tx Queues %Iu"
-        " Rx Queues %Iu",
+        " Rx Queues %Iu"
+        " NET_CLIENT_ADAPTER %p",
         m_txQueues.count(),
-        m_rxQueues.count());
+        m_rxQueues.count(),
+        m_adapter);
 }
 
 _Use_decl_annotations_
@@ -819,10 +872,11 @@ NxTranslationApp::ReportTxPacketStatistics(
     {
         *(ULONG32*)Request.DATA.QUERY_INFORMATION.InformationBuffer = (ULONG32)count;
         Request.DATA.QUERY_INFORMATION.BytesWritten = sizeof(ULONG32);
+        Request.DATA.QUERY_INFORMATION.BytesNeeded = sizeof(ULONG64);
     }
     else
     {
-        Request.DATA.QUERY_INFORMATION.BytesNeeded = sizeof(ULONG32);
+        Request.DATA.QUERY_INFORMATION.BytesNeeded = sizeof(ULONG64);
         return STATUS_BUFFER_TOO_SMALL;
     }
 
@@ -847,10 +901,12 @@ NxTranslationApp::ReportRxPacketStatistics(
     {
         *(ULONG32*)Request.DATA.QUERY_INFORMATION.InformationBuffer = (ULONG32)count;
         Request.DATA.QUERY_INFORMATION.BytesWritten = sizeof(ULONG32);
+        Request.DATA.QUERY_INFORMATION.BytesNeeded = sizeof(ULONG64);
+
     }
     else
     {
-        Request.DATA.QUERY_INFORMATION.BytesNeeded = sizeof(ULONG32);
+        Request.DATA.QUERY_INFORMATION.BytesNeeded = sizeof(ULONG64);
         return STATUS_BUFFER_TOO_SMALL;
     }
 
@@ -957,70 +1013,9 @@ NxTranslationApp::SetMulticastList(
 }
 
 _Use_decl_annotations_
-void
-NxTranslationApp::FillPerfCounter(
-    _In_ HANDLE PcwInfo,
-    _In_ ULONG InstanceId
-) const
-{
-#ifdef _KERNEL_MODE
-
-    DECLARE_UNICODE_STRING_SIZE(name, 256);
-
-    PPCW_CALLBACK_INFORMATION pcwInfoLocal =
-        (PPCW_CALLBACK_INFORMATION) PcwInfo;
-
-    NETADAPTER_QUEUE_PC perfCounter = {};
-
-    ULONG rxQueueCount = static_cast<ULONG>(m_rxQueues.count());
-    for (size_t i = 0; i < m_rxQueues.count(); i++)
-    {
-        auto rxStatistics = m_rxQueues[i]->GetStatistics();
-        if (InstanceId == PCW_ANY_INSTANCE_ID ||
-            InstanceId == i)
-        {
-            (void) RtlUnicodeStringPrintf(&name, L"App %lu - RX %zu", m_AppId, i);
-
-            rxStatistics.GetPerfCounter(perfCounter);
-
-            AddNetAdapterCxQueueCounterSet(
-                pcwInfoLocal->EnumerateInstances.Buffer,
-                &name,
-                static_cast<ULONG>(i),
-                &perfCounter);
-        }
-    }
-
-    for (size_t i = 0; i < m_txQueues.count(); i++)
-    {
-        auto txStatistics = m_txQueues[i]->GetStatistics();
-        if (InstanceId == PCW_ANY_INSTANCE_ID ||
-            InstanceId == (i + rxQueueCount))
-        {
-            (void) RtlUnicodeStringPrintf(&name, L"App %lu - TX %zu", m_AppId, i + rxQueueCount);
-
-            txStatistics.GetPerfCounter(perfCounter);
-
-            AddNetAdapterCxQueueCounterSet(
-                pcwInfoLocal->EnumerateInstances.Buffer,
-                &name,
-                static_cast<ULONG>(i + rxQueueCount),
-                &perfCounter);
-        }
-    }
-
-#else
-
-    UNREFERENCED_PARAMETER(PcwInfo);
-    UNREFERENCED_PARAMETER(InstanceId);
-
-#endif
-}
-
-_Use_decl_annotations_
 NTSTATUS
 NxTranslationApp::SetPacketFilter(
-    NDIS_OID_REQUEST const & Request
+    NDIS_OID_REQUEST & Request
 )
 {
     auto const buffer = reinterpret_cast<ULONG *>(Request.DATA.SET_INFORMATION.InformationBuffer);
@@ -1040,11 +1035,27 @@ NxTranslationApp::SetPacketFilter(
         ? &m_multicastAddressList[0]
         : reinterpret_cast<IF_PHYSICAL_ADDRESS const *>(nullptr);
 
-    return m_adapterDispatch->SetReceiveFilter(
+    auto const status = m_adapterDispatch->SetReceiveFilter(
        m_adapter,
        m_packetFilter,
        m_multicastAddressList.count(),
        addressList);
+
+    if (status == STATUS_SUCCESS)
+    {
+        Request.DATA.SET_INFORMATION.BytesRead = sizeof(ULONG);
+    }
+
+    return status;
+}
+
+_Use_decl_annotations_
+void
+NxTranslationApp::SetUseWiFiCxDemuxCallback(
+    bool UseDemuxCallback
+)
+{
+    m_useWiFiCxDemuxCallback = UseDemuxCallback;
 }
 
 _Use_decl_annotations_
@@ -1053,9 +1064,20 @@ NxTranslationApp::WifiTxPeerAddressDemux(
     NET_CLIENT_EUI48_ADDRESS const * Address
 ) const
 {
-    return m_adapterDispatch->WifiTxPeerDemux(
-        m_adapter,
-        Address);
+#ifdef NETCX_REDIRECTOR
+        return m_txPeerDemuxTable.Lookup(Address);
+#else
+        if (m_useWiFiCxDemuxCallback)
+        {
+            return m_adapterDispatch->WifiTxPeerDemux(
+                m_adapter,
+                Address);
+        }
+        else
+        {
+            return m_txPeerDemuxTable.Lookup(Address);
+        }
+#endif
 }
 
 _Use_decl_annotations_
@@ -1069,17 +1091,11 @@ NxTranslationApp::WifiDestroyPeerAddressDatapath(
     Demux += 1U;
 
     LogInfo(FLAG_TRANSLATOR,
-        "Tx Destroy Peer Datapath %Iu",
-        Demux);
+        "Tx Destroy Peer Datapath %Iu NET_CLIENT_ADAPTER %p",
+        Demux,
+        m_adapter);
 
-    for (auto const & queue : m_txQueues)
-    {
-        auto const property = queue->GetTxDemuxProperty(TxDemuxTypePeerAddress);
-        if (property && property->Value == Demux)
-        {
-            m_queueControl->DestroyOnDemandQueue(queue->GetQueueId());
-        }
-    }
+    m_queueControl->DestroyOnDemandQueuesByPeerDemux(Demux);
 }
 
 _Use_decl_annotations_
@@ -1194,74 +1210,6 @@ NxTranslationApp::GetRxFragmentRingSize(
 }
 
 _Use_decl_annotations_
-void
-NxTranslationApp::UpdateRxCounters(
-    void
-)
-{
-    for (auto &queue : m_rxQueues)
-    {
-        m_statistics.UpdateRxCounters(queue.get()->GetStatistics());
-    }
-}
-
-_Use_decl_annotations_
-void
-NxTranslationApp::UpdateTxCounters(
-    void
-)
-{
-    for (auto &queue : m_txQueues)
-    {
-        m_statistics.UpdateTxCounters(queue.get()->GetStatistics());
-    }
-}
-
-_Use_decl_annotations_
-NxRxCounters
-NxTranslationApp::GetRxCounters(
-    void
-) const
-{
-    NxRxCounters statistics = {};
-    statistics.Add(m_statistics.GetRxCounters());
-
-    if (!m_datapathCreated)
-    {
-        return statistics;
-    }
-
-    for (auto &queue: m_rxQueues)
-    {
-        statistics.Add(queue.get()->GetStatistics());
-    }
-
-    return statistics;
-}
-
-_Use_decl_annotations_
-NxTxCounters
-NxTranslationApp::GetTxCounters(
-    void
-) const
-{
-    NxTxCounters statistics = {};
-    statistics.Add(m_statistics.GetTxCounters());
-
-    if (!m_datapathCreated)
-    {
-        return statistics;
-    }
-
-    for (auto &queue : m_txQueues)
-    {
-        statistics.Add(queue.get()->GetStatistics());
-    }
-
-    return statistics;
-}
-
-_Use_decl_annotations_
 bool
 NxTranslationApp::IsActiveRscIPv4Enabled(
     void
@@ -1277,4 +1225,13 @@ NxTranslationApp::IsActiveRscIPv6Enabled(
 ) const
 {
     return m_offload.IsActiveRscIPv6Enabled();
+}
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+bool
+NxTranslationApp::IsActiveUdpRscEnabled(
+    void
+) const
+{
+    return m_offload.IsActiveUdpRscEnabled();
 }

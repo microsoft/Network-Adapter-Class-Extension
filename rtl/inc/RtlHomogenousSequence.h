@@ -24,9 +24,26 @@ public:
         m_clearBits |= ~i;
     }
 
+    void Combine(_In_ RtlHomogenousSequence& other)
+    {
+        m_setBits |= other.m_setBits;
+        m_clearBits |= other.m_clearBits;
+    }
+
     bool IsHomogenous() const
     {
         return m_setBits == static_cast<TINTEGER>(~m_clearBits);
+    }
+
+    TINTEGER GetSetBits() const
+    {
+        return m_setBits;
+    }
+
+    void Reset()
+    {
+        m_setBits = 0;
+        m_clearBits = 0;
     }
 
 private:

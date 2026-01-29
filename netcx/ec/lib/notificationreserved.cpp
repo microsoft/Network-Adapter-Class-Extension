@@ -37,10 +37,10 @@ NotificationReserved::Enable(
 {
     if (!Enabled)
     {
-        Enabled = TRUE;
+    Enabled = TRUE;
 
-        auto notification = GetNotification();
-        notification->SetNotificationFn(notification->Context, Enabled);
+    auto notification = GetNotification();
+    notification->SetNotificationFn(notification->Context, Enabled);
     }
 }
 
@@ -52,9 +52,9 @@ NotificationReserved::Disable(
 {
     if (Enabled)
     {
-        Enabled = FALSE;
+    Enabled = FALSE;
 
-        auto notification = GetNotification();
-        notification->SetNotificationFn(notification->Context, Enabled);
+    auto notification = GetNotification();
+    notification->SetNotificationFn(notification->Context, Enabled);
     }
 }

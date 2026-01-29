@@ -19,10 +19,10 @@ Abstract:
 #include <net/mdltypes_p.h>
 #include <net/returncontexttypes_p.h>
 #include <net/virtualaddresstypes_p.h>
-#include <net/databuffer_p.h>
 #include <net/wifi/exemptionactiontypes_p.h>
 #include <net/ieee8021qtypes_p.h>
 #include <net/packethashtypes_p.h>
+#include <net/databuffer_p.h>
 
 #include "WdfObjectCallback.hpp"
 #include "NxAdapter.hpp"
@@ -34,149 +34,26 @@ Abstract:
 #include "NxQueue.hpp"
 #include "NxUtility.hpp"
 #include "NxDefaultDatapath.hpp"
+#include "NxMemory.hpp"
 #include "powerpolicy/NxPowerPolicy.hpp"
+#include "ndisminiport/NxNdisMiniport.hpp"
+#include "ndisminiport/NxNdisPnpPower.hpp"
 #include "verifier.hpp"
 #include "version.hpp"
 
+
 #include "NxAdapter.tmh"
+
 
 static void *
     PLUGPLAY_NOTIFICATION_TAG = reinterpret_cast<void *>('NPnP');
-
-//
-// Standard NDIS callback declaration
-//
-
-static
-MINIPORT_INITIALIZE
-    EvtNdisInitializeEx;
-
-static
-MINIPORT_HALT
-    EvtNdisHaltEx;
-
-static
-MINIPORT_PAUSE
-    EvtNdisPause;
-
-static
-MINIPORT_RESTART
-    EvtNdisRestart;
-
-static
-MINIPORT_SEND_NET_BUFFER_LISTS
-    EvtNdisSendNetBufferLists;
-
-static
-MINIPORT_RETURN_NET_BUFFER_LISTS
-    EvtNdisReturnNetBufferLists;
-
-static
-MINIPORT_CANCEL_SEND
-    EvtNdisCancelSend;
-
-static
-MINIPORT_DEVICE_PNP_EVENT_NOTIFY
-    EvtNdisDevicePnpEventNotify;
-
-static
-MINIPORT_SHUTDOWN
-    EvtNdisShutdownEx;
-
-static
-MINIPORT_OID_REQUEST
-    EvtNdisOidRequest;
-
-static
-MINIPORT_DIRECT_OID_REQUEST
-    EvtNdisDirectOidRequest;
-
-static
-MINIPORT_CANCEL_OID_REQUEST
-    EvtNdisCancelOidRequest;
-
-static
-MINIPORT_CANCEL_DIRECT_OID_REQUEST
-    EvtNdisCancelDirectOidRequest;
-
-static
-MINIPORT_SYNCHRONOUS_OID_REQUEST
-    EvtNdisSynchronousOidRequestHandler;
-
-//
-// NDIS-WDF callback declaration
-//
-
-static
-EVT_NDIS_WDF_MINIPORT_GET_NDIS_HANDLE_FROM_DEVICE_OBJECT
-    EvtNdisWdmDeviceGetNdisAdapterHandle;
-
-static
-EVT_NDIS_WDF_MINIPORT_GET_DEVICE_OBJECT
-    EvtNdisGetDeviceObject;
-
-static
-EVT_NDIS_WDF_MINIPORT_GET_NEXT_DEVICE_OBJECT
-    EvtNdisGetNextDeviceObject;
-
-static
-EVT_NDIS_WDF_MINIPORT_GET_ASSIGNED_FDO_NAME
-    EvtNdisGetAssignedFdoName;
-
-static
-EVT_NDIS_WDF_MINIPORT_POWER_REFERENCE
-    EvtNdisPowerReference;
-
-static
-EVT_NDIS_WDF_MINIPORT_POWER_DEREFERENCE
-    EvtNdisPowerDereference;
-
-static
-EVT_NDIS_WDF_MINIPORT_UPDATE_IDLE_CONDITION
-    EvtNdisUpdateIdleCondition;
-
-static
-EVT_NDIS_WDF_MINIPORT_AOAC_ENGAGE
-    EvtNdisAoAcEngage;
-
-static
-EVT_NDIS_WDF_MINIPORT_AOAC_DISENGAGE
-    EvtNdisAoAcDisengage;
-
-static
-EVT_NDIS_WDF_MINIPORT_UPDATE_PM_PARAMETERS
-    EvtNdisUpdatePMParameters;
-
-static
-EVT_NDIS_WDF_MINIPORT_ALLOCATE_BLOCK
-    EvtNdisAllocateMiniportBlock;
-
-static
-EVT_NDIS_WDF_MINIPORT_COMPLETE_ADD
-    EvtNdisMiniportCompleteAdd;
-
-static
-EVT_NDIS_WDF_DEVICE_START_COMPLETE
-    EvtNdisDeviceStartComplete;
-
-static
-EVT_NDIS_WDF_MINIPORT_DEVICE_RESET
-    EvtNdisMiniportDeviceReset;
-
-static
-EVT_NDIS_WDF_MINIPORT_QUERY_DEVICE_RESET_SUPPORT
-    EvtNdisMiniportQueryDeviceResetSupport;
-
-static
-EVT_NDIS_WDF_GET_WMI_EVENT_GUID
-    EvtNdisGetWmiEventGuid;
 
 //
 // I/O subsystem callbacks
 //
 
 static
-DRIVER_NOTIFICATION_CALLBACK_ROUTINE
+DEVICE_INTERFACE_NOTIFICATION_CALLBACK
     NetInterfaceChangeNotification;
 
 static const NET_CLIENT_DISPATCH CxDispatch =
@@ -246,7 +123,7 @@ NetClientAdapterCreateTxQueue(
     _In_ NET_CLIENT_QUEUE_CONFIG const * ClientQueueConfig,
     _Out_ NET_CLIENT_QUEUE * AdapterQueue,
     _Out_ NET_CLIENT_QUEUE_DISPATCH const ** AdapterDispatch,
-    _Out_ NET_EXECUTION_CONTEXT * ExecutionContext,
+    _Out_ NET_EXECUTION_CONTEXT * ExecutionContextHandle,
     _Out_ NET_EXECUTION_CONTEXT_DISPATCH const ** ExecutionContextDispatch
 )
 {
@@ -256,7 +133,7 @@ NetClientAdapterCreateTxQueue(
         ClientQueueConfig,
         AdapterQueue,
         AdapterDispatch,
-        ExecutionContext,
+        ExecutionContextHandle,
         ExecutionContextDispatch);
 }
 
@@ -269,7 +146,7 @@ NetClientAdapterCreateRxQueue(
     _In_ NET_CLIENT_QUEUE_CONFIG const * ClientQueueConfig,
     _Out_ NET_CLIENT_QUEUE * AdapterQueue,
     _Out_ NET_CLIENT_QUEUE_DISPATCH const ** AdapterDispatch,
-    _Out_ NET_EXECUTION_CONTEXT * ExecutionContext,
+    _Out_ NET_EXECUTION_CONTEXT * ExecutionContextHandle,
     _Out_ NET_EXECUTION_CONTEXT_DISPATCH const ** ExecutionContextDispatch
 )
 {
@@ -279,7 +156,7 @@ NetClientAdapterCreateRxQueue(
         ClientQueueConfig,
         AdapterQueue,
         AdapterDispatch,
-        ExecutionContext,
+        ExecutionContextHandle,
         ExecutionContextDispatch);
 }
 
@@ -305,6 +182,19 @@ NetClientReturnRxBuffer(
 )
 {
     reinterpret_cast<NxAdapter*>(Adapter)->ReturnRxBuffer(RxBufferReturnContext);
+}
+
+NONPAGEDX
+_IRQL_requires_min_(PASSIVE_LEVEL)
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_IRQL_requires_same_
+NET_MEMORY_MDL_WRAPPER *
+NetClientGetMdlForDriverAllocatedMemory(
+    _In_ NET_CLIENT_ADAPTER Adapter,
+    _In_ ULONG64 MemoryId
+)
+{
+    return reinterpret_cast<NxAdapter*>(Adapter)->GetMdlForDriverAllocatedMemory(MemoryId);
 }
 
 static
@@ -669,6 +559,7 @@ static const NET_CLIENT_ADAPTER_DISPATCH AdapterDispatch =
     &NetClientAdapterCreateRxQueue,
     &NetClientAdapterDestroyQueue,
     &NetClientReturnRxBuffer,
+    &NetClientGetMdlForDriverAllocatedMemory,
     &NetClientAdapterRegisterExtension,
     &NetClientAdapterQueryExtension,
     &NetClientAdapterSetReceiveFilter,
@@ -713,7 +604,14 @@ IdleStateMachineFromAdapter(
 )
 {
     auto nxAdapter = GetNxAdapterFromHandle(Object);
+
+    if (nxAdapter->IsDevicelessAdapter())
+    {
+        return nullptr;
+    }
+
     auto nxDevice = GetNxDeviceFromHandle(nxAdapter->GetDevice());
+
     return &nxDevice->IdleStateMachine;
 }
 
@@ -765,7 +663,6 @@ NxAdapter::NxAdapter(
     : m_adapter(static_cast<NETADAPTER>(WdfObjectContextGetObject(this)))
     , m_privateGlobals(*PrivateGlobals)
     , RxScaling(m_adapter)
-    , m_powerPolicy(m_device, GetNxDeviceFromHandle(m_device)->GetPowerPolicyEventCallbacks(), m_adapter, AdapterInit->ShouldAcquirePowerReferencesForAdapter)
     , m_device(AdapterInit->ParentDevice)
     , m_mediaExtensionType(AdapterInit->ExtensionType)
     , PnpPower(this)
@@ -773,22 +670,21 @@ NxAdapter::NxAdapter(
 {
 }
 
-_Use_decl_annotations_
 NTSTATUS
 NetInterfaceChangeNotification(
-    void * NotificationStructure,
+    DeviceInterfaceNotificationType NotificationType,
+    SymbolicLinkNameType * SymbolicLinkName,
     void * Context
     )
 {
-    auto const notification = static_cast<DEVICE_INTERFACE_CHANGE_NOTIFICATION const *>(NotificationStructure);
-
-    if (notification->Event == GUID_DEVICE_INTERFACE_ARRIVAL)
+    if (NotificationType == DeviceInterfaceNotificationType::Arrival)
     {
+#ifdef NETCX_KMDF
         OBJECT_ATTRIBUTES objAttributes;
 
         InitializeObjectAttributes(
             &objAttributes,
-            notification->SymbolicLinkName,
+            SymbolicLinkName,
             OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
             nullptr,
             nullptr);
@@ -849,9 +745,156 @@ NetInterfaceChangeNotification(
             // to use the NxAdapter context
             nxAdapter->PnpPower.IoInterfaceArrived();
         }
+#else
+        DEVPROPTYPE propType{};
+        GUID interfaceGuid{};
+        ULONG size = sizeof(interfaceGuid);
+
+        CONFIGRET cr = CM_Get_Device_Interface_PropertyW(
+            SymbolicLinkName,
+            &DEVPKEY_NetworkInterface_Guid,
+            &propType,
+            reinterpret_cast<BYTE *>(&interfaceGuid),
+            &size,
+            0);
+
+        auto nxAdapter = static_cast<NxAdapter *>(Context);
+
+        CX_RETURN_NTSTATUS_IF_MSG(
+            CM_MapCrToWin32Err(
+                cr,
+                ERROR_UNIDENTIFIED_ERROR),
+            cr != CR_SUCCESS,
+            "CM_Get_Device_Interface_PropertyW failed. NETADAPTER %p",
+            nxAdapter->GetFxObject());
+
+        CX_RETURN_NTSTATUS_IF_MSG(
+            STATUS_INVALID_PARAMETER,
+            propType != DEVPROP_TYPE_GUID,
+            "Invalid DEVPKEY_NetworkInterface_Guid data type. NETADAPTER %p",
+            nxAdapter->GetFxObject());
+
+        if (*nxAdapter->GetInterfaceGuid() == interfaceGuid)
+        {
+            // If we're here it is because NetAdapterStart was already invoked, which means
+            // we are guaranteed to have a reference on the NETADAPTER object, thus it is safe
+            // to use the NxAdapter context
+            nxAdapter->PnpPower.IoInterfaceArrived();
+        }
+#endif
     }
 
     return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+NTSTATUS
+NxAdapter::InitializeDeviceBackedAdapter(
+    AdapterInit const * AdapterInit
+)
+{
+    m_ndisMiniport = wil::make_unique_nothrow<NxNdisPnpMiniport>(this, m_device);
+
+    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !m_ndisMiniport);
+
+#ifdef NETCX_UMDF
+    m_ndisMiniport->SetBridgeToKernel(&m_bridgeToKernel);
+#endif
+
+    //
+    // Report the newly created device to Ndis.sys
+    //
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        m_ndisMiniport->CreateNdisMiniport(),
+        "Failed to create NDIS miniport");
+
+    //
+    // Creating NxNdisPnpPower requires NDIS miniport is created successfully.
+    //
+    m_ndisPnpPower = wil::make_unique_nothrow<NxNdisPnpPower>(m_ndisMiniport->GetNdisHandle(), m_device);
+
+    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !m_ndisPnpPower);
+
+#ifdef NETCX_UMDF
+    m_ndisPnpPower->SetBridgeToKernel(&m_bridgeToKernel);
+#endif
+
+    //
+    // Initializing NxPowerPolicy requires NDIS miniport is created successfully.
+    //
+
+    bool const allowS0Idle = m_mediaExtensionType == MediaExtensionType::Mbb;
+
+    m_powerPolicy = wil::make_unique_nothrow<NxPowerPolicy>(
+        m_device,
+        GetNxDeviceFromHandle(m_device)->GetPowerPolicyEventCallbacks(),
+        m_adapter,
+        AdapterInit->ShouldAcquirePowerReferencesForAdapter,
+        allowS0Idle,
+        *m_ndisPnpPower);
+
+    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !m_powerPolicy);
+
+    CX_RETURN_IF_NOT_NT_SUCCESS(m_powerPolicy->Initialize());
+
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        RegisterDeviceInterfaceNotification(
+            GUID_DEVINTERFACE_NET,
+            GetPrivateGlobals()->NxDriver->GetFxObject(),
+            NetInterfaceChangeNotification,
+            this,
+            m_deviceInterfaceNotification),
+        "Failed to register device interface notification. NETADAPTER %p",
+        GetFxObject());
+
+    WdfObjectReferenceWithTag(GetFxObject(), PLUGPLAY_NOTIFICATION_TAG);
+
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        PnpPower.Initialize(),
+        "Failed to initialize Adapter PnpPower state machine");
+
+    auto nxDevice = GetNxDeviceFromHandle(GetDevice());
+    // Inform the Device PnpPower state machine so that it can bring the
+    // new adapter PnP/Power to a consistent state
+    nxDevice->PnpPower.AdapterCreated(this);
+
+    return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+NTSTATUS
+NxAdapter::InitializeDevicelessAdapter(
+    AdapterInit const * AdapterInit
+)
+{
+    m_interfaceGuid = AdapterInit->DevicelessNetworkInterfaceGuid;
+
+    m_ndisMiniport = wil::make_unique_nothrow<NxNdisLwMiniport>(
+        this,
+        AdapterInit->DevicelessNetworkInterfaceGuid);
+
+    CX_RETURN_NTSTATUS_IF(STATUS_INSUFFICIENT_RESOURCES, !m_ndisMiniport);
+
+    //
+    // Report the newly created device to Ndis.sys
+    //
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        m_ndisMiniport->CreateNdisMiniport(),
+        "Failed to create NDIS miniport");
+
+    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+        PnpPower.Initialize(),
+        "Failed to initialize Adapter PnpPower state machine");
+
+    return STATUS_SUCCESS;
+}
+
+bool
+NxAdapter::IsDevicelessAdapter(
+    void
+) const
+{
+    return m_device == WDF_NO_HANDLE;
 }
 
 _Use_decl_annotations_
@@ -882,29 +925,26 @@ NxAdapter::Initialize(
             &objectAttributes,
             &m_extensionCollectionLock));
 
-    WDF_WORKITEM_CONFIG stopIdleWorkItemConfig;
-    WDF_WORKITEM_CONFIG_INIT(&stopIdleWorkItemConfig, _EvtStopIdleWorkItem);
-    stopIdleWorkItemConfig.AutomaticSerialization = FALSE;
+#ifdef NETCX_UMDF
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        m_bridgeToKernel.OpenHandle(
+            GetNxDeviceFromHandle(m_device)->GetPnpInstanceId()));
 
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        WdfWorkItemCreate(
-            &stopIdleWorkItemConfig,
-            &objectAttributes,
-            &m_powerRequiredWorkItem),
-        "Failed to create m_powerRequiredWorkItem");
+    CxDriverContext *cxDriverContext = GetCxDriverContextFromHandle(WdfGetDriver());
+    wistd::unique_ptr<CanaryIoctl> ioctl;
 
-    #ifdef _KERNEL_MODE
-    StateMachineEngineConfig smConfig(WdfDeviceWdmGetDeviceObject(m_device), NETADAPTERCX_TAG);
-    #else
-    StateMachineEngineConfig smConfig;
-    #endif
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        cxDriverContext->SendCanaryIoctl(
+            m_bridgeToKernel.GetHandle(),
+            IOCTL_NETCXRD_ADAPTER_CANARY,
+            ioctl));
 
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        NxAdapterStateMachine::Initialize(smConfig),
-        "Failed to initialize NxAdapter state machine");
+    m_bridgeToKernel.SetCanaryIoctl(wistd::move(ioctl));
 
-    // Clear the initial state machine transition
-    m_transitionComplete.Clear();
+    CX_RETURN_IF_NOT_NT_SUCCESS(
+        m_bridgeToKernel.RequestConnectToAlpc(
+            this));
+#endif
 
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         InitializeDatapath(AdapterInit->DatapathCallbacks),
@@ -923,54 +963,54 @@ NxAdapter::Initialize(
         NT_FRE_ASSERT(m_txDemux.append(demux));
     }
 
+#ifdef NETCX_UMDF
+    if (m_txDemux.count())
+    {
+        m_bridgeToKernel.SetClientTxDemuxConfiguration(&m_txDemux[0], m_txDemux.count());
+    }
+#else
+    if (auto const demux = GetTxPeerAddressDemux())
+    {
+            // It is guranteed we'll have exactly one app in the m_apps array.
+            // Support for multiple apps has never been implemented, and the m_apps 
+            // array needs to be replaced with a simple pointer
+            CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
+                m_apps[0]->TxPeerDemuxTableInitialize(demux->Range),
+                "Failed to initialize TxPeerDemuxTable ");
+    }
+#endif
+
     ClearGeneralAttributes();
 
-    //
-    // Report the newly created device to Ndis.sys
-    //
+#ifdef NETCX_KMDF
+    auto ioObject = m_device != nullptr
+        ? WdfDeviceWdmGetDeviceObject(m_device)
+        : reinterpret_cast<DEVICE_OBJECT *>(WdfDriverWdmGetDriverObject(WdfGetDriver()));
+
+    StateMachineEngineConfig smConfig(ioObject, NETADAPTERCX_TAG);
+#else
+    StateMachineEngineConfig smConfig;
+#endif
+
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        CreateNdisMiniport(),
-        "Failed to create NDIS miniport");
+        NxAdapterStateMachine::Initialize(smConfig),
+        "Failed to initialize NxAdapter state machine");
 
-    ULONG wakeReasonSize =
-        RTL_NUM_ALIGN_UP(NDIS_SIZEOF_PM_WAKE_REASON_REVISION_1, 8) +
-        RTL_NUM_ALIGN_UP(NDIS_SIZEOF_PM_WAKE_PACKET_REVISION_1, 8) +
-        RTL_NUM_ALIGN_UP(MAX_ETHERNET_PACKET_SIZE, 8);
+    // Clear the initial state machine transition
+    m_transitionComplete.Clear();
 
-    WDF_OBJECT_ATTRIBUTES_INIT(&objectAttributes);
-    objectAttributes.ParentObject = GetFxObject();
+    if (AdapterInit->ParentDevice != WDF_NO_HANDLE)
+    {
+        CX_RETURN_IF_NOT_NT_SUCCESS(InitializeDeviceBackedAdapter(AdapterInit));
+    }
+    else
+    {
+        CX_RETURN_IF_NOT_NT_SUCCESS(InitializeDevicelessAdapter(AdapterInit));
+    }
 
-    CX_RETURN_IF_NOT_NT_SUCCESS(
-        WdfMemoryCreate(&objectAttributes,
-            NonPagedPoolNx,
-            NETADAPTERCX_TAG,
-            wakeReasonSize,
-            &m_wakeReasonMemory,
-            nullptr));
-
-    CX_RETURN_IF_NOT_NT_SUCCESS(
-        IoRegisterPlugPlayNotification(
-            EventCategoryDeviceInterfaceChange,
-            0,
-            (void *)&GUID_DEVINTERFACE_NET,
-            WdfDriverWdmGetDriverObject(GetPrivateGlobals()->NxDriver->GetFxObject()),
-            NetInterfaceChangeNotification,
-            this,
-            &m_plugPlayNotificationHandle));
-
-    WdfObjectReferenceWithTag(GetFxObject(), PLUGPLAY_NOTIFICATION_TAG);
-
+#ifdef NETCX_KMDF
     m_nblDatapath.SetNdisHandle(GetNdisHandle());
-
-    auto nxDevice = GetNxDeviceFromHandle(GetDevice());
-
-    CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
-        PnpPower.Initialize(),
-        "Failed to initialize Adapter PnpPower state machine");
-
-    // Inform the Device PnpPower state machine so that it can bring the
-    // new adapter PnP/Power to a consistent state
-    nxDevice->PnpPower.AdapterCreated(this);
+#endif
 
     // We let the driver start by default
     CX_RETURN_IF_NOT_NT_SUCCESS(PnpPower.NetAdapterStart(WdfGetDriver()));
@@ -982,11 +1022,9 @@ NxAdapter::Initialize(
     DECLARE_CONST_UNICODE_STRING(numRssQueues, L"*NumRssQueues");
     if (!NT_SUCCESS(QueryStandardizedKeyword(numRssQueues, RxScaling.DefaultNumberOfQueues)))
     {
-        LogWarning(FLAG_ADAPTER, "*NumRssQueues keyword not present");
+        LogWarning(FLAG_ADAPTER, "*NumRssQueues keyword not present. NETADAPTER %p",
+            m_adapter);
     }
-
-    // Initialize power policy
-    m_powerPolicy.Initialize();
 
     return STATUS_SUCCESS;
 }
@@ -1073,6 +1111,9 @@ NxAdapter::InitializeAdapterExtensions(
         {
             NT_FRE_ASSERT(nullptr == m_wifiTxPeerDemux);
             m_wifiTxPeerDemux = extension.WifiTxPeerDemux;
+#ifdef NETCX_KMDF
+            m_apps[0]->SetUseWiFiCxDemuxCallback(true);
+#endif
         }
     }
 
@@ -1173,588 +1214,50 @@ NxAdapter::GetTxPeerAddressDemux(
     return nullptr;
 }
 
-_Use_decl_annotations_
-void
-NxAdapter::DispatchOidRequest(
-    NDIS_OID_REQUEST * NdisOidRequest,
-    DispatchContext * Context
-)
-{
-    auto const nextHandler = Context->NextHandlerIndex++;
-    auto const frameworkHandlerIndex = m_adapterExtensions.count();
-
-    //
-    // Note: It is not safe to use 'NdisOidRequest' or 'Context' after either one of
-    // InvokeOidPreprocessCallback or FrameworkOidHandler has returned, since those
-    // calls might complete the OID request before returning
-    //
-
-    if (nextHandler < frameworkHandlerIndex)
-    {
-        auto const & extension = m_adapterExtensions[nextHandler];
-        extension.InvokeOidPreprocessCallback(GetFxObject(), NdisOidRequest, Context);
-    }
-    else if (nextHandler == frameworkHandlerIndex)
-    {
-        FrameworkOidHandler(NdisOidRequest, Context);
-    }
-    else
-    {
-        NT_ASSERT(nextHandler == frameworkHandlerIndex + 1);
-        NdisMOidRequestComplete(GetNdisHandle(), NdisOidRequest, NDIS_STATUS_NOT_SUPPORTED);
-    }
-}
-
-_Use_decl_annotations_
-void
-NxAdapter::FrameworkOidHandler(
-    NDIS_OID_REQUEST * NdisOidRequest,
-    DispatchContext * Context
-)
-{
-    switch (NdisOidRequest->RequestType)
-    {
-        case NdisRequestSetInformation:
-            FrameworkSetOidHandler(NdisOidRequest, Context);
-            break;
-
-        default:
-            //
-            // Others types of OID requests are not handled by the framework,
-            // dispatch to the next handler
-            //
-            DispatchOidRequest(NdisOidRequest, Context);
-            break;
-    }
-}
-
-_Use_decl_annotations_
-void
-NxAdapter::FrameworkSetOidHandler(
-    NDIS_OID_REQUEST * NdisOidRequest,
-    DispatchContext * Context
-)
-{
-    auto Set = &NdisOidRequest->DATA.SET_INFORMATION;
-
-    //
-    // All internal OID handling is synchronous, we must either complete the request
-    // (NdisMOidRequestComplete) or let the framework keep processing it (DispatchOidRequest)
-    //
-
-    switch(Set->Oid)
-    {
-        case OID_PM_ADD_WOL_PATTERN:
-        {
-            auto ndisStatus = m_powerPolicy.AddWakePattern(Set);
-            NdisMOidRequestComplete(GetNdisHandle(), NdisOidRequest, ndisStatus);
-            break;
-        }
-
-        case OID_PM_REMOVE_WOL_PATTERN:
-        {
-            auto ndisStatus = m_powerPolicy.RemoveWakePattern(Set);
-            NdisMOidRequestComplete(GetNdisHandle(), NdisOidRequest, ndisStatus);
-            break;
-        }
-
-        case OID_PM_ADD_PROTOCOL_OFFLOAD:
-        {
-            auto ndisStatus = m_powerPolicy.AddProtocolOffload(Set);
-            NdisMOidRequestComplete(GetNdisHandle(), NdisOidRequest, ndisStatus);
-            break;
-        }
-        case OID_PM_REMOVE_PROTOCOL_OFFLOAD:
-        {
-            auto ndisStatus = m_powerPolicy.RemoveProtocolOffload(Set);
-            NdisMOidRequestComplete(GetNdisHandle(), NdisOidRequest, ndisStatus);
-            break;
-        }
-        default:
-        {
-            DispatchOidRequest(NdisOidRequest, Context);
-            break;
-        }
-    }
-}
-
-_Use_decl_annotations_
-NTSTATUS
-NxAdapter::DispatchDirectOidRequest(
-    NDIS_OID_REQUEST * NdisOidRequest,
-    DispatchContext * Context
-)
-{
-    auto const nextHandler = Context->NextHandlerIndex++;
-
-    //
-    // Note: It is not safe to use 'NdisOidRequest' or 'Context' after either one of
-    // InvokeDirectOidPreprocessCallback has returned, since those calls might complete
-    // the OID request before returning
-    //
-
-    if (nextHandler < m_adapterExtensions.count())
-    {
-        auto const & extension = m_adapterExtensions[nextHandler];
-        return extension.InvokeDirectOidPreprocessCallback(GetFxObject(), NdisOidRequest, Context);
-    }
-
-    NT_FRE_ASSERT(nextHandler == m_adapterExtensions.count());
-    return STATUS_NDIS_NOT_SUPPORTED;
-}
-
 NDIS_HANDLE
 NxAdapter::GetNdisHandle(
     void
 ) const
 {
-    return m_ndisAdapterHandle;
+    return m_ndisMiniport
+        ? m_ndisMiniport->GetNdisHandle()
+        : nullptr;
 }
 
-_Use_decl_annotations_
-void
-NdisWdfCxCharacteristicsInitialize(
-    NDIS_WDF_CX_CHARACTERISTICS & Characteristics
+#ifdef NETCX_UMDF
+BridgeToKernel &
+NxAdapter::GetBridgeToKernel(
+    void
 )
 {
-    NDIS_WDF_CX_CHARACTERISTICS_INIT(&Characteristics);
-
-    Characteristics.EvtCxGetDeviceObject = EvtNdisGetDeviceObject;
-    Characteristics.EvtCxGetNextDeviceObject = EvtNdisGetNextDeviceObject;
-    Characteristics.EvtCxGetAssignedFdoName = EvtNdisGetAssignedFdoName;
-    Characteristics.EvtCxPowerReference = EvtNdisPowerReference;
-    Characteristics.EvtCxPowerDereference = EvtNdisPowerDereference;
-    Characteristics.EvtCxUpdateIdleCondition = EvtNdisUpdateIdleCondition;
-    Characteristics.EvtCxGetNdisHandleFromDeviceObject = EvtNdisWdmDeviceGetNdisAdapterHandle;
-    Characteristics.EvtCxUpdatePMParameters = EvtNdisUpdatePMParameters;
-    Characteristics.EvtCxAllocateMiniportBlock = EvtNdisAllocateMiniportBlock;
-    Characteristics.EvtCxMiniportCompleteAdd = EvtNdisMiniportCompleteAdd;
-    Characteristics.EvtCxDeviceStartComplete = EvtNdisDeviceStartComplete;
-    Characteristics.EvtCxMiniportDeviceReset = EvtNdisMiniportDeviceReset;
-    Characteristics.EvtCxMiniportQueryDeviceResetSupport = EvtNdisMiniportQueryDeviceResetSupport;
-    Characteristics.EvtCxGetWmiEventGuid = EvtNdisGetWmiEventGuid;
+    return m_bridgeToKernel;
 }
 
-_Use_decl_annotations_
-DEVICE_OBJECT *
-EvtNdisGetDeviceObject(
-    NDIS_HANDLE Adapter
-)
-/*++
-Routine Description:
-    A Ndis Event Callback
-
-    This routine returns the WDM Device Object for the clients FDO
-
-Arguments:
-    Adapter - The NxAdapter object reported as context to NDIS
---*/
+BridgeToKernel const &
+NxAdapter::GetBridgeToKernel(
+    void
+) const
 {
-    return WdfDeviceWdmGetDeviceObject(static_cast<NxAdapter *>(Adapter)->GetDevice());
+    return m_bridgeToKernel;
 }
-
-_Use_decl_annotations_
-DEVICE_OBJECT *
-EvtNdisGetNextDeviceObject(
-    NDIS_HANDLE Adapter
-)
-/*++
-Routine Description:
-    A Ndis Event Callback
-
-    This routine returns the attached WDM Device Object for the clients FDO
-
-Arguments:
-    Adapter - The NxAdapter object reported as context to NDIS
---*/
-{
-    return WdfDeviceWdmGetAttachedDevice(static_cast<NxAdapter *>(Adapter)->GetDevice());
-}
-
-_Use_decl_annotations_
-NTSTATUS
-EvtNdisGetAssignedFdoName(
-    NDIS_HANDLE Adapter,
-    UNICODE_STRING * FdoName
-)
-/*++
-Routine Description:
-    A Ndis Event Callback
-
-    This routine returns the name NetAdapterCx assigned to this device. NDIS
-    needs to know this name to be able to create a symbolic link for the miniport.
-
-Arguments:
-    Adapter            - The NxAdapter object reported as context to NDIS
-    FdoName            - UNICODE_STRING that will receive the FDO name
---*/
-{
-    NTSTATUS       status;
-    WDFSTRING      fdoName;
-    UNICODE_STRING usFdoName;
-
-    status = WdfStringCreate(
-        NULL,
-        WDF_NO_OBJECT_ATTRIBUTES,
-        &fdoName);
-
-    if (!NT_SUCCESS(status))
-    {
-        return status;
-    }
-
-    status = WdfDeviceRetrieveDeviceName(static_cast<NxAdapter *>(Adapter)->GetDevice(), fdoName);
-
-    if (!NT_SUCCESS(status))
-    {
-        goto Exit;
-    }
-
-    WdfStringGetUnicodeString(fdoName, &usFdoName);
-
-    if (FdoName->MaximumLength < usFdoName.Length)
-    {
-        status = STATUS_BUFFER_TOO_SMALL;
-        goto Exit;
-    }
-
-    RtlCopyUnicodeString(FdoName, &usFdoName);
-
-Exit:
-
-    WdfObjectDelete(fdoName);
-    return status;
-}
-
-_Use_decl_annotations_
-NTSTATUS
-EvtNdisPowerReference(
-    NDIS_HANDLE Adapter,
-    BOOLEAN WaitForD0,
-    BOOLEAN InvokeCompletionCallback
-)
-/*++
-Routine Description:
-    A Ndis Event Callback
-
-    This routine is called to acquire a power reference on the miniport.
-    Every call to EvtNdisPowerReference must be matched by a call
-    to EvtNdisPowerDereference. However, this function
-    keeps tracks of failures from the underlying call to WdfDeviceStopIdle. So the
-    caller only needs to make sure they always call power EvtNdisPowerDereference
-    after calling EvtNdisPowerReference without keeping track of returned failures.
-
-Arguments:
-    Adapter   - The NxAdapter object reported as context to NDIS
-    WaitForD0 - If WaitFromD0 is false and STATUS_PENDING status is returned
-        the Cx will call back into NDIS once power up is complete.
-    InvokeCompletionCallback - IFF WaitForD0 is FALSE (i.e. Async power ref),
-        then the caller can ask for a callback when power up is complete
---*/
-{
-    NT_ASSERTMSG("Invalid parameter to NdisPowerRef",
-                !(WaitForD0 && InvokeCompletionCallback));
-
-    auto nxAdapter = static_cast<NxAdapter *>(Adapter);
-
-    if (InvokeCompletionCallback)
-    {
-        auto const ntStatus = nxAdapter->PowerReference(false);
-
-        if (ntStatus == STATUS_PENDING)
-        {
-            // If the device is resuming from low power we need to schedule a work
-            // item to invoke the NDIS completion callback.
-            nxAdapter->QueuePowerReferenceWorkItem();
-        }
-
-        return ntStatus;
-    }
-    else
-    {
-        return nxAdapter->PowerReference(WaitForD0);
-    }
-}
-
-void
-NxAdapter::_EvtStopIdleWorkItem(
-    _In_ WDFWORKITEM WorkItem
-)
-/*++
-Routine Description:
-    A shared WDF work item callback for processing an asynchronous
-    EvtNdisPowerReference callback.
-
-Arguments:
-    WDFWORKITEM - The WDFWORKITEM object that is parented to NxAdapter.
---*/
-{
-    NTSTATUS status;
-    WDFOBJECT nxAdapterWdfHandle = WdfWorkItemGetParentObject(WorkItem);
-    auto nxAdapter = GetNxAdapterFromHandle((NETADAPTER)nxAdapterWdfHandle);
-
-    // We need to notify NDIS with the device in D0, so we acquire a synchronous power reference
-    status = nxAdapter->PowerReference(true);
-
-    NdisWdfAsyncPowerReferenceCompleteNotification(nxAdapter->m_ndisAdapterHandle,
-                                                   status);
-
-    // Drop the reference we acquired above. The original reference will be released by NDIS
-    nxAdapter->PowerDereference();
-
-    nxAdapter->m_powerRequiredWorkItemPending = FALSE;
-}
-
-_Use_decl_annotations_
-NTSTATUS
-EvtNdisAllocateMiniportBlock(
-    NDIS_HANDLE Adapter,
-    ULONG Size,
-    void ** MiniportBlock
-)
-/*++
-Routine Description:
-    This function will allocate the memory for the adapter's miniport block as
-    a context in the NETADAPTER object. This way we can ensure the miniport block
-    will be valid memory during the adapter's life time.
---*/
-{
-
-    NTSTATUS status = STATUS_SUCCESS;
-
-    WDF_OBJECT_ATTRIBUTES contextAttributes;
-
-    // Initialize contextAttributes with our dummy type
-    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(
-        &contextAttributes,
-        NDIS_MINIPORT_BLOCK_TYPE);
-
-    // Override the memory size to allocate with what NDIS told us
-    contextAttributes.ContextSizeOverride = Size;
-
-    auto nxAdapter = static_cast<NxAdapter *>(Adapter);
-    status = WdfObjectAllocateContext(nxAdapter->GetFxObject(), &contextAttributes, MiniportBlock);
-
-    if (!NT_SUCCESS(status))
-    {
-        LogError(FLAG_ADAPTER,
-            "WdfObjectAllocateContext failed to allocate the miniport block, %!STATUS!", status);
-
-        return status;
-    }
-
-    return status;
-}
-
-_Use_decl_annotations_
-void
-EvtNdisMiniportCompleteAdd(
-    NDIS_HANDLE Adapter,
-    NDIS_WDF_COMPLETE_ADD_PARAMS * Params
-)
-/*++
-Routine Description:
-    NDIS uses this callback to report certain adapter parameters to the NIC
-    after the Miniport side of device add has completed.
---*/
-{
-
-    auto nxAdapter = static_cast<NxAdapter *>(Adapter);
-    nxAdapter->NdisMiniportCreationComplete(*Params);
-}
-
-_Use_decl_annotations_
-void
-EvtNdisDeviceStartComplete(
-    NDIS_HANDLE Adapter
-)
-/*
-Description:
-
-    NDIS uses this callback to indicate the underlying device has completed
-    the start IRP, but because NDIS does not distinguish between device and
-    adapter it reports for only one of a device's child adapters.
-*/
-{
-    UNREFERENCED_PARAMETER(Adapter);
-}
-
-
-_Use_decl_annotations_
-NTSTATUS
-EvtNdisMiniportDeviceReset(
-    NDIS_HANDLE Adapter,
-    NET_DEVICE_RESET_TYPE NetDeviceResetType
-)
-/*
-Routine Description:
-
-    NDIS uses this callback to indicate the underlying device is in a bad state
-    and it needs to be reset in order to recover.
-
-Arguments:
-    Adapter            - The NxAdapter object reported as context to NDIS
-    NetDeviceResetType - The type of reset operation requested (by default this is PLDR)
-*/
-{
-    DEVICE_RESET_TYPE DeviceResetType;
-    NxAdapter *nxAdapter = static_cast<NxAdapter *>(Adapter);
-    NxDevice *nxDevice = GetNxDeviceFromHandle(nxAdapter->GetDevice());
-
-    nxDevice->SetFailingDeviceRequestingResetFlag();
-
-    // Trigger reset of the device as we are told to do so
-    switch (NetDeviceResetType)
-    {
-    case FunctionLevelReset:
-        DeviceResetType = FunctionLevelDeviceReset;
-        break;
-    case PlatformLevelReset:
-        DeviceResetType = PlatformLevelDeviceReset;
-        break;
-    default:
-        DeviceResetType = PlatformLevelDeviceReset;
-        break;
-    };
-
-    return nxDevice->DispatchDeviceReset(DeviceResetType);
-}
-
-_Use_decl_annotations_
-NTSTATUS
-EvtNdisMiniportQueryDeviceResetSupport(
-    NDIS_HANDLE Adapter,
-    PULONG SupportedNetDeviceResetTypes
-)
-/*
-Routine Description:
-
-    NDIS uses this callback to query whether Device Reset is supported by the underlying
-    device for which there is a NetAdapter based driver present
-
-Arguments:
-    Adapter                      - The NxAdapter object reported as context to NDIS
-    SupportedNetDeviceResetTypes - Out parameter which will have the information about what all reset types is supported
-*/
-{
-    NxAdapter *nxAdapter = static_cast<NxAdapter *>(Adapter);
-    NxDevice *nxDevice = GetNxDeviceFromHandle(nxAdapter->GetDevice());
-
-    if (nxDevice->GetSupportedDeviceResetType(SupportedNetDeviceResetTypes))
-    {
-        return STATUS_SUCCESS;
-    }
-    else
-    {
-        return STATUS_NOT_SUPPORTED;
-    }
-}
-
-_Use_decl_annotations_
-void
-EvtNdisPowerDereference(
-    NDIS_HANDLE Adapter
-)
-/*++
-Routine Description:
-    A Ndis Event Callback
-
-    This routine is called to release a power reference on the
-    miniport that it previously acquired. Every call to EvtNdisPowerReference
-    MUST be matched by a call to EvtNdisPowerDereference.
-    However, since failures are tracked from calls to EvtNdisPowerReference, the
-    caller can call EvtNdisPowerDereference without having to keep track of
-    failures from calls to EvtNdisPowerReference.
-
-Arguments:
-    Adapter - The NxAdapter object reported as context to NDIS
---*/
-{
-    auto nxAdapter = static_cast<NxAdapter *>(Adapter);
-    nxAdapter->PowerDereference();
-}
-
-_Use_decl_annotations_
-NTSTATUS
-EvtNdisGetWmiEventGuid(
-    NDIS_HANDLE Adapter,
-    NTSTATUS GuidStatus,
-    NDIS_GUID ** Guid
-)
-{
-    auto const nxAdapter = static_cast<NxAdapter *>(Adapter);
-    auto const nxDevice = GetNxDeviceFromHandle(nxAdapter->GetDevice());
-
-    return nxDevice->WmiGetEventGuid(GuidStatus, Guid);
-}
-
-_Use_decl_annotations_
-void
-EvtNdisUpdateIdleCondition(
-    NDIS_HANDLE Adapter,
-    NDIS_IDLE_CONDITION IdleCondition
-)
-/*++
-Routine Description:
-    An Ndis Event Callback
-
-    This routine is called to notify adapter of an update to the
-    Idle Condition so that it release / acquire WDF power references
-    based upon idle restriction policy.
-
-Arguments:
-    Adapter - The NxAdapter object reported as context to NDIS
-    IdleCondition - New idle condition
---*/
-{
-    auto nxAdapter = static_cast<NxAdapter *>(Adapter);
-    nxAdapter->m_powerPolicy.SetCurrentIdleCondition(IdleCondition);
-}
+#endif
 
 NTSTATUS
 NxAdapter::SetRegistrationAttributes(
     void
 )
 {
-    NDIS_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES adapterRegistration = {0};
-    NTSTATUS                status;
-    NDIS_STATUS             ndisStatus;
+    auto const ndisStatus = m_ndisMiniport->SetRegistrationAttributes();
 
-    //
-    // Set the registration attributes for the network adapter.
-    //
-    // Note: Unlike a traditional NDIS miniport, the NetAdapterCx client
-    // must not set the adapterRegistration.MiniportAdapterContext value.
-    //
-
-    adapterRegistration.Header.Type = NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES;
-    adapterRegistration.Header.Size = NDIS_SIZEOF_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES_REVISION_2;
-    adapterRegistration.Header.Revision = NDIS_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES_REVISION_2;
-
-    adapterRegistration.AttributeFlags =
-        NDIS_MINIPORT_ATTRIBUTES_SURPRISE_REMOVE_OK |
-        NDIS_MINIPORT_ATTRIBUTES_NDIS_WDM |
-        NDIS_MINIPORT_ATTRIBUTES_NO_PAUSE_ON_SUSPEND;
-
-    adapterRegistration.InterfaceType = NdisInterfacePNPBus;
-
-    ndisStatus = NdisMSetMiniportAttributes(
-        m_ndisAdapterHandle,
-        (PNDIS_MINIPORT_ADAPTER_ATTRIBUTES)&adapterRegistration);
-
-    status = NdisConvertNdisStatusToNtStatus(ndisStatus);
+    auto const status = NdisConvertNdisStatusToNtStatus(ndisStatus);
 
     if (!NT_SUCCESS(status)) {
         LogError(FLAG_ADAPTER,
-                 "NdisMSetMiniportAttributes failed, %!NDIS_STATUS!", ndisStatus);
-        goto Exit;
+        "NdisMSetMiniportAttributes failed with registration attributes, %!NDIS_STATUS!", ndisStatus);
     }
-
-Exit:
 
     return status;
 }
-
 
 void
 NxAdapter::SetPermanentLinkLayerAddress(
@@ -1796,15 +1299,19 @@ NxAdapter::SetReceiveFilter(
 {
     // When the adapter does not have any SupportedPacketFilters,  we cannot
     // set any packet filters.
-    CX_RETURN_NTSTATUS_IF(
+    CX_RETURN_NTSTATUS_IF_MSG(
         STATUS_NOT_SUPPORTED,
-        m_receiveFilterCapabilities.SupportedPacketFilters == 0);
+        m_receiveFilterCapabilities.SupportedPacketFilters == 0,
+        "NETADAPTER %p",
+        m_adapter);
 
     // Do not support requests to set unsupported packet filters.
-    CX_RETURN_NTSTATUS_IF(
+    CX_RETURN_NTSTATUS_IF_MSG(
         STATUS_NOT_SUPPORTED,
         PacketFilter & ~(m_receiveFilterCapabilities.SupportedPacketFilters)
-            && GetMediaType() != NdisMediumNative802_11);
+            && GetMediaType() != NdisMediumNative802_11,
+        "NETADAPTER %p",
+        m_adapter);
 
     NET_RECEIVE_FILTER receiveFilter;
     receiveFilter.PacketFilter = static_cast<NET_PACKET_FILTER_FLAGS>(PacketFilter);
@@ -1826,7 +1333,7 @@ NxAdapter::SetGeneralAttributes(
 )
 {
     NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES adapterGeneral = {0};
-    NDIS_PM_CAPABILITIES                     pmCapabilities;
+    NDIS_PM_CAPABILITIES                     pmCapabilities{};
     NTSTATUS                                 status = STATUS_INVALID_PARAMETER;
     NDIS_STATUS                              ndisStatus;
 
@@ -1834,6 +1341,32 @@ NxAdapter::SetGeneralAttributes(
     {
         LogError(FLAG_ADAPTER,
             "Client missed or incorrectly called NetAdapterSetDatapathCapabilities");
+        goto Exit;
+    }
+
+    bool const driverManagesBuffers =
+        (m_rxCapabilities.AllocationMode == NetRxFragmentBufferAllocationModeDriver) &&
+        (m_rxCapabilities.AttachmentMode == NetRxFragmentBufferAttachmentModeDriver);
+
+    bool const osManagesBuffers =
+        (m_rxCapabilities.AllocationMode == NetRxFragmentBufferAllocationModeSystem) &&
+        (m_rxCapabilities.AttachmentMode == NetRxFragmentBufferAttachmentModeSystem);
+
+    bool const driverManagedBuffersV2 =
+        (m_rxCapabilities.AllocationMode == NetRxFragmentBufferAllocationModeDriverV2) &&
+        (m_rxCapabilities.AttachmentMode == NetRxFragmentBufferAttachmentModeDriver);
+
+    bool allowedConfiguration =
+#ifdef NETCX_KMDF
+        osManagesBuffers || driverManagesBuffers || driverManagedBuffersV2;
+#else
+        osManagesBuffers || driverManagedBuffersV2;
+#endif
+    if (!allowedConfiguration)
+    {
+        LogError(FLAG_ADAPTER,
+            "Incorrect buffer management configuration: AllocationMode: %d, AttachmentMode: %d",
+            m_rxCapabilities.AllocationMode, m_rxCapabilities.AttachmentMode);
         goto Exit;
     }
 
@@ -1935,44 +1468,81 @@ NxAdapter::SetGeneralAttributes(
             sizeof(adapterGeneral.PermanentMacAddress));
     }
 
-    //
-    // Set the power management capabilities.
-    //
-    m_powerPolicy.InitializeNdisCapabilities(
-        GetCombinedMediaSpecificWakeUpEvents(),
-        GetCombinedSupportedProtocolOffloads(),
-        &pmCapabilities);
-
-    adapterGeneral.PowerManagementCapabilitiesEx = &pmCapabilities;
-
-    auto nxDevice = GetNxDeviceFromHandle(GetDevice());
-    adapterGeneral.SupportedOidList = const_cast<NDIS_OID *>(nxDevice->GetOidList());
-    adapterGeneral.SupportedOidListLength = (ULONG) (nxDevice->GetOidListCount() * sizeof(NDIS_OID));
+    // Specify the RSS Capabilities
     adapterGeneral.RecvScaleCapabilities = RxScaling.RecvScaleCapabilities;
 
-    //
-    // The Remaining General Attributes Fields are not used for
-    // a WDF NDIS model. Some of them come from Inf, some of them are
-    // deprecated. Just set them to invalid values or default
-    // values for diagnaosability purposes.
-    //
-    adapterGeneral.MediaType = (NDIS_MEDIUM)-1;
-    adapterGeneral.PhysicalMediumType = NdisPhysicalMediumUnspecified;
-    adapterGeneral.LookaheadSize = 0;
-    adapterGeneral.MacOptions = 0;
+    const auto ETHERNET_MTU_SIZE = 1500;
 
-    adapterGeneral.IfType = (NET_IFTYPE)-1;
-    adapterGeneral.IfConnectorPresent = FALSE;
+    if (IsDevicelessAdapter())
+    {
+        adapterGeneral.PowerManagementCapabilitiesEx = NULL;
 
-    ndisStatus = NdisMSetMiniportAttributes(
-        m_ndisAdapterHandle,
-        (PNDIS_MINIPORT_ADAPTER_ATTRIBUTES)&adapterGeneral);
+        adapterGeneral.SupportedOidList = NULL;
+        adapterGeneral.SupportedOidListLength = 0U;
+
+        //
+        // Assume medium type to be 802.3 and use ethernet MTU size as LookaheadSize
+        //
+        adapterGeneral.MediaType = NdisMedium802_3;
+        adapterGeneral.LookaheadSize = ETHERNET_MTU_SIZE;
+        adapterGeneral.PhysicalMediumType = NdisPhysicalMediumUnspecified;
+
+        //
+        // COPY_LOOKAHEAD_DATA: protocol driver is free to access indicated data by any means
+        // TRANSFERS_NOT_PEND: we indicate receive operations with the NdisMIndicateReceiveNetBufferLists
+        // 8021P_PRIORITY / 8021Q_VLAN: supported by NetAdapterCx
+        //
+        adapterGeneral.MacOptions = (
+            NDIS_MAC_OPTION_COPY_LOOKAHEAD_DATA |
+            NDIS_MAC_OPTION_TRANSFERS_NOT_PEND |
+            NDIS_MAC_OPTION_8021P_PRIORITY |
+            NDIS_MAC_OPTION_8021Q_VLAN);
+
+        adapterGeneral.IfType = IF_TYPE_ETHERNET_CSMACD;
+        adapterGeneral.IfConnectorPresent = FALSE;
+
+        adapterGeneral.AccessType = NET_IF_ACCESS_LOOPBACK;
+        adapterGeneral.ConnectionType = NET_IF_CONNECTION_DEDICATED;
+        adapterGeneral.DirectionType = NET_IF_DIRECTION_SENDRECEIVE;
+    }
+    else
+    {
+        //
+        // Set the power management capabilities.
+        //
+        m_powerPolicy->InitializeNdisCapabilities(
+            GetCombinedMediaSpecificWakeUpEvents(),
+            GetCombinedSupportedProtocolOffloads(),
+            &pmCapabilities);
+
+        adapterGeneral.PowerManagementCapabilitiesEx = &pmCapabilities;
+
+        NxDevice * nxDevice = GetNxDeviceFromHandle(m_device);
+        adapterGeneral.SupportedOidList = const_cast<NDIS_OID *>(nxDevice->GetOidList());
+        adapterGeneral.SupportedOidListLength = static_cast<ULONG>(nxDevice->GetOidListCount() * sizeof(NDIS_OID));
+        //
+        // The Remaining General Attributes Fields are not used for
+        // a WDF NDIS model. Some of them come from Inf, some of them are
+        // deprecated. Just set them to invalid values or default
+        // values for diagnaosability purposes.
+        //
+        adapterGeneral.MediaType = static_cast<NDIS_MEDIUM>(-1);
+        adapterGeneral.PhysicalMediumType = NdisPhysicalMediumUnspecified;
+        adapterGeneral.LookaheadSize = 0;
+        adapterGeneral.MacOptions = 0;
+
+        adapterGeneral.IfType = static_cast<NET_IFTYPE>(-1);
+        adapterGeneral.IfConnectorPresent = FALSE;
+    }
+
+    // Setting up device-specific NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES.
+    ndisStatus = m_ndisMiniport->SetGeneralAttributes(adapterGeneral);
 
     status = NdisConvertNdisStatusToNtStatus(ndisStatus);
 
     if (!NT_SUCCESS(status)) {
         LogError(FLAG_ADAPTER,
-                 "NdisMSetMiniportAttributes failed, %!NDIS_STATUS!", ndisStatus);
+                 "NdisMSetMiniportAttributes failed with general attributes, %!NDIS_STATUS!", ndisStatus);
         goto Exit;
     }
 
@@ -1988,14 +1558,15 @@ Exit:
     return status;
 }
 
+#ifdef NETCX_KMDF
 void
 NxAdapter::QueuePowerReferenceWorkItem(
     void
 )
 {
-    m_powerRequiredWorkItemPending = TRUE;
-    WdfWorkItemEnqueue(m_powerRequiredWorkItem);
+    m_powerPolicy->QueuePowerReferenceWorkItem();
 }
+#endif
 
 void
 NxAdapter::ClearGeneralAttributes(
@@ -2088,16 +1659,15 @@ Routine Description:
 --*/
 {
     NDIS_PM_CAPABILITIES pmCapabilities;
-    m_powerPolicy.InitializeNdisCapabilities(
+    m_powerPolicy->InitializeNdisCapabilities(
         GetCombinedMediaSpecificWakeUpEvents(),
         GetCombinedSupportedProtocolOffloads(),
         &pmCapabilities);
 
-    auto statusIndication =
-        MakeNdisStatusIndication(
-            m_ndisAdapterHandle, NDIS_STATUS_PM_HARDWARE_CAPABILITIES, pmCapabilities);
-
-    NdisMIndicateStatusEx(m_ndisAdapterHandle, &statusIndication);
+    m_ndisMiniport->IndicateMiniportStatusChange(
+        NDIS_STATUS_PM_HARDWARE_CAPABILITIES,
+        pmCapabilities,
+        nullptr);
 }
 
 void
@@ -2125,11 +1695,10 @@ Routine Description:
     linkState.PauseFunctions       =
         (NDIS_SUPPORTED_PAUSE_FUNCTIONS) m_currentLinkState.SupportedPauseFunctions;
 
-    auto statusIndication =
-        MakeNdisStatusIndication(
-            m_ndisAdapterHandle, NDIS_STATUS_LINK_STATE, linkState);
-
-    NdisMIndicateStatusEx(m_ndisAdapterHandle, &statusIndication);
+    m_ndisMiniport->IndicateMiniportStatusChange(
+        NDIS_STATUS_LINK_STATE,
+        linkState,
+        nullptr);
 }
 
 void
@@ -2137,11 +1706,10 @@ NxAdapter::IndicateMtuSizeChangeToNdis(
     void
 )
 {
-    auto statusIndication =
-        MakeNdisStatusIndication(
-            m_ndisAdapterHandle, NDIS_STATUS_L2_MTU_SIZE_CHANGE, m_mtuSize);
-
-    NdisMIndicateStatusEx(m_ndisAdapterHandle, &statusIndication);
+    m_ndisMiniport->IndicateMiniportStatusChange(
+        NDIS_STATUS_L2_MTU_SIZE_CHANGE,
+        m_mtuSize,
+        nullptr);
 }
 
 void
@@ -2149,144 +1717,10 @@ NxAdapter::IndicateCurrentLinkLayerAddressToNdis(
     void
 )
 {
-    auto statusIndication = MakeNdisStatusIndication(
-        m_ndisAdapterHandle,
+    m_ndisMiniport->IndicateMiniportStatusChange(
         NDIS_STATUS_CURRENT_MAC_ADDRESS_CHANGE,
-        m_currentLinkLayerAddress);
-
-    NdisMIndicateStatusEx(m_ndisAdapterHandle, &statusIndication);
-}
-
-void
-NdisMiniportDriverCharacteristicsInitialize(
-    NDIS_MINIPORT_DRIVER_CHARACTERISTICS & Characteristics
-)
-{
-    Characteristics = {};
-
-    Characteristics.Header.Type = NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS;
-    Characteristics.Header.Size = NDIS_SIZEOF_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_3;
-    Characteristics.Header.Revision = NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_3;
-    Characteristics.MajorNdisVersion = NDIS_MINIPORT_MAJOR_VERSION;
-    Characteristics.MinorNdisVersion = NDIS_MINIPORT_MINOR_VERSION;
-
-    //
-    // NDIS should not hold driver version information of WDF managed miniports
-    //
-    Characteristics.MajorDriverVersion = 0;
-    Characteristics.MinorDriverVersion = 0;
-
-    Characteristics.Flags = 0;
-    Characteristics.Flags |= NDIS_WDF_PNP_POWER_HANDLING; // prevent NDIS from owning the driver dispatch table
-    Characteristics.Flags |= NDIS_DRIVER_POWERMGMT_PROXY; // this is a virtual device so need updated capabilities
-
-    Characteristics.InitializeHandlerEx = EvtNdisInitializeEx;
-    Characteristics.HaltHandlerEx = EvtNdisHaltEx;
-    Characteristics.PauseHandler = EvtNdisPause;
-    Characteristics.RestartHandler = EvtNdisRestart;
-    Characteristics.OidRequestHandler = EvtNdisOidRequest;
-    Characteristics.DirectOidRequestHandler = EvtNdisDirectOidRequest;
-    Characteristics.SendNetBufferListsHandler = EvtNdisSendNetBufferLists;
-    Characteristics.ReturnNetBufferListsHandler = EvtNdisReturnNetBufferLists;
-    Characteristics.CancelSendHandler = EvtNdisCancelSend;
-    Characteristics.DevicePnPEventNotifyHandler = EvtNdisDevicePnpEventNotify;
-    Characteristics.ShutdownHandlerEx = EvtNdisShutdownEx;
-    Characteristics.CancelOidRequestHandler = EvtNdisCancelOidRequest;
-    Characteristics.CancelDirectOidRequestHandler = EvtNdisCancelDirectOidRequest;
-    Characteristics.SynchronousOidRequestHandler = EvtNdisSynchronousOidRequestHandler;
-}
-
-_Use_decl_annotations_
-NDIS_STATUS
-EvtNdisInitializeEx(
-    NDIS_HANDLE NdisAdapterHandle,
-    NDIS_HANDLE UnusedContext,
-    NDIS_MINIPORT_INIT_PARAMETERS * MiniportInitParameters
-)
-/*++
-Routine Description:
-
-    A NDIS Event Callback.
-
-    This Ndis event callback is called by Ndis to initialize a
-    new ndis miniport adapter.
-
-    This callback runs at IRQL = PASSIVE_LEVEL.
-
-    This callback is (must be) called on the same thread on which NetAdapterCx
-    called ndisPnPStartDevice routine.
-
-Arguments:
-
-    NdisAdapterHandle - Opaque Ndis handle for the Adapter
-
-Return Value:
-
-    NDIS_STATUS_xxx code
-
---*/
-{
-    UNREFERENCED_PARAMETER((UnusedContext, MiniportInitParameters));
-
-    auto nxAdapter = static_cast<NxAdapter *>(
-        NdisWdfGetAdapterContextFromAdapterHandle(NdisAdapterHandle));
-
-    return NdisConvertNtStatusToNdisStatus(nxAdapter->NdisInitialize());
-}
-
-_Use_decl_annotations_
-void
-EvtNdisHaltEx(
-    NDIS_HANDLE Adapter,
-    NDIS_HALT_ACTION HaltAction
-)
-/*++
-Routine Description:
-
-    A NDIS Event Callback.
-
-    This Ndis event callback is called by Ndis to halt a
-    new ndis miniport adapter.
-
-    This callback runs at IRQL = PASSIVE_LEVEL.
-
-    This callback is (must be) called on the same thread on which NetAdapterCx
-    called NdisWdfPnpAddDevice routine.
-
-Arguments:
-
-    Adapter - NxAdapter reported as Context to NDIS.sys
-
---*/
-{
-    UNREFERENCED_PARAMETER(HaltAction);
-
-    auto adapter = static_cast<NxAdapter *>(Adapter);
-    adapter->EnqueueEventSync(NxAdapter::Event::NdisMiniportHalt);
-}
-
-_Use_decl_annotations_
-NDIS_STATUS
-EvtNdisPause(
-    NDIS_HANDLE Adapter,
-    NDIS_MINIPORT_PAUSE_PARAMETERS * PauseParameters
-)
-/*++
-Routine Description:
-
-    A NDIS Event callback.
-
-    This event callback is called by NDIS to pause the adapter.
-    NetAdapterCx in response calls the clients EvtAdapterPause callback.
-
---*/
-{
-    UNREFERENCED_PARAMETER(PauseParameters);
-
-    auto adapter = static_cast<NxAdapter *>(Adapter);
-    adapter->EnqueueEventSync(NxAdapter::Event::NdisMiniportPause);
-
-    return NDIS_STATUS_PENDING;
+        m_currentLinkLayerAddress,
+        nullptr);
 }
 
 const GUID *
@@ -2330,249 +1764,6 @@ NxAdapter::GetDriverImageName(
 }
 
 _Use_decl_annotations_
-NDIS_STATUS
-EvtNdisRestart(
-    NDIS_HANDLE Adapter,
-    NDIS_MINIPORT_RESTART_PARAMETERS * RestartParameters
-)
-/*++
-Routine Description:
-
-    A NDIS Event callback.
-
-    This event callback is called by NDIS to start (restart) the adapter.
-    NetAdapterCx in response calls the clients EvtAdapterStart callback.
-
---*/
-{
-    UNREFERENCED_PARAMETER(RestartParameters);
-
-    auto adapter = static_cast<NxAdapter *>(Adapter);
-    adapter->EnqueueEventSync(NxAdapter::Event::NdisMiniportRestart);
-
-    return NDIS_STATUS_PENDING;
-}
-
-_Use_decl_annotations_
-void
-EvtNdisSendNetBufferLists(
-    NDIS_HANDLE Adapter,
-    NET_BUFFER_LIST * NetBufferLists,
-    NDIS_PORT_NUMBER PortNumber,
-    ULONG SendFlags
-)
-/*++
-Routine Description:
-
-    A NDIS Event callback.
-
-    This event callback is called by NDIS to send data over the network the adapter.
-
-    NetAdapterCx in response calls the clients EvtAdapterSendNetBufferLists callback.
-
---*/
-{
-    auto nxAdapter = static_cast<NxAdapter *>(Adapter);
-    nxAdapter->SendNetBufferLists(
-        NetBufferLists,
-        PortNumber,
-        SendFlags);
-}
-
-_Use_decl_annotations_
-void
-EvtNdisReturnNetBufferLists(
-    NDIS_HANDLE Adapter,
-    NET_BUFFER_LIST * NetBufferLists,
-    ULONG ReturnFlags
-)
-/*++
-Routine Description:
-
-    A NDIS Event callback.
-
-    This event callback is called by NDIS to return a NBL to the miniport.
-
-    NetAdapterCx in response calls the clients EvtAdapterReturnNetBufferLists callback.
-
---*/
-{
-    auto nxAdapter = static_cast<NxAdapter *>(Adapter);
-    nxAdapter->ReturnNetBufferLists(
-        NetBufferLists,
-        ReturnFlags);
-}
-
-_Use_decl_annotations_
-void
-EvtNdisCancelSend(
-    NDIS_HANDLE Adapter,
-    void * CancelId
-)
-/*++
-Routine Description:
-
-    A NDIS Event callback.
-
-    This event callback is called by NDIS to cancel a send NBL request.
-
---*/
-{
-    UNREFERENCED_PARAMETER(Adapter);
-    UNREFERENCED_PARAMETER(CancelId);
-
-    NT_ASSERTMSG("Missing Implementation", FALSE);
-}
-
-_Use_decl_annotations_
-void
-EvtNdisDevicePnpEventNotify(
-    NDIS_HANDLE Adapter,
-    NET_DEVICE_PNP_EVENT * NetDevicePnPEvent
-)
-/*++
-Routine Description:
-
-    A NDIS Event callback.
-
-    This event callback is called by NDIS to report a Pnp Event.
-
---*/
-{
-    UNREFERENCED_PARAMETER(Adapter);
-
-    if (NetDevicePnPEvent->DevicePnPEvent == NdisDevicePnPEventPowerProfileChanged) {
-        if (NetDevicePnPEvent->InformationBufferLength == sizeof(ULONG)) {
-            ULONG NdisPowerProfile = *((PULONG)NetDevicePnPEvent->InformationBuffer);
-
-            if (NdisPowerProfile == NdisPowerProfileBattery) {
-                LogInfo(FLAG_ADAPTER, "On NdisPowerProfileBattery");
-            } else if (NdisPowerProfile == NdisPowerProfileAcOnLine) {
-                LogInfo(FLAG_ADAPTER, "On NdisPowerProfileAcOnLine");
-            } else {
-                LogError(FLAG_ADAPTER, "Unexpected PowerProfile %d", NdisPowerProfile);
-                NT_ASSERTMSG("Unexpected PowerProfile", FALSE);
-            }
-        }
-    } else {
-        LogInfo(FLAG_ADAPTER, "PnpEvent %!NDIS_DEVICE_PNP_EVENT! from Ndis.sys", NetDevicePnPEvent->DevicePnPEvent);
-    }
-}
-
-_Use_decl_annotations_
-void
-EvtNdisShutdownEx(
-    NDIS_HANDLE Adapter,
-    NDIS_SHUTDOWN_ACTION ShutdownAction
-)
-{
-    UNREFERENCED_PARAMETER(Adapter);
-    UNREFERENCED_PARAMETER(ShutdownAction);
-
-    NT_ASSERTMSG("Missing Implementation", FALSE);
-}
-
-_Use_decl_annotations_
-NDIS_STATUS
-EvtNdisOidRequest(
-    NDIS_HANDLE Adapter,
-    NDIS_OID_REQUEST * NdisOidRequest
-)
-{
-    NDIS_STATUS ndisStatus;
-
-    auto nxAdapter = static_cast<NxAdapter *>(Adapter);
-
-    // intercept and forward to the NDIS translator.
-    if (nxAdapter->NetClientOidPreProcess(*NdisOidRequest, ndisStatus))
-    {
-        return ndisStatus;
-    }
-
-    // NDIS_PM_PARAMETERS is always delivered through EvtNdisUpdatePMParameters, but in certain scenarios
-    // NDIS will also send OID_PM_PARAMETERS with the same information to keep legacy behavior. There is
-    // no reason to show that OID to media extensions though, so complete it right here to avoid confusion.
-    if (NdisOidRequest->DATA.SET_INFORMATION.Oid == OID_PM_PARAMETERS)
-    {
-        return NDIS_STATUS_SUCCESS;
-    }
-
-    auto dispatchContext = new (&NdisOidRequest->MiniportReserved[0]) DispatchContext();
-    dispatchContext->Signature = OidSignature;
-
-    nxAdapter->DispatchOidRequest(NdisOidRequest, dispatchContext);
-
-    return NDIS_STATUS_PENDING;
-}
-
-_Use_decl_annotations_
-NDIS_STATUS
-EvtNdisDirectOidRequest(
-    NDIS_HANDLE Adapter,
-    NDIS_OID_REQUEST * Request
-)
-{
-    NDIS_STATUS ndisStatus;
-
-    // intercept and forward to the NDIS translator.
-    auto nxAdapter = static_cast<NxAdapter *>(Adapter);
-
-    if (nxAdapter->NetClientDirectOidPreProcess(*Request, ndisStatus))
-    {
-        return ndisStatus;
-    }
-
-    auto dispatchContext = new (&Request->MiniportReserved[0]) DispatchContext();
-    dispatchContext->Signature = DirectOidSignature;
-
-    auto const ntStatus = nxAdapter->DispatchDirectOidRequest(Request, dispatchContext);
-
-    return NdisConvertNtStatusToNdisStatus(ntStatus);
-}
-
-_Use_decl_annotations_
-void
-EvtNdisCancelOidRequest(
-    NDIS_HANDLE Adapter,
-    void * RequestId
-)
-{
-    UNREFERENCED_PARAMETER(Adapter);
-    UNREFERENCED_PARAMETER(RequestId);
-}
-
-_Use_decl_annotations_
-void
-EvtNdisCancelDirectOidRequest(
-    NDIS_HANDLE Adapter,
-    void * RequestId
-)
-{
-    UNREFERENCED_PARAMETER(Adapter);
-    UNREFERENCED_PARAMETER(RequestId);
-}
-
-_Use_decl_annotations_
-NDIS_STATUS
-EvtNdisSynchronousOidRequestHandler(
-    NDIS_HANDLE Adapter,
-    NDIS_OID_REQUEST * Request
-)
-{
-    NDIS_STATUS ndisStatus;
-
-    auto nxAdapter = static_cast<NxAdapter *>(Adapter);
-
-    // intercept and forward to the NDIS translator.
-    if (nxAdapter->NetClientSynchrohousOidPreProcess(*Request, ndisStatus))
-    {
-        return ndisStatus;
-    }
-
-    return NdisConvertNtStatusToNdisStatus(STATUS_NOT_SUPPORTED);
-}
-
-_Use_decl_annotations_
 NTSTATUS
 NxAdapter::InitializeDatapath(
     NET_ADAPTER_DATAPATH_CALLBACKS const & Callbacks
@@ -2595,6 +1786,7 @@ NxAdapter::InitializeDatapath(
             defaultDatapathCallbacks.Size);
     }
 
+#ifdef NETCX_KMDF
     CxDriverContext *driverContext = GetCxDriverContextFromHandle(WdfGetDriver());
 
     void * client;
@@ -2610,6 +1802,7 @@ NxAdapter::InitializeDatapath(
     CX_RETURN_NTSTATUS_IF(
         STATUS_INSUFFICIENT_RESOURCES,
         !m_apps.append(wistd::unique_ptr<INxApp> { static_cast<INxApp *>(client) }));
+#endif
 
     return STATUS_SUCCESS;
 }
@@ -2627,14 +1820,7 @@ NxAdapter::GetMiniportReference(
     void
 ) const
 {
-    auto const miniport = GetNdisHandle();
-
-    if (!NdisWdfMiniportTryReference(miniport))
-    {
-        return  {};
-    }
-
-    return unique_miniport_reference{ miniport };
+    return m_ndisPnpPower->GetMiniportReference();
 }
 
 NxAdapterExtension *
@@ -2651,26 +1837,6 @@ NxAdapter::GetExtension(
     }
 
     return nullptr;
-}
-
-NTSTATUS
-NxAdapter::CreateNdisMiniport(
-    void
-)
-{
-    NT_FRE_ASSERT(m_ndisAdapterHandle == nullptr);
-
-    auto device = GetDevice();
-    auto driver = WdfDeviceGetDriver(device);
-    NDIS_WDF_ADD_DEVICE_INFO addDeviceInfo = {};
-    addDeviceInfo.DriverObject = WdfDriverWdmGetDriverObject(driver);
-    addDeviceInfo.PhysicalDeviceObject = WdfDeviceWdmGetPhysicalDevice(device);
-    addDeviceInfo.MiniportAdapterContext = reinterpret_cast<NDIS_HANDLE>(this);
-    addDeviceInfo.WdfCxPowerManagement = TRUE;
-
-    return NdisWdfPnPAddDevice(
-        &addDeviceInfo,
-        &m_ndisAdapterHandle);
 }
 
 _Use_decl_annotations_
@@ -2708,126 +1874,6 @@ NxAdapter::NdisMiniportCreationComplete(
 }
 
 _Use_decl_annotations_
-void
-NxAdapter::SendNetBufferLists(
-    NET_BUFFER_LIST * NetBufferLists,
-    NDIS_PORT_NUMBER PortNumber,
-    ULONG SendFlags
-)
-{
-    m_nblDatapath.SendNetBufferLists(
-        NetBufferLists,
-        PortNumber,
-        SendFlags);
-}
-
-_Use_decl_annotations_
-void
-NxAdapter::ReturnNetBufferLists(
-    NET_BUFFER_LIST * NetBufferLists,
-    ULONG ReturnFlags
-)
-{
-    m_nblDatapath.ReturnNetBufferLists(
-        NetBufferLists,
-        ReturnFlags);
-}
-
-_Use_decl_annotations_
-bool
-NxAdapter::NetClientOidPreProcess(
-    NDIS_OID_REQUEST & Request,
-    NDIS_STATUS & NdisStatus
-) const
-{
-    for (auto & app : m_apps)
-    {
-        if (m_clientDispatch->NdisOidRequestHandler)
-        {
-            NTSTATUS status;
-            auto const handled = m_clientDispatch->NdisOidRequestHandler(
-                app.get(),
-                &Request,
-                &status);
-
-            if (handled)
-            {
-                NT_FRE_ASSERT(status != STATUS_PENDING);
-
-                NdisStatus = NdisConvertNtStatusToNdisStatus(status);
-                return handled;
-            }
-        }
-    }
-
-    return false;
-}
-
-_Use_decl_annotations_
-bool
-NxAdapter::NetClientDirectOidPreProcess(
-    NDIS_OID_REQUEST & Request,
-    NDIS_STATUS & NdisStatus
-) const
-{
-    for (size_t i = 0; i < m_apps.count(); i++)
-    {
-        auto & app = m_apps[i];
-
-        if (m_clientDispatch->NdisDirectOidRequestHandler)
-        {
-            NTSTATUS status;
-            auto const handled = m_clientDispatch->NdisDirectOidRequestHandler(
-                app.get(),
-                &Request,
-                &status);
-
-            if (handled)
-            {
-                NT_FRE_ASSERT(status != STATUS_PENDING);
-
-                NdisStatus = NdisConvertNtStatusToNdisStatus(status);
-                return handled;
-            }
-        }
-    }
-
-    return false;
-}
-
-_Use_decl_annotations_
-bool
-NxAdapter::NetClientSynchrohousOidPreProcess(
-    NDIS_OID_REQUEST & Request,
-    NDIS_STATUS & NdisStatus
-) const
-{
-    for (size_t i = 0; i < m_apps.count(); i++)
-    {
-        auto & app = m_apps[i];
-
-        if (m_clientDispatch->NdisSynchronousOidRequestHandler)
-        {
-            NTSTATUS status;
-            auto const handled = m_clientDispatch->NdisSynchronousOidRequestHandler(
-                app.get(),
-                &Request,
-                &status);
-
-            if (handled)
-            {
-                NT_FRE_ASSERT(status != STATUS_PENDING);
-
-                NdisStatus = NdisConvertNtStatusToNdisStatus(status);
-                return handled;
-            }
-        }
-    }
-
-    return false;
-}
-
-_Use_decl_annotations_
 NTSTATUS
 NxAdapter::RegisterRingExtensions(
     void
@@ -2840,6 +1886,7 @@ NxAdapter::RegisterRingExtensions(
         alignof(NET_FRAGMENT_VIRTUAL_ADDRESS),
         NetExtensionTypeFragment,
     };
+
     CX_RETURN_IF_NOT_NT_SUCCESS(
         RegisterExtension(virtualExtension));
 
@@ -2871,18 +1918,29 @@ NxAdapter::RegisterRingExtensions(
         CX_RETURN_IF_NOT_NT_SUCCESS(
             RegisterExtension(returnExtension));
     }
-    else if (m_rxCapabilities.AllocationMode == NetRxFragmentBufferAllocationModeSystem &&
-             m_rxCapabilities.AttachmentMode == NetRxFragmentBufferAttachmentModeDriver)
+
+    if (m_rxCapabilities.AllocationMode == NetRxFragmentBufferAllocationModeDriverV2 &&
+        m_rxCapabilities.AttachmentMode == NetRxFragmentBufferAttachmentModeDriver)
     {
-        NET_EXTENSION_PRIVATE const dataBufferExtension = {
-            NET_FRAGMENT_EXTENSION_DATA_BUFFER_NAME,
-            NET_FRAGMENT_EXTENSION_DATA_BUFFER_VERSION_1_SIZE,
-            NET_FRAGMENT_EXTENSION_DATA_BUFFER_VERSION_1,
-            alignof(NET_FRAGMENT_DATA_BUFFER),
+        NET_EXTENSION_PRIVATE const netMemoryReturnContextExtensionIn = {
+            NET_FRAGMENT_EXTENSION_RETURN_CONTEXT_NAME,
+            NET_FRAGMENT_EXTENSION_RETURN_CONTEXT_VERSION_1_SIZE,
+            NET_FRAGMENT_EXTENSION_RETURN_CONTEXT_VERSION_1,
+            alignof(NET_FRAGMENT_RETURN_CONTEXT),
             NetExtensionTypeFragment,
         };
         CX_RETURN_IF_NOT_NT_SUCCESS(
-            RegisterExtension(dataBufferExtension));
+            RegisterExtension(netMemoryReturnContextExtensionIn));
+
+        NET_EXTENSION_PRIVATE const netMemoryIdExtension = {
+            NET_FRAGMENT_EXTENSION_NET_MEMORY_NAME,
+            NET_FRAGMENT_EXTENSION_NET_MEMORY_VERSION_1_SIZE,
+            NET_FRAGMENT_EXTENSION_NET_MEMORY_VERSION_1,
+            alignof(NET_FRAGMENT_NET_MEMORY),
+            NetExtensionTypeFragment,
+        };
+        CX_RETURN_IF_NOT_NT_SUCCESS(
+            RegisterExtension(netMemoryIdExtension));
     }
 
     if (m_txCapabilities.DmaCapabilities != nullptr || m_rxCapabilities.DmaCapabilities != nullptr)
@@ -2958,7 +2016,10 @@ NxAdapter::SetDeviceFailed(
         "Translator initiated WdfDeviceSetFailed: %!STATUS!",
         Status);
 
-    WdfDeviceSetFailed(m_device, WdfDeviceFailedNoRestart);
+    if (!IsDevicelessAdapter())
+    {
+        WdfDeviceSetFailed(m_device, WdfDeviceFailedAttemptRestart);
+    }
 }
 
 _Use_decl_annotations_
@@ -2969,14 +2030,23 @@ NxAdapter::GetProperties(
 {
     Properties->MediaType = m_mediaType;
     Properties->NetLuid = m_netLuid;
+#if NETCX_KMDF
     Properties->DriverIsVerifying = !!MmIsDriverVerifyingByAddress(m_datapathCallbacks.EvtAdapterCreateTxQueue);
-    Properties->NdisAdapterHandle = m_ndisAdapterHandle;
+#else
+    Properties->DriverIsVerifying = GetPrivateGlobals()->CxVerifierOn;
+#endif
+    Properties->NdisAdapterHandle = GetNdisHandle();
+    Properties->Name = &m_instanceName;
+    Properties->ExecutionContextKnobs = m_executionContextKnobs;
+    Properties->Process = nullptr;
 
     // C++ object shared across ABI
     // this is not viable once the translator is removed from the Cx
+#ifdef NETCX_KMDF
     Properties->NblDispatcher = const_cast<INxNblDispatcher *>(static_cast<const INxNblDispatcher *>(&m_nblDatapath));
     Properties->PacketMonitorLowerEdge = reinterpret_cast<PKTMON_LOWEREDGE_HANDLE>(const_cast<PKTMON_EDGE_CONTEXT *>(&m_packetMonitor.GetLowerEdgeContext()));
     Properties->PacketMonitorComponentContext = reinterpret_cast<PKTMON_COMPONENT_HANDLE>(const_cast<PKTMON_COMPONENT_CONTEXT *>(&m_packetMonitor.GetComponentContext()));
+#endif
 }
 
 _Use_decl_annotations_
@@ -3000,10 +2070,15 @@ NxAdapter::GetDatapathCapabilities(
     {
         DatapathCapabilities->RxMemoryManagementMode = NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ALLOCATE_AND_ATTACH;
     }
-    else if ((rxCap.AllocationMode == NetRxFragmentBufferAllocationModeSystem) &&
+    else if ((rxCap.AllocationMode == NetRxFragmentBufferAllocationModeDriverV2) &&
              (rxCap.AttachmentMode == NetRxFragmentBufferAttachmentModeDriver))
     {
-        DatapathCapabilities->RxMemoryManagementMode = NET_CLIENT_MEMORY_MANAGEMENT_MODE_OS_ONLY_ALLOCATE;
+        // Driver V2 mode relies on functions that were introduced in the Spring25 bug bundle fix
+        DatapathCapabilities->RxMemoryManagementMode = NET_CLIENT_MEMORY_MANAGEMENT_MODE_DRIVER_V2;
+#ifdef NETCX_UMDF
+        NxMemory* memory = GetNxMemoryFromHandle(rxCap.MemoryCollection);
+        DatapathCapabilities->RxMemoryCollection = memory->GetRdMemoryHandle();
+#endif
     }
     else
     {
@@ -3077,10 +2152,23 @@ NxAdapter::GetDatapathCapabilities(
     DatapathCapabilities->RxMemoryConstraints.MappingRequirement = static_cast<NET_CLIENT_MEMORY_MAPPING_REQUIREMENT> (rxCap.MappingRequirement);
     DatapathCapabilities->RxMemoryConstraints.AlignmentRequirement = rxCap.FragmentBufferAlignment;
 
-    auto physicalDeviceObject = WdfDeviceWdmGetPhysicalDevice(GetDevice());
-    ULONG preferredNumaNode = MM_ANY_NODE_OK;
+#ifdef NETCX_KMDF
+    DEVICE_OBJECT* physicalDeviceObject = nullptr;
+    if (!IsDevicelessAdapter())
+    {
+        physicalDeviceObject = WdfDeviceWdmGetPhysicalDevice(GetDevice());
+    }
 
-    (void) IoGetDeviceNumaNode(physicalDeviceObject, (PUSHORT) &preferredNumaNode);
+    ULONG preferredNumaNode = MM_ANY_NODE_OK;
+    if (physicalDeviceObject != nullptr)
+    {
+        USHORT deviceNumaNode;
+        (void)IoGetDeviceNumaNode(physicalDeviceObject, &deviceNumaNode);
+        preferredNumaNode = deviceNumaNode;
+    }
+#else
+    ULONG preferredNumaNode = MM_ANY_NODE_OK;
+#endif
 
     if (DatapathCapabilities->RxMemoryConstraints.MappingRequirement == NET_CLIENT_MEMORY_MAPPING_REQUIREMENT_DMA_MAPPED)
     {
@@ -3093,10 +2181,11 @@ NxAdapter::GetDatapathCapabilities(
         {
             DatapathCapabilities->RxMemoryConstraints.Dma.PreferredNode = preferredNumaNode;
         }
-
+#ifdef NETCX_KMDF
         DatapathCapabilities->RxMemoryConstraints.Dma.DmaAdapter =
             WdfDmaEnablerWdmGetDmaAdapter(rxCap.DmaCapabilities->DmaEnabler,
-                                          WdfDmaDirectionReadFromDevice);
+                                            WdfDmaDirectionReadFromDevice);
+#endif
     }
 
     if (DatapathCapabilities->TxMemoryConstraints.MappingRequirement == NET_CLIENT_MEMORY_MAPPING_REQUIREMENT_DMA_MAPPED)
@@ -3105,6 +2194,7 @@ NxAdapter::GetDatapathCapabilities(
             static_cast<NET_CLIENT_TRI_STATE> (txCap.DmaCapabilities->CacheEnabled);
         DatapathCapabilities->TxMemoryConstraints.Dma.PreferredNode = txCap.DmaCapabilities->PreferredNode;
 
+#ifdef NETCX_KMDF
         auto dmaAdapter = WdfDmaEnablerWdmGetDmaAdapter(txCap.DmaCapabilities->DmaEnabler,
             WdfDmaDirectionWriteToDevice);
 
@@ -3123,14 +2213,21 @@ NxAdapter::GetDatapathCapabilities(
             : 0xffffffffffffffff;
 
         DatapathCapabilities->TxMemoryConstraints.Dma.MaximumPhysicalAddress.QuadPart = min(maximumDmaLogicalAddress, maximumDriverLogicalAddress);
+#else
+        auto const maximumDriverLogicalAddress = txCap.DmaCapabilities->MaximumPhysicalAddress.QuadPart > 0
+            ? static_cast<UINT64>(txCap.DmaCapabilities->MaximumPhysicalAddress.QuadPart)
+            : 0xffffffffffffffff;
+        DatapathCapabilities->TxMemoryConstraints.Dma.MaximumPhysicalAddress.QuadPart = maximumDriverLogicalAddress;
+#endif
 
         if (DatapathCapabilities->TxMemoryConstraints.Dma.PreferredNode == MM_ANY_NODE_OK)
         {
             DatapathCapabilities->TxMemoryConstraints.Dma.PreferredNode = preferredNumaNode;
         }
-
+#if NETCX_KMDF
         // We also need the PDO to let buffer manager call DMA APIs
         DatapathCapabilities->TxMemoryConstraints.Dma.PhysicalDeviceObject = physicalDeviceObject;
+#endif
     }
 
 #if defined(_X86_) || defined(_AMD64_) || defined(_ARM64_)
@@ -3201,7 +2298,7 @@ NxAdapter::CreateTxQueue(
     NET_CLIENT_QUEUE_CONFIG const * ClientQueueConfig,
     NET_CLIENT_QUEUE * AdapterQueue,
     NET_CLIENT_QUEUE_DISPATCH const ** AdapterDispatch,
-    NET_EXECUTION_CONTEXT * ExecutionContext,
+    NET_EXECUTION_CONTEXT * ExecutionContextHandle,
     NET_EXECUTION_CONTEXT_DISPATCH const ** ExecutionContextDispatch
 )
 {
@@ -3240,8 +2337,8 @@ NxAdapter::CreateTxQueue(
     *AdapterQueue = reinterpret_cast<NET_CLIENT_QUEUE>(
         GetNxQueueFromHandle((NETPACKETQUEUE)m_txQueues[QueueId].get()));
 
-    *ExecutionContext = reinterpret_cast<NET_EXECUTION_CONTEXT>(context.ExecutionContext);
-    *ExecutionContextDispatch = GetExecutionContextDispatch();
+    *ExecutionContextHandle = context.ExecutionContext->GetHandle();
+    *ExecutionContextDispatch = context.ExecutionContext->GetExecutionContextDispatch();
 
     return STATUS_SUCCESS;
 }
@@ -3254,7 +2351,7 @@ NxAdapter::CreateRxQueue(
     NET_CLIENT_QUEUE_CONFIG const * ClientQueueConfig,
     NET_CLIENT_QUEUE * AdapterQueue,
     NET_CLIENT_QUEUE_DISPATCH const ** AdapterDispatch,
-    NET_EXECUTION_CONTEXT * ExecutionContext,
+    NET_EXECUTION_CONTEXT * ExecutionContextHandle,
     NET_EXECUTION_CONTEXT_DISPATCH const ** ExecutionContextDispatch
 )
 {
@@ -3275,6 +2372,8 @@ NxAdapter::CreateRxQueue(
     context.QueueId = QueueId;
     context.ClientQueue = ClientQueue;
 
+    context.CreateReturnContextRing = (m_rxCapabilities.AllocationMode == NetRxFragmentBufferAllocationModeDriverV2);
+
     CX_RETURN_IF_NOT_NT_SUCCESS_MSG(
         AddNetClientPacketExtensionsToQueueCreationContext(ClientQueueConfig, context),
         "Failed to transfer NetClientQueueConfig's packet extension to queue_creation_context");
@@ -3293,8 +2392,8 @@ NxAdapter::CreateRxQueue(
     *AdapterQueue = reinterpret_cast<NET_CLIENT_QUEUE>(
         GetNxQueueFromHandle((NETPACKETQUEUE)m_rxQueues[QueueId].get()));
 
-    *ExecutionContext = reinterpret_cast<NET_EXECUTION_CONTEXT>(context.ExecutionContext);
-    *ExecutionContextDispatch = GetExecutionContextDispatch();
+    *ExecutionContextHandle = context.ExecutionContext->GetHandle();
+    *ExecutionContextDispatch = context.ExecutionContext->GetExecutionContextDispatch();
 
     return STATUS_SUCCESS;
 }
@@ -3337,6 +2436,20 @@ NxAdapter::ReturnRxBuffer(
     m_evtReturnRxBuffer(GetFxObject(), RxBufferReturnContext);
 }
 
+NET_MEMORY_MDL_WRAPPER *
+NxAdapter::GetMdlForDriverAllocatedMemory(
+    ULONG64 MemoryId
+)
+{
+#ifdef NETCX_KMDF
+    NxMemory* memory = GetNxMemoryFromHandle(m_rxMemoryCollection);
+    return memory->GetMdlForDriverAllocatedMemory(reinterpret_cast<NET_MEMORY_ID>(MemoryId));
+#else
+    UNREFERENCED_PARAMETER(MemoryId);
+    return nullptr;
+#endif
+}
+
 void
 NxAdapter::_EvtCleanup(
     _In_  WDFOBJECT NetAdapter
@@ -3352,25 +2465,31 @@ Routine Description:
 {
     auto nxAdapter = GetNxAdapterFromHandle((NETADAPTER)NetAdapter);
 
-    //
-    // If the adapter has been disposed the workitem for async power reference
-    // would have been disposed as well. Enqueueing it will be a no-op.
-    // In case there is a thread in NDIS waiting for the power complete notification
-    // unblock it.
-    //
-    if (nxAdapter->m_powerRequiredWorkItemPending) {
-        NdisWdfAsyncPowerReferenceCompleteNotification(nxAdapter->m_ndisAdapterHandle,
-            STATUS_INVALID_DEVICE_STATE);
-        nxAdapter->m_powerRequiredWorkItemPending = FALSE;
+    if (!nxAdapter->IsDevicelessAdapter())
+    {
+        //
+        // If the adapter has been disposed the workitem for async power reference
+        // would have been disposed as well. Enqueueing it will be a no-op.
+        // In case there is a thread in NDIS waiting for the power complete notification
+        // unblock it.
+        //
+#ifdef NETCX_KMDF
+        if (nxAdapter->m_powerPolicy && nxAdapter->m_powerPolicy->IsPowerRequiredWorkItemPending() &&
+            nxAdapter->m_ndisPnpPower)
+        {
+            nxAdapter->m_ndisPnpPower->NotifyAsyncPowerReferenceCompletion(STATUS_INVALID_DEVICE_STATE);
+        }
+#endif
+
+        NxDevice *nxDevice = GetNxDeviceFromHandle(nxAdapter->GetDevice());
+
+        nxDevice->PnpPower.AdapterDeleted(nxAdapter);
     }
 
-    NxDevice *nxDevice = GetNxDeviceFromHandle(nxAdapter->GetDevice());
-
-    nxDevice->PnpPower.AdapterDeleted(nxAdapter);
-
-    if (nxAdapter->m_plugPlayNotificationHandle != nullptr)
+    if (nxAdapter->m_deviceInterfaceNotification)
     {
-        IoUnregisterPlugPlayNotificationEx(nxAdapter->m_plugPlayNotificationHandle);
+        nxAdapter->m_deviceInterfaceNotification.reset();
+
         // The above call ensures that before it returns any ongoing notification callbacks finishes
         // and no new notifications will be delivered, so it is safe to drop the object reference
         WdfObjectDereferenceWithTag(NetAdapter, PLUGPLAY_NOTIFICATION_TAG);
@@ -3381,36 +2500,8 @@ Routine Description:
     {
         nxAdapter->EnqueueEvent(NxAdapter::Event::EvtCleanup);
     }
-    
+
     return;
-}
-
-_Use_decl_annotations_
-NDIS_HANDLE
-EvtNdisWdmDeviceGetNdisAdapterHandle(
-    DEVICE_OBJECT * DeviceObject
-)
-/*++
-Routine Description:
-    A Ndis Event Callback
-
-    This event callback converts a WDF Device Object to the NDIS's
-    miniport Adapter handle.
---*/
-{
-    UNREFERENCED_PARAMETER(DeviceObject);
-    return nullptr;
-}
-
-_Use_decl_annotations_
-void
-EvtNdisUpdatePMParameters(
-    NDIS_HANDLE Adapter,
-    NDIS_PM_PARAMETERS * PmParameters
-)
-{
-    auto nxAdapter = reinterpret_cast<NxAdapter *>(Adapter);
-    nxAdapter->UpdateNdisPmParameters(PmParameters);
 }
 
 WDFDEVICE
@@ -3465,6 +2556,7 @@ Return Value:
     //
     m_offloadManager->RegisterExtensions();
 
+#ifdef NETCX_KMDF
     for (auto const &app : m_apps)
     {
         if (m_clientDispatch->OffloadInitialize)
@@ -3477,6 +2569,9 @@ Return Value:
             }
         }
     }
+#else
+    m_bridgeToKernel.OffloadInitialize();
+#endif
 
 Exit:
 
@@ -3515,10 +2610,14 @@ NxAdapter::DatapathCreate(
     void
 )
 {
+#ifdef NETCX_KMDF
     for (auto &app : m_apps)
     {
         m_clientDispatch->CreateDatapath(app.get());
     }
+#else
+    m_bridgeToKernel.CreateDatapath();
+#endif
 
     return NxAdapter::Event::SyncSuccess;
 }
@@ -3529,10 +2628,18 @@ NxAdapter::DatapathDestroy(
     void
 )
 {
+#ifdef NETCX_KMDF
     for (auto &app : m_apps)
     {
         m_clientDispatch->DestroyDatapath(app.get());
     }
+#else
+    m_bridgeToKernel.DestroyDatapath();
+    // Kernel does not currently send individual destroy events for each queue.
+    // Clear queues here until the translator owns queue lifetime for Tx scaling/RSS.
+    m_rxQueues.clear();
+    m_txQueues.clear();
+#endif
 
     return NxAdapter::Event::SyncSuccess;
 }
@@ -3543,10 +2650,14 @@ NxAdapter::DatapathStart(
     void
 )
 {
+#ifdef NETCX_KMDF
     for (auto &app : m_apps)
     {
         m_clientDispatch->StartDatapath(app.get());
     }
+#else
+    m_bridgeToKernel.StartDatapath();
+#endif
 
     return NxAdapter::Event::SyncSuccess;
 }
@@ -3557,10 +2668,14 @@ NxAdapter::DatapathStop(
     void
 )
 {
+#ifdef NETCX_KMDF
     for (auto &app : m_apps)
     {
         m_clientDispatch->StopDatapath(app.get());
     }
+#else
+    m_bridgeToKernel.StopDatapath();
+#endif
 
     return NxAdapter::Event::SyncSuccess;
 }
@@ -3593,7 +2708,7 @@ NxAdapter::DatapathPauseComplete(
     void
 )
 {
-    NdisMPauseComplete(m_ndisAdapterHandle);
+    m_ndisMiniport->CompleteMiniportPause();
 
     return NxAdapter::Event::SyncSuccess;
 }
@@ -3604,8 +2719,7 @@ NxAdapter::DatapathRestartComplete(
     void
 )
 {
-    NdisMRestartComplete(m_ndisAdapterHandle,
-        NdisConvertNtStatusToNdisStatus(STATUS_SUCCESS));
+    m_ndisMiniport->CompleteMiniportRestart();
 
     return NxAdapter::Event::SyncSuccess;
 }
@@ -3625,16 +2739,15 @@ NxAdapter::InitializePowerManagement(
     void
 )
 /*
-    This routine ensures this adapter will have one (and only one) WDFDEVICE power
-    reference per adapter (excluding references taken by m_powerPolicy.m_idleRestrictions).
+    This routine ensures that NDIS will keep one (and only one) WDFDEVICE power reference per adapter
+    when the NETADAPTER is busy.
     This is done to account for:
     - Cases where both AOAC and SS are enabled
     - One of them is enabled.
     - Neither of them are enabled.
-
 --*/
 {
-    if (!m_powerPolicy.IsPowerCapable())
+    if (!m_powerPolicy->IsPowerCapable())
     {
         LogInfo(
             FLAG_ADAPTER,
@@ -3648,7 +2761,7 @@ NxAdapter::InitializePowerManagement(
     // This will ensure the WDFDEVICE has 1 power reference before the implicit
     // power up is complete. After the start IRP is complete NDIS will drop this
     // reference if either the network interface is idle or AOAC references are zero.
-    const auto powerReferenceStatus = PowerReference(true);
+    const auto powerReferenceStatus = m_powerPolicy->PowerReference(true);
 
     CX_LOG_IF_NOT_NT_SUCCESS_MSG(
         powerReferenceStatus,
@@ -3662,15 +2775,14 @@ NxAdapter::InitializePowerManagement(
     // power managment operations, which will let it invoke WdfDeviceStopIdle/ResumeIdle.
     // Note that this is done on IRP_MN_DEVICE_START completion so it conforms to the
     // requirements described in WDF documentation.
-    if (m_powerPolicy.ShouldAcquirePowerReferencesForAdapter() && NT_SUCCESS(powerReferenceStatus))
+    if (m_powerPolicy->ShouldAcquirePowerReferencesForAdapter() && NT_SUCCESS(powerReferenceStatus))
     {
         // When SS and AOAC structures are initialized in NDIS, they are both initialized
         // with stop flags so that SS / AoAC engines dont try to drop / acquire power refs
         // until the WDFDEVICE is ready. Now that we're ready this routine will clear
         // those SS / AoAC stop flags by calling into NdisWdfActionStartPowerManagement.
 
-        const auto startPMStatus = NdisWdfPnpPowerEventHandler(
-            GetNdisHandle(),
+        const auto startPMStatus = NotifyNdisPowerOperation(
             NdisWdfActionStartPowerManagement,
             NdisWdfActionPowerNone);
 
@@ -3709,19 +2821,34 @@ NxAdapter::EvtLogTransition(
 )
 {
     // StateMachineContext is NxAdapter object;
-    WDFDEVICE wdfDevice = GetDevice();
-    NxDevice* nxDevice = GetNxDeviceFromHandle(wdfDevice);
+    if (IsDevicelessAdapter())
+    {
+        TraceLoggingWrite(
+            g_hNetAdapterCxEtwProvider,
+            "NxAdapterStateTransition",
+            TraceLoggingDescription("NxAdapterStateTransition"),
+            TraceLoggingKeyword(NET_ADAPTER_CX_NXADAPTER_STATE_TRANSITION),
+            TraceLoggingGuid(m_interfaceGuid, "DevicelessAdapterInterfaceGuid"),
+            TraceLoggingHexUInt64(m_netLuid.Value, "AdapterNetLuid"),
+            TraceLoggingHexInt32(static_cast<INT32>(SourceState), "AdapterStateTransitionFrom"),
+            TraceLoggingHexInt32(static_cast<INT32>(ProcessedEvent), "AdapterStateTransitionEvent"),
+            TraceLoggingHexInt32(static_cast<INT32>(TargetState), "AdapterStateTransitionTo"));
+    }
+    else
+    {
+        NxDevice* nxDevice = GetNxDeviceFromHandle(m_device);
 
-    TraceLoggingWrite(
-        g_hNetAdapterCxEtwProvider,
-        "NxAdapterStateTransition",
-        TraceLoggingDescription("NxAdapterStateTransition"),
-        TraceLoggingKeyword(NET_ADAPTER_CX_NXADAPTER_STATE_TRANSITION),
-        TraceLoggingUInt32(nxDevice->GetDeviceBusAddress(), "DeviceBusAddress"),
-        TraceLoggingHexUInt64(GetNetLuid().Value, "AdapterNetLuid"),
-        TraceLoggingHexInt32(static_cast<INT32>(SourceState), "AdapterStateTransitionFrom"),
-        TraceLoggingHexInt32(static_cast<INT32>(ProcessedEvent), "AdapterStateTransitionEvent"),
-        TraceLoggingHexInt32(static_cast<INT32>(TargetState), "AdapterStateTransitionTo"));
+        TraceLoggingWrite(
+            g_hNetAdapterCxEtwProvider,
+            "NxAdapterStateTransition",
+            TraceLoggingDescription("NxAdapterStateTransition"),
+            TraceLoggingKeyword(NET_ADAPTER_CX_NXADAPTER_STATE_TRANSITION),
+            TraceLoggingUInt32(nxDevice->GetDeviceBusAddress(), "DeviceBusAddress"),
+            TraceLoggingHexUInt64(GetNetLuid().Value, "AdapterNetLuid"),
+            TraceLoggingHexInt32(static_cast<INT32>(SourceState), "AdapterStateTransitionFrom"),
+            TraceLoggingHexInt32(static_cast<INT32>(ProcessedEvent), "AdapterStateTransitionEvent"),
+            TraceLoggingHexInt32(static_cast<INT32>(TargetState), "AdapterStateTransitionTo"));
+    }
 
     LogInfo(FLAG_DEVICE, "NETADAPTER: %p"
         " [%!SMFXTRANSITIONTYPE!]"
@@ -3776,7 +2903,7 @@ NxAdapter::QueryExtension(
     for (auto const & extension : m_packetExtensions)
     {
         if (0 == wcscmp(Name, extension.m_extension.Name) &&
-            Version == extension.m_extension.Version &&
+            Version <= extension.m_extension.Version &&
             Type == extension.m_extension.Type)
         {
             return &extension.m_extension;
@@ -3824,8 +2951,37 @@ NxAdapter::RegisterExtension(
 
 _Use_decl_annotations_
 void
+NxAdapter::TxPeerDemuxTableRemovePeer(
+    NET_EUI48_ADDRESS const* Address
+)
+{
+#ifdef NETCX_KMDF
+    m_apps[0]->TxPeerDemuxTableRemovePeer(
+        reinterpret_cast<NET_CLIENT_EUI48_ADDRESS const*>(Address)
+    );
+#else
+    m_bridgeToKernel.TxPeerDemuxTableRemovePeer(reinterpret_cast<NET_CLIENT_EUI48_ADDRESS const*>(Address));
+#endif
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::TxPeerDemuxTableAddPeer(
+    NET_EUI48_ADDRESS const* Address
+)
+{
+#ifdef NETCX_KMDF
+    m_apps[0]->TxPeerDemuxTableAddPeer(
+        reinterpret_cast<NET_CLIENT_EUI48_ADDRESS const*>(Address)
+    );
+#else
+    m_bridgeToKernel.TxPeerDemuxTableAddPeer(reinterpret_cast<NET_CLIENT_EUI48_ADDRESS const*>(Address));
+#endif
+}
+
+void
 NxAdapter::SetDatapathCapabilities(
-    NET_ADAPTER_TX_CAPABILITIES const *TxCapabilities,
+    NET_ADAPTER_TX_CAPABILITIES const* TxCapabilities,
     NET_ADAPTER_RX_CAPABILITIES const *RxCapabilities
 )
 {
@@ -3853,6 +3009,10 @@ NxAdapter::SetDatapathCapabilities(
     {
         m_evtReturnRxBuffer = m_rxCapabilities.EvtAdapterReturnRxBuffer;
     }
+    else if (m_rxCapabilities.AllocationMode == NetRxFragmentBufferAllocationModeDriverV2)
+    {
+        m_rxMemoryCollection = m_rxCapabilities.MemoryCollection;
+    }
 
     if (RxCapabilities->DmaCapabilities != nullptr)
     {
@@ -3864,6 +3024,33 @@ NxAdapter::SetDatapathCapabilities(
         m_rxCapabilities.DmaCapabilities = &m_rxDmaCapabilities;
     }
 }
+
+#ifdef NETCX_UMDF
+void
+NxAdapter::SetDatapathCapabilities_UMDF_2_5_and_older(
+    _In_ NET_ADAPTER_TX_CAPABILITIES const * TxCapabilities,
+    _In_ NET_ADAPTER_RX_CAPABILITIES const * RxCapabilities
+)
+{
+    // UMDF drivers 2.5 and 2.4 do not have the DmaCapabilities field in the NET_ADAPTER_*_CAPABILITIES
+    // structures and do not support AllocationMode == NetRxFragmentBufferAllocationModeDriver.
+    //
+    // The DmaCapabilities field is the last field in the NET_ADAPTER_*_CAPABILITIES structures, so
+    // it is safe to copy the entire structure.
+    RtlCopyMemory(
+        &m_txCapabilities,
+        TxCapabilities,
+        TxCapabilities->Size);
+
+    RtlCopyMemory(
+        &m_rxCapabilities,
+        RxCapabilities,
+        RxCapabilities->Size);
+
+    m_txCapabilities.Size = sizeof(m_txCapabilities);
+    m_rxCapabilities.Size = sizeof(m_rxCapabilities);
+}
+#endif
 
 const NET_ADAPTER_TX_CAPABILITIES&
 NxAdapter::GetTxCapabilities(
@@ -3923,7 +3110,7 @@ NxAdapter::SetPowerOffloadArpCapabilities(
     NET_ADAPTER_POWER_OFFLOAD_ARP_CAPABILITIES const * Capabilities
 )
 {
-    m_powerPolicy.SetPowerOffloadArpCapabilities(Capabilities);
+    m_powerPolicy->SetPowerOffloadArpCapabilities(Capabilities);
 
     if (m_flags.GeneralAttributesSet)
     {
@@ -3937,7 +3124,7 @@ NxAdapter::SetPowerOffloadNSCapabilities(
     NET_ADAPTER_POWER_OFFLOAD_NS_CAPABILITIES const * Capabilities
 )
 {
-    m_powerPolicy.SetPowerOffloadNSCapabilities(Capabilities);
+    m_powerPolicy->SetPowerOffloadNSCapabilities(Capabilities);
 
     if (m_flags.GeneralAttributesSet)
     {
@@ -3951,7 +3138,7 @@ NxAdapter::SetWakeBitmapCapabilities(
     NET_ADAPTER_WAKE_BITMAP_CAPABILITIES const * Capabilities
 )
 {
-    m_powerPolicy.SetWakeBitmapCapabilities(Capabilities);
+    m_powerPolicy->SetWakeBitmapCapabilities(Capabilities);
 
     if (m_flags.GeneralAttributesSet)
     {
@@ -3965,7 +3152,7 @@ NxAdapter::SetMagicPacketCapabilities(
     NET_ADAPTER_WAKE_MAGIC_PACKET_CAPABILITIES const * Capabilities
 )
 {
-    m_powerPolicy.SetMagicPacketCapabilities(Capabilities);
+    m_powerPolicy->SetMagicPacketCapabilities(Capabilities);
 
     if (m_flags.GeneralAttributesSet)
     {
@@ -3979,7 +3166,7 @@ NxAdapter::SetEapolPacketCapabilities(
     NET_ADAPTER_WAKE_EAPOL_PACKET_CAPABILITIES const * Capabilities
 )
 {
-    m_powerPolicy.SetEapolPacketCapabilities(Capabilities);
+    m_powerPolicy->SetEapolPacketCapabilities(Capabilities);
 
     if (m_flags.GeneralAttributesSet)
     {
@@ -3993,7 +3180,7 @@ NxAdapter::SetWakeMediaChangeCapabilities(
     NET_ADAPTER_WAKE_MEDIA_CHANGE_CAPABILITIES const * Capabilities
 )
 {
-    m_powerPolicy.SetWakeMediaChangeCapabilities(Capabilities);
+    m_powerPolicy->SetWakeMediaChangeCapabilities(Capabilities);
 
     if (m_flags.GeneralAttributesSet)
     {
@@ -4007,7 +3194,7 @@ NxAdapter::SetWakePacketFilterCapabilities(
     NET_ADAPTER_WAKE_PACKET_FILTER_CAPABILITIES const * Capabilities
 )
 {
-    m_powerPolicy.SetWakePacketFilterCapabilities(Capabilities);
+    m_powerPolicy->SetWakePacketFilterCapabilities(Capabilities);
 
     if (m_flags.GeneralAttributesSet)
     {
@@ -4049,118 +3236,65 @@ NxAdapter::GetTriageInfo(
 )
 {
     g_NetAdapterCxTriageBlock.NxAdapterLinkageOffset = FIELD_OFFSET(NxAdapter, m_linkage);
+    g_NetAdapterCxTriageBlock.NxAdapterNxNdisMiniportOffset = FIELD_OFFSET(NxAdapter, m_ndisMiniport);
+    NxNdisMiniport::GetTriageInfo();
 }
 
 _Use_decl_annotations_
 void NxAdapter::ReportWakeReasonPacket(
     const NET_ADAPTER_WAKE_REASON_PACKET * Reason
-) const
+)
 {
     Verifier_VerifyNetPowerUpTransition(GetPrivateGlobals(), GetNxDeviceFromHandle(m_device));
 
-    if (Reason->PatternId == NetAdapterWakeFilterPatternId)
+    switch (Reason->PatternId)
     {
-        LogInfo(FLAG_POWER,
-            "NETADAPTER %p reported wake. Reason: Packet matched receive filter",
-                GetFxObject());
-    }
-    else if (Reason->PatternId == NetAdapterWakeMagicPatternId)
-    {
-        LogInfo(FLAG_POWER,
-            "NETADAPTER %p reported wake. Reason: Magic Packet",
-                GetFxObject());
-    }
-    else if (Reason->PatternId == NetAdapterWakeEapolPatternId)
-    {
-        LogInfo(FLAG_POWER,
-            "NETADAPTER %p reported wake. Reason: EAPOL Packet",
-                GetFxObject());
-    }
-    else
-    {
-        LogInfo(FLAG_POWER,
-            "NETADAPTER %p reported wake. Reason: Packet matched a bitmap pattern (%u)",
-                GetFxObject(),
-                Reason->PatternId);
+        case NetAdapterWakeFilterPatternId:
+            SetWakeReason(NetWakeReasonTypePacketFilterMatch);
+            break;
+
+        case NetAdapterWakeMagicPatternId:
+            SetWakeReason(NetWakeReasonTypeMagicPacket);
+            break;
+
+        case NetAdapterWakeEapolPatternId:
+            SetWakeReason(NetWakeReasonTypeEapolPacket);
+            break;
+
+        default:
+            SetWakeReason(NetWakeReasonTypeBitmapPattern);
+            break;
     }
 
-    if (Reason->WakePacket == WDF_NO_HANDLE)
+    NDIS_PM_WAKE_REASON * wakeReason;
+    ULONG wakeReasonSize;
+
+    auto const ntStatus = m_powerPolicy->MakeWakeReasonPacket(Reason, &wakeReason, &wakeReasonSize);
+
+    if (NT_SUCCESS(ntStatus))
     {
-        LogWarning(FLAG_POWER,
-            "NETADAPTER %p reported wake reason packet without payload",
-                GetFxObject());
-
-        return;
+        m_ndisMiniport->IndicateMiniportStatusChange(
+            NDIS_STATUS_PM_WAKE_REASON,
+            *wakeReason,
+            reinterpret_cast<ULONG const *>(&wakeReasonSize));
     }
-
-    size_t savedPacketSize;
-    auto wakePacketBuffer = WdfMemoryGetBuffer(Reason->WakePacket, &savedPacketSize);
-    if (savedPacketSize > MAX_ETHERNET_PACKET_SIZE)
-    {
-        savedPacketSize = MAX_ETHERNET_PACKET_SIZE;
-    }
-    auto const wakePacketSize = RTL_NUM_ALIGN_UP(NDIS_SIZEOF_PM_WAKE_PACKET_REVISION_1, 8) + RTL_NUM_ALIGN_UP(savedPacketSize, 8);
-    auto const wakeReasonSize =
-        RTL_NUM_ALIGN_UP(NDIS_SIZEOF_PM_WAKE_REASON_REVISION_1, 8) +
-        wakePacketSize;
-
-    NT_FRE_ASSERT(wakePacketSize <= ULONG_MAX);
-    NT_FRE_ASSERT(wakeReasonSize <= ULONG_MAX);
-
-    size_t reservedWakeReasonSize;
-    auto wakeReason = static_cast<PNDIS_PM_WAKE_REASON>(WdfMemoryGetBuffer(m_wakeReasonMemory, &reservedWakeReasonSize));
-    RtlZeroMemory(wakeReason, reservedWakeReasonSize);
-    wakeReason->Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
-    wakeReason->Header.Revision = NDIS_PM_WAKE_REASON_REVISION_1;
-    wakeReason->Header.Size = NDIS_SIZEOF_PM_WAKE_REASON_REVISION_1;
-    wakeReason->WakeReason = NdisWakeReasonPacket;
-    wakeReason->InfoBufferOffset = RTL_NUM_ALIGN_UP(NDIS_SIZEOF_PM_WAKE_REASON_REVISION_1, 8);
-    wakeReason->InfoBufferSize = static_cast<ULONG>(wakePacketSize);
-
-    auto wakePacket = reinterpret_cast<PNDIS_PM_WAKE_PACKET>((PUCHAR)wakeReason + RTL_NUM_ALIGN_UP(NDIS_SIZEOF_PM_WAKE_REASON_REVISION_1, 8));
-    wakePacket->Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
-    wakePacket->Header.Revision = NDIS_PM_WAKE_PACKET_REVISION_1;
-    wakePacket->Header.Size = NDIS_SIZEOF_PM_WAKE_PACKET_REVISION_1;
-    wakePacket->PatternId = Reason->PatternId;
-    wakePacket->OriginalPacketSize = Reason->OriginalPacketSize;
-    wakePacket->SavedPacketSize = static_cast<ULONG>(savedPacketSize);
-    wakePacket->SavedPacketOffset = RTL_NUM_ALIGN_UP(NDIS_SIZEOF_PM_WAKE_PACKET_REVISION_1, 8);
-
-    PUCHAR data = (PUCHAR)wakePacket + RTL_NUM_ALIGN_UP(NDIS_SIZEOF_PM_WAKE_PACKET_REVISION_1, 8);
-    RtlCopyMemory(data, wakePacketBuffer, savedPacketSize);
-
-    auto wakeIndication = MakeNdisStatusIndication(
-        m_ndisAdapterHandle, NDIS_STATUS_PM_WAKE_REASON, *wakeReason);
-    wakeIndication.StatusBufferSize = static_cast<ULONG>(wakeReasonSize);
-
-    NdisMIndicateStatusEx(m_ndisAdapterHandle, &wakeIndication);
 }
 
 _Use_decl_annotations_
 void NxAdapter::ReportWakeReasonMediaChange(
     NET_IF_MEDIA_CONNECT_STATE Reason
-) const
+)
 {
     Verifier_VerifyNetPowerUpTransition(GetPrivateGlobals(), GetNxDeviceFromHandle(m_device));
 
-    LogInfo(FLAG_POWER,
-        "NETADAPTER %p reported wake. Reason: Media state change (%!NET_IF_MEDIA_CONNECT_STATE!)",
-            GetFxObject(),
-            Reason);
+    SetWakeReason(NetWakeReasonTypeMediaChange);
 
     NDIS_PM_WAKE_REASON wakeReason;
-    wakeReason.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
-    wakeReason.Header.Revision = NDIS_PM_WAKE_REASON_REVISION_1;
-    wakeReason.Header.Size = NDIS_SIZEOF_PM_WAKE_REASON_REVISION_1;
-    switch (Reason)
+
+    auto const ntStatus = m_powerPolicy->MakeWakeReasonMediaChange(Reason, &wakeReason);
+
+    if (!NT_SUCCESS(ntStatus))
     {
-    case MediaConnectStateDisconnected:
-        wakeReason.WakeReason = NdisWakeReasonMediaDisconnect;
-        break;
-    case MediaConnectStateConnected:
-        wakeReason.WakeReason = NdisWakeReasonMediaConnect;
-        break;
-    default:
         Verifier_ReportViolation(
             GetPrivateGlobals(),
             VerifierAction_BugcheckAlways,
@@ -4168,12 +3302,11 @@ void NxAdapter::ReportWakeReasonMediaChange(
             0,
             0);
     }
-    wakeReason.InfoBufferOffset = 0;
-    wakeReason.InfoBufferSize = 0;
-    auto wakeIndication = MakeNdisStatusIndication(
-        m_ndisAdapterHandle, NDIS_STATUS_PM_WAKE_REASON, wakeReason);
 
-    NdisMIndicateStatusEx(m_ndisAdapterHandle, &wakeIndication);
+    m_ndisMiniport->IndicateMiniportStatusChange(
+        NDIS_STATUS_PM_WAKE_REASON,
+        wakeReason,
+        nullptr);
 }
 
 _Use_decl_annotations_
@@ -4182,32 +3315,7 @@ NxAdapter::PowerReference(
     bool WaitForD0
 )
 {
-    InterlockedIncrement(&m_powerReferences);
-
-    if (!m_powerPolicy.ShouldAcquirePowerReferencesForAdapter())
-    {
-        LogInfo(FLAG_POWER,
-            "%!FUNC! Not acquiring PowerReference because adapter indicated not to acquire references on its behalf.");
-        return STATUS_SUCCESS;
-    }
-
-    const auto powerReferenceStatus = WdfDeviceStopIdleWithTag(
-        GetDevice(),
-        WaitForD0,
-        m_tag);
-
-    if (NT_SUCCESS(powerReferenceStatus))
-    {
-        InterlockedIncrement(&m_successfulPowerReferences);
-    }
-    else
-    {
-        LogWarning(FLAG_ADAPTER, "Power reference on parent device failed. WDFDEVICE: %p, NETADAPTER: %p",
-            GetDevice(),
-            GetFxObject());
-    }
-
-    return powerReferenceStatus;
+    return m_powerPolicy->PowerReference(WaitForD0);
 }
 
 void
@@ -4215,19 +3323,7 @@ NxAdapter::PowerDereference(
     void
 )
 {
-    InterlockedDecrement(&m_powerReferences);
-
-    if (-1 != NxInterlockedDecrementFloor(&m_successfulPowerReferences, 0))
-    {
-        NT_FRE_ASSERT(m_powerPolicy.ShouldAcquirePowerReferencesForAdapter());
-        WdfDeviceResumeIdleWithTag(
-            GetDevice(),
-            m_tag);
-    }
-    else
-    {
-        LogWarning(FLAG_ADAPTER, "Dropped reference for failed WdfDeviceStopIdle call. NETADAPTER %p", GetFxObject());
-    }
+    m_powerPolicy->PowerDereference();
 }
 
 void
@@ -4235,15 +3331,9 @@ NxAdapter::ReleaseOutstandingPowerReferences(
     void
 )
 {
-    LONG outstandingReferences;
-
-    while ((outstandingReferences = NxInterlockedDecrementFloor(&m_successfulPowerReferences, 0)) > -1)
+    if (m_powerPolicy)
     {
-        LogWarning(FLAG_ADAPTER, "Releasing outstanding reference for NETADAPTER %p. Remaining references %d",
-            GetFxObject(),
-            outstandingReferences);
-
-        WdfDeviceResumeIdleWithTag(GetDevice(), m_tag);
+        m_powerPolicy->ReleaseOutstandingPowerReferences();
     }
 }
 
@@ -4252,10 +3342,14 @@ NxAdapter::WifiDestroyPeerAddressDatapath(
     size_t Demux
 )
 {
+#ifdef NETCX_KMDF
     for (auto & app : m_apps)
     {
         m_clientDispatch->WifiDestroyPeerAddressDatapath(app.get(), Demux);
     }
+#else
+    m_bridgeToKernel.WifiDestroyPeerAddressDatapath(Demux);
+#endif
 }
 
 NxPacketMonitor &
@@ -4280,10 +3374,14 @@ NxAdapter::PauseOffloads(
     void
 )
 {
+#ifdef NETCX_KMDF
     for (auto & app : m_apps)
     {
         m_clientDispatch->PauseOffloadCapabilities(app.get());
     }
+#else
+    m_bridgeToKernel.PauseOffloadCapabilities();
+#endif
 
     m_isOffloadPaused = true;
 }
@@ -4293,12 +3391,181 @@ NxAdapter::ResumeOffloads(
     void
 )
 {
+#ifdef NETCX_KMDF
     for (auto & app : m_apps)
     {
         m_clientDispatch->ResumeOffloadCapabilities(app.get());
     }
+#else
+    m_bridgeToKernel.ResumeOffloadCapabilities();
+#endif
 
     m_isOffloadPaused = false;
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::DispatchOidRequest(
+    NDIS_OID_REQUEST * NdisOidRequest,
+    DispatchContext * Context
+)
+{
+    auto const nextHandler = Context->NextHandlerIndex++;
+    auto const frameworkHandlerIndex = m_adapterExtensions.count();
+
+    //
+    // Note: It is not safe to use 'NdisOidRequest' or 'Context' after either one of
+    // InvokeOidPreprocessCallback or FrameworkOidHandler has returned, since those
+    // calls might complete the OID request before returning
+    //
+
+    if (nextHandler < frameworkHandlerIndex)
+    {
+        auto const & extension = m_adapterExtensions[nextHandler];
+        extension.InvokeOidPreprocessCallback(GetFxObject(), NdisOidRequest, Context);
+    }
+    else if (nextHandler == frameworkHandlerIndex)
+    {
+        FrameworkOidHandler(NdisOidRequest, Context);
+    }
+    else
+    {
+        NT_ASSERT(nextHandler == frameworkHandlerIndex + 1);
+        m_ndisMiniport->CompleteOidRequest(NdisOidRequest, NDIS_STATUS_NOT_SUPPORTED);
+    }
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::FrameworkOidHandler(
+    NDIS_OID_REQUEST * NdisOidRequest,
+    DispatchContext * Context
+)
+{
+    switch (NdisOidRequest->RequestType)
+    {
+        case NdisRequestSetInformation:
+            FrameworkSetOidHandler(NdisOidRequest, Context);
+            break;
+
+        default:
+            //
+            // Others types of OID requests are not handled by the framework,
+            // dispatch to the next handler
+            //
+            DispatchOidRequest(NdisOidRequest, Context);
+            break;
+    }
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::FrameworkSetOidHandler(
+    NDIS_OID_REQUEST * NdisOidRequest,
+    DispatchContext * Context
+)
+{
+    auto Set = &NdisOidRequest->DATA.SET_INFORMATION;
+    NDIS_STATUS ndisStatus = STATUS_NDIS_NOT_SUPPORTED;
+
+    bool processedByFramework = FrameworkSetOidHandler(Set, ndisStatus);
+    if (processedByFramework)
+    {
+        m_ndisMiniport->CompleteOidRequest(NdisOidRequest, ndisStatus);
+    }
+    else
+    {
+        DispatchOidRequest(NdisOidRequest, Context);
+    }
+}
+
+_Use_decl_annotations_
+NTSTATUS
+NxAdapter::DispatchDirectOidRequest(
+    NDIS_OID_REQUEST * NdisOidRequest,
+    DispatchContext * Context
+)
+{
+    auto const nextHandler = Context->NextHandlerIndex++;
+
+    //
+    // Note: It is not safe to use 'NdisOidRequest' or 'Context' after either one of
+    // InvokeDirectOidPreprocessCallback has returned, since those calls might complete
+    // the OID request before returning
+    //
+
+    if (nextHandler < m_adapterExtensions.count())
+    {
+        auto const & extension = m_adapterExtensions[nextHandler];
+        return extension.InvokeDirectOidPreprocessCallback(GetFxObject(), NdisOidRequest, Context);
+    }
+
+    NT_FRE_ASSERT(nextHandler == m_adapterExtensions.count());
+    return STATUS_NDIS_NOT_SUPPORTED;
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::CompleteOidRequest(
+    NDIS_OID_REQUEST* NdisOidRequest,
+    NDIS_STATUS Status
+)
+{
+    m_ndisMiniport->CompleteOidRequest(NdisOidRequest, Status);
+}
+
+_Use_decl_annotations_
+NTSTATUS
+NxAdapter::SetNative80211Attributes(
+    NDIS_MINIPORT_ADAPTER_NATIVE_802_11_ATTRIBUTES * Attributes
+)
+{
+    m_ndisMiniport->SetNative80211Attributes(Attributes);
+    return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::IndicateMiniportStatus(
+    NDIS_STATUS_INDICATION * NdisStatusIndication
+)
+{
+    m_ndisMiniport->IndicateMiniportStatus(NdisStatusIndication);
+}
+
+_Use_decl_annotations_
+bool
+NxAdapter::FrameworkSetOidHandler(
+    NDIS_OID_REQUEST::_REQUEST_DATA::_SET const* SetInformation,
+    NDIS_STATUS& Status
+)
+{
+    //
+    // All internal OID handling is synchronous, we must either complete the request
+    // (NdisMOidRequestComplete) or let the framework keep processing it (DispatchOidRequest)
+    //
+
+    switch (SetInformation->Oid)
+    {
+        case OID_PM_ADD_WOL_PATTERN:
+            Status = m_powerPolicy->AddWakePattern(SetInformation);
+            return true;
+
+        case OID_PM_REMOVE_WOL_PATTERN:
+            Status = m_powerPolicy->RemoveWakePattern(SetInformation);
+            return true;
+
+        case OID_PM_ADD_PROTOCOL_OFFLOAD:
+            Status = m_powerPolicy->AddProtocolOffload(SetInformation);
+            return true;
+
+        case OID_PM_REMOVE_PROTOCOL_OFFLOAD:
+            Status = m_powerPolicy->RemoveProtocolOffload(SetInformation);
+            return true;
+    }
+
+    Status = STATUS_NDIS_NOT_SUPPORTED;
+    return false;
 }
 
 _Use_decl_annotations_
@@ -4313,5 +3580,80 @@ NxAdapter::UpdateNdisPmParameters(
         extension.UpdateNdisPmParameters(GetFxObject(), PmParameters);
     }
 
-    m_powerPolicy.SetParameters(PmParameters);
+    m_powerPolicy->SetParameters(PmParameters);
+}
+
+_Use_decl_annotations_
+NTSTATUS
+NxAdapter::NotifyNdisPowerOperation(
+    NdisWdfPnpPowerAction PnpPowerActionOccured,
+    NdisWdfPnpPowerAction LastPowerDownAction
+)
+{
+    return m_ndisPnpPower->NotifyNdisPowerOperation(PnpPowerActionOccured, LastPowerDownAction);
+}
+
+_Use_decl_annotations_
+NTSTATUS
+NxAdapter::HandleQueryAllDataIrp(
+    NDIS_GUID * NdisGuid,
+    GUID * Guid,
+    void * Wnode,
+    ULONG BufferSize,
+    ULONG * ReturnSize
+)
+{
+    return m_ndisPnpPower->HandleQueryAllDataIrp(NdisGuid, Guid, Wnode, BufferSize, ReturnSize);
+}
+
+_Use_decl_annotations_
+NET_WAKE_REASON_TYPE
+NxAdapter::GetWakeReason(
+    void
+) const
+{
+    KAcquireSpinLock lock(m_wakeReasonLock);
+    return m_wakeReason;
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::SetWakeReason(
+    NET_WAKE_REASON_TYPE Reason
+)
+{
+    KAcquireSpinLock lock(m_wakeReasonLock);
+    // Don't overwrite the wake reason if it is already set - this will ensure the
+    // first indicated wake reason is cached
+    if (m_wakeReason == NetWakeReasonTypeNone)
+    {
+        m_wakeReason = Reason;
+    }
+
+    // We know the device initiated the wake - update if we get a specific reason from the device
+    if (m_wakeReason == NetWakeReasonTypeDevice &&
+        Reason != NetWakeReasonTypeNdis &&
+        Reason != NetWakeReasonTypeNone)
+    {
+        m_wakeReason = Reason;
+    }
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::ResetWakeReason(
+    void
+)
+{
+    KAcquireSpinLock lock(m_wakeReasonLock);
+    m_wakeReason = NetWakeReasonTypeNone;
+}
+
+_Use_decl_annotations_
+void
+NxAdapter::LogWakeReason(
+    void
+) const
+{
+    LogInfo(FLAG_ADAPTER, "Wake reason is %!NET_WAKE_REASON_TYPE! NETADAPTER: %p", m_wakeReason, GetFxObject());
 }
